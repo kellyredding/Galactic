@@ -52,17 +52,20 @@ import AppKit
 ///    time — output drift alone must not strand a follower
 ///    above the tail.
 ///
-/// 3. **Trackpad inertia must not undo reach-bottom.** When
-///    a downward trackpad gesture reaches the buffer bottom
-///    mid-gesture, the implementation must hold the viewport
-///    there for the remainder of the gesture and ignore
-///    inertial rebound deltas that would otherwise drift it
-///    off by one or two rows. Without this defense, hard
-///    trackpad flicks land the user at the bottom
-///    momentarily and then a tail-end upward delta nudges
-///    them off — the user sees themselves at the bottom but
-///    auto-follow has silently disengaged, and new output
-///    streams in below the visible region.
+/// 3. **Inertia must not disengage follow at the bottom.**
+///    Inertial (momentum) scroll deltas must never knock the
+///    viewport off the live tail. Two cases: a downward
+///    gesture that reaches the bottom mid-gesture (hold the
+///    viewport there and ignore the rest of the gesture,
+///    rebound included), and an orphaned momentum tail that
+///    arrives while the viewport is already resting at the
+///    bottom and following. In both, a tail-end upward delta
+///    would otherwise nudge the viewport off by a row or two —
+///    the user sees themselves at the bottom but auto-follow
+///    has silently disengaged and new output streams in below
+///    the visible region. Deliberate scrolls are unaffected: a
+///    real scroll moves the viewport during its active,
+///    finger-down phase before any momentum begins.
 ///
 /// SwiftTerm implementation:
 /// - Invariants 1 and 2 are satisfied by the `Terminal`
@@ -95,6 +98,11 @@ import AppKit
 ///   at `1.0` so vendor `scroll(toPosition: 1.0)` lands
 ///   `yDisp` exactly at `yBase` and the `atBottom`
 ///   post-block in `scrollTo` clears `userScrolling`.
+///   The resting-at-bottom case is covered separately: a
+///   momentum-phase event arriving while `!userScrolling`
+///   and `yDisp >= yBase` is dropped before the vendor
+///   scroll path runs, since an orphaned inertial tail at
+///   the live tail is never a deliberate scroll.
 ///
 /// A libghostty backend may use different internal
 /// mechanisms but the observable behavior must match.

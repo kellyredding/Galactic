@@ -147,6 +147,23 @@ class GalacticSwiftTermView: LocalProcessTerminalView {
             return
         }
 
+        // Inertia must not disengage follow while we are resting at
+        // the live tail. A momentum-phase event that arrives while
+        // the viewport is at the bottom and following (not
+        // mid-gesture, not in scrollback) is an orphaned inertial
+        // tail — never a deliberate scroll, because a real scroll
+        // moves the viewport off the bottom during its active,
+        // finger-down phase before momentum begins. Drop it so it
+        // cannot nudge yDisp above yBase and silently kill auto-
+        // follow. The latch above covers the downward-reach-bottom
+        // case; this covers the resting-at-bottom case.
+        if event.momentumPhase != [] {
+            let buf = terminal.displayBuffer
+            if !terminal.userScrolling && buf.yDisp >= buf.yBase {
+                return
+            }
+        }
+
         let yDispBefore = terminal.displayBuffer.yDisp
         super.scrollWheel(with: event)
 
