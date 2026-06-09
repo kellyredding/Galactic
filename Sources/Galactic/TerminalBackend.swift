@@ -34,12 +34,23 @@ import AppKit
 ///    New lines extend the buffer, but the viewport stays
 ///    anchored so the selected region keeps pointing at the
 ///    same cells. On selection clear, the implementation
-///    re-evaluates the viewport's position relative to the
-///    bottom: if still at the bottom, resume auto-follow; if
-///    not (output drifted past during the selection), stay
-///    frozen — the user is now in implicit scrollback and
-///    must scroll back to the bottom themselves to resume
-///    auto-follow.
+///    restores the viewport's pre-selection intent rather than
+///    judging only by where it sits at clear time:
+///    - If the selection began while the viewport was
+///      following the live tail AND the user did not scroll
+///      during the selection, re-pin to the bottom and resume
+///      auto-follow. Any gap that opened is output that
+///      drifted past while the freeze held the viewport in
+///      place — not a user choice to leave the tail — so the
+///      viewport returns to where it was headed.
+///    - Otherwise (the selection began in scrollback, or the
+///      user scrolled during it), leave the viewport exactly
+///      where it ended; the user expressed a position and it
+///      is honored.
+///    The distinguishing signal is whether the user moved the
+///    viewport during the selection, not its position at clear
+///    time — output drift alone must not strand a follower
+///    above the tail.
 ///
 /// 3. **Trackpad inertia must not undo reach-bottom.** When
 ///    a downward trackpad gesture reaches the buffer bottom
@@ -61,6 +72,12 @@ import AppKit
 ///   is active or the user is in scrollback, false
 ///   otherwise; `Terminal.scroll()` only pins yDisp to
 ///   yBase on each appended line when the flag is false.
+///   Invariant 2's selection-clear re-pin is layered on in
+///   `GalacticSwiftTermView.selectionChanged`: it records
+///   whether the viewport was following when the selection
+///   began and whether `yDisp` moved during it, and on clear
+///   snaps to the bottom when the only thing that opened a gap
+///   was output drift.
 /// - Invariant 3 is satisfied by a subclass-level latch in
 ///   `GalacticSwiftTermView.scrollWheel`. When a trackpad
 ///   gesture event moves `yDisp` downward to land at or

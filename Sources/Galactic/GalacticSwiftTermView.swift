@@ -176,5 +176,60 @@ class GalacticSwiftTermView: LocalProcessTerminalView {
             }
         }
     }
+
+    // MARK: - Auto-follow across text selection
+
+    /// Restores live-tail following after a selection that began
+    /// while the viewport was at the bottom.
+    ///
+    /// SwiftTerm freezes the viewport for the duration of a selection
+    /// (so the anchor holds while output streams), and on clear sets
+    /// `userScrolling = !atBottom`. When output arrives during the
+    /// selection, the frozen viewport drifts below the live bottom —
+    /// so that clear evaluation leaves auto-follow disengaged a few
+    /// rows short, and nothing re-pins it because the feed-time
+    /// recovery only fires at the exact bottom. The viewport then
+    /// sticks just above the tail and never catches up.
+    ///
+    /// Mirroring the reflow re-pin: capture whether the viewport was
+    /// following the live tail when the selection began, and on clear
+    /// snap back to the bottom — but only when the user did not move
+    /// the viewport during the selection. An unchanged `yDisp` means
+    /// the gap is pure output drift, not an intentional scroll-away;
+    /// a selection that began in scrollback, or one the user scrolled
+    /// during, is left exactly where it ended.
+    private var selectionStartedFollowing = false
+    private var selectionStartYDisp = 0
+    private var lastSelectionActive = false
+
+    public override func selectionChanged(source: Terminal) {
+        let buf = terminal.displayBuffer
+        let wasActive = lastSelectionActive
+        let nowActive = selection?.active ?? false
+
+        // Capture follow intent before super freezes the viewport.
+        if !wasActive && nowActive {
+            selectionStartedFollowing =
+                !terminal.userScrolling && buf.yDisp >= buf.yBase
+            selectionStartYDisp = buf.yDisp
+        }
+
+        super.selectionChanged(source: source)
+
+        let stillActive = selection?.active ?? false
+        if wasActive && !stillActive {
+            if selectionStartedFollowing,
+               buf.yDisp == selectionStartYDisp,
+               buf.yDisp < buf.yBase {
+                buf.yDisp = buf.yBase
+                terminal.userScrolling = false
+                terminal.refresh(startRow: 0, endRow: terminal.rows)
+                setNeedsDisplay(bounds)
+            }
+            selectionStartedFollowing = false
+        }
+
+        lastSelectionActive = stillActive
+    }
 }
 
