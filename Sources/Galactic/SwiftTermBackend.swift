@@ -87,10 +87,10 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
     }
 
     func snapViewportToBottom() {
-        let buf = terminalView.terminal.displayBuffer
-        terminalView.terminal.userScrolling = false
-        buf.yDisp = buf.yBase
-        terminalView.setNeedsDisplay(terminalView.bounds)
+        // Both return-to-bottom paths — this scrollback-overlay return and
+        // the scroll-wheel reach-bottom snap — funnel through the view's
+        // snapToLiveBottom so they scroll and re-show the caret identically.
+        terminalView.snapToLiveBottom()
     }
 
     /// Forward to the subclass's stored property so
@@ -370,7 +370,11 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
     }
 
     func setCaretHidden(_ hidden: Bool) {
-        terminalView.caretView.isHidden = hidden
+        // Record the app's intent on the view and let it fold in
+        // scroll-based suppression; the view re-derives caretView.isHidden
+        // from both the app intent and the current scroll position.
+        terminalView.appCaretHidden = hidden
+        terminalView.refreshCaretVisibility()
     }
 
     func captureScrollbackSnapshot() -> ScrollbackSnapshot? {

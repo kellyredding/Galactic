@@ -47,10 +47,79 @@ class GalacticSwiftTermView: LocalProcessTerminalView {
     /// catch-up redraw covering the full bounds when it
     /// unpauses.
     public override func setNeedsDisplay(_ invalidRect: NSRect) {
+        // WARNING: this override can run BEFORE the view is fully
+        // constructed. AppKit calls setNeedsDisplay(_:) during
+        // super.init() — SwiftTerm's TerminalView.setup() sets
+        // `wantsLayer`, which fires _updateLayerBackedness — while
+        // SwiftTerm's `terminal` (an implicitly-unwrapped optional) is
+        // still nil. Anything invoked from here MUST tolerate a nil
+        // `terminal` (guard `terminal != nil` first) or it will trap
+        // during session construction. The `displayPaused` stored
+        // property read below is safe; helpers that touch `terminal`
+        // are not.
+        //
+        // Keep the caret's visibility in sync with the scroll position on
+        // every refresh — output- or scroll-driven (see
+        // refreshCaretVisibility for why this is the chokepoint).
+        refreshCaretVisibility()
         if displayPaused {
             return
         }
         super.setNeedsDisplay(invalidRect)
+    }
+
+    // MARK: - Caret visibility
+
+    /// The app's desired caret-hidden state, set via the backend's
+    /// `setCaretHidden`. The session pane shows the native caret because it
+    /// IS Claude's live prompt cursor; this records that intent so the
+    /// scroll-based suppression below can layer on top without clobbering it.
+    var appCaretHidden = false
+
+    /// Recompute the native caret's visibility from the app's desired state
+    /// and the current scroll position.
+    ///
+    /// The caret marks the live cursor, so it should only be visible when the
+    /// viewport is pinned to the live bottom. While the user is reading
+    /// scrollback (`yDisp < yBase`) it must stay hidden. SwiftTerm's
+    /// `updateCursorPosition` re-adds and repositions the caret on every
+    /// output-driven refresh with no scrollback awareness, so a process that
+    /// moves the cursor while the user is scrolled up — e.g. Claude redrawing
+    /// its in-place "thinking" status — would otherwise flash the caret back
+    /// into the scrollback. Driving `isHidden` here (which
+    /// `updateCursorPosition` never touches) holds the caret suppressed across
+    /// those refreshes.
+    func refreshCaretVisibility() {
+        // AppKit invokes our setNeedsDisplay(_:) override during
+        // super.init() — TerminalView.setup() sets `wantsLayer`, which
+        // fires _updateLayerBackedness — before SwiftTerm assigns
+        // `terminal`. That IUO is nil that early, so dereferencing it
+        // here would trap. Bail until the terminal is wired up.
+        guard terminal != nil else { return }
+        let buffer = terminal.displayBuffer
+        let scrolledIntoScrollback = buffer.yDisp < buffer.yBase
+        caretView?.isHidden = appCaretHidden || scrolledIntoScrollback
+    }
+
+    /// Snap the viewport to the live bottom and guarantee the native
+    /// caret is re-added, repositioned, and shown there. When actually
+    /// scrolled, routes through `scrollTo` so SwiftTerm runs
+    /// `updateDisplay` -> `updateCursorPosition` (a bare `yDisp = yBase`
+    /// write skips that and leaves the caret removed or stale-framed).
+    /// Shared by the scroll-wheel reach-bottom snap and the backend's
+    /// `snapViewportToBottom` (scrollback-overlay return) so both behave
+    /// identically; `refreshCaretVisibility` runs via the
+    /// `setNeedsDisplay` override that either branch triggers.
+    func snapToLiveBottom() {
+        guard terminal != nil else { return }
+        let buf = terminal.displayBuffer
+        if buf.yDisp != buf.yBase {
+            scrollTo(row: buf.yBase, notifyAccessibility: false)
+        } else {
+            terminal.userScrolling = false
+            terminal.refresh(startRow: 0, endRow: terminal.rows)
+            setNeedsDisplay(bounds)
+        }
     }
 
     /// Short-circuit key view traversal — same fix as InlineEditField.
@@ -176,18 +245,12 @@ class GalacticSwiftTermView: LocalProcessTerminalView {
         // super ran but yDisp did not move), trapping them at
         // the bottom and blocking scrollback entirely.
         if buf.yDisp > yDispBefore && buf.yDisp >= buf.yBase {
-            // Reached the bottom mid-gesture — snap (defensive
-            // belt-and-suspenders; vendor scrollTo's atBottom
-            // post-block already does this for the common case),
-            // clear the auto-follow gate, and (for trackpad
-            // only) lock the rest of this gesture so momentum
-            // tail and rebound can't drift us back off.
-            buf.yDisp = buf.yBase
-            terminal.userScrolling = false
-            terminal.refresh(
-                startRow: 0, endRow: terminal.rows
-            )
-            setNeedsDisplay(bounds)
+            // Reached the bottom mid-gesture. Snap through the shared
+            // path so the caret is re-shown/repositioned the same way as
+            // the scrollback-overlay return, then (trackpad only) lock
+            // out the momentum tail so inertia can't drift us back off
+            // the bottom.
+            snapToLiveBottom()
             if isTrackpadGesture {
                 gestureLockedAtBottom = true
             }
