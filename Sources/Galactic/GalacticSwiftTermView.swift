@@ -62,10 +62,18 @@ class GalacticSwiftTermView: LocalProcessTerminalView {
         // every refresh — output- or scroll-driven (see
         // refreshCaretVisibility for why this is the chokepoint).
         refreshCaretVisibility()
+        // Continuously enforce the auto-follow invariant: while following the
+        // live tail (!userScrolling, no selection), keep the viewport pinned to
+        // the bottom across ANY content change — not just the line-feeds
+        // Terminal.scroll already re-pins. A re-pin scrolls the whole view, so
+        // invalidate full bounds, not the partial rect the output chunk asked
+        // for. Safe on every scroll path because scrollTo now updates
+        // userScrolling before it refreshes (no following-but-drifted transient).
+        let repinned = holdViewportAtLiveBottomIfFollowing()
         if displayPaused {
             return
         }
-        super.setNeedsDisplay(invalidRect)
+        super.setNeedsDisplay(repinned ? bounds : invalidRect)
     }
 
     // MARK: - Caret visibility
@@ -311,5 +319,33 @@ class GalacticSwiftTermView: LocalProcessTerminalView {
 
         lastSelectionActive = stillActive
     }
+
+    // MARK: - Auto-follow re-pin
+
+    /// Continuously hold the viewport at the live bottom whenever the view is
+    /// following the tail but has drifted off the bottom
+    /// (`!userScrolling && yDisp < yBase`). Returns whether it moved the
+    /// viewport, so the `setNeedsDisplay` caller can invalidate full bounds.
+    ///
+    /// `Terminal.scroll` only re-pins on a line-feed; a content change that
+    /// drifts `yDisp` without one — e.g. the child (Claude) growing its input
+    /// box after a bulk paste, repainted in place — leaves follow stuck above
+    /// the new bottom. Enforcing the invariant on every refresh corrects that
+    /// drift whatever its source, with no paste detection and no timing
+    /// constant. The `!userScrolling` guard means a deliberate scroll is never
+    /// fought; `scrollTo` updates that flag before it refreshes, so this never
+    /// observes the transient mid-scroll lie.
+    @discardableResult
+    private func holdViewportAtLiveBottomIfFollowing() -> Bool {
+        guard terminal != nil,
+              !terminal.userScrolling, !(selection?.active ?? false)
+        else { return false }
+        let buf = terminal.displayBuffer
+        guard buf.yDisp < buf.yBase else { return false }
+        buf.yDisp = buf.yBase
+        terminal.refresh(startRow: 0, endRow: terminal.rows)
+        return true
+    }
+
 }
 
