@@ -93,6 +93,10 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
         terminalView.snapToLiveBottom()
     }
 
+    func reassertFollowIfIntended() {
+        terminalView.reassertFollowIfIntended()
+    }
+
     /// Forward to the subclass's stored property so
     /// `bell(source:)` can fire it directly without a
     /// backend back-reference. Mirrors `onScrollUp`.

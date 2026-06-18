@@ -290,4 +290,14 @@ public protocol TerminalBackend: AnyObject {
     /// `onReady` hook to scroll the live terminal
     /// underneath after the overlay has fully painted.
     func snapViewportToBottom()
+
+    /// Re-assert live-bottom follow only if the user intends to be following
+    /// (not parked in scrollback, no active selection — both reflected by the
+    /// auto-follow `userScrolling` gate). A no-op when the user has scrolled
+    /// away, so it never pulls a reader out of history; when following, it
+    /// snaps the viewport back to the live bottom, correcting any drift. Meant
+    /// to be fired by the host on focus-class events (tab / session / app
+    /// refocus / pane switch) as a friendly re-pin — it reapplies the user's
+    /// own intent and never touches the child process.
+    func reassertFollowIfIntended()
 }

@@ -130,6 +130,40 @@ class GalacticSwiftTermView: LocalProcessTerminalView {
         }
     }
 
+    /// Re-assert live-bottom follow only when the user intends to be following.
+    /// `userScrolling` is the auto-follow gate: it is true while a selection is
+    /// active or the user is parked in scrollback, false while following the
+    /// live tail. So this is a no-op when the user has scrolled away — it never
+    /// yanks a reader out of history — and otherwise routes through
+    /// `snapToLiveBottom`, which itself no-ops when already pinned
+    /// (`yDisp == yBase`) and corrects any drift off the bottom. Safe to call
+    /// aggressively on host focus-class events; it only reapplies the user's
+    /// own intent and never touches the child process.
+    func reassertFollowIfIntended() {
+        guard terminal != nil, !terminal.userScrolling else { return }
+        snapToLiveBottom()
+        // snapToLiveBottom recomputes the caret synchronously, but during a
+        // focus burst the view's layout/frame isn't settled yet, so the caret
+        // can land stale until the next output. Defer one reposition to the
+        // next runloop tick — after layout settles — so it snaps immediately.
+        // Keystroke-free equivalent of the child repaint a Ctrl+L would force.
+        DispatchQueue.main.async { [weak self] in self?.repositionCaret() }
+    }
+
+    /// A multi-line paste grows the child's input box and can push the
+    /// viewport off the live bottom with no line-feed — the same drift class
+    /// the auto-follow re-pin targets. Re-pin after the paste as a friendly
+    /// backstop. Deferred so the child has rendered the grown input first;
+    /// keystroke-free (never a Ctrl+L, which would land in the input box
+    /// behind the pasted text). No-op when the user is parked in scrollback.
+    /// Delay is tunable — see QA.
+    override func paste(_ sender: Any) {
+        super.paste(sender)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.reassertFollowIfIntended()
+        }
+    }
+
     /// Short-circuit key view traversal — same fix as InlineEditField.
     /// When any NSView becomes first responder, AppKit may walk
     /// previousValidKeyView / nextValidKeyView to validate the target.
