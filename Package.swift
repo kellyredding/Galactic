@@ -17,7 +17,7 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/kellyredding/SwiftTerm.git",
-            exact: "1.13.0-galactic.7"
+            exact: "1.13.0-galactic.8"
         )
     ],
     targets: [

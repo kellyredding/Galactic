@@ -122,25 +122,31 @@ class GalacticSwiftTermView: LocalProcessTerminalView {
         guard terminal != nil else { return }
         let buf = terminal.displayBuffer
         if buf.yDisp != buf.yBase {
+            // scrollTo(row: yBase) clears scrolledUpByUser via the fork's
+            // ungated reconciliation (yDisp == yBase after the move).
             scrollTo(row: buf.yBase, notifyAccessibility: false)
         } else {
             terminal.userScrolling = false
+            terminal.scrolledUpByUser = false
             terminal.refresh(startRow: 0, endRow: terminal.rows)
             setNeedsDisplay(bounds)
         }
     }
 
     /// Re-assert live-bottom follow only when the user intends to be following.
-    /// `userScrolling` is the auto-follow gate: it is true while a selection is
-    /// active or the user is parked in scrollback, false while following the
-    /// live tail. So this is a no-op when the user has scrolled away — it never
-    /// yanks a reader out of history — and otherwise routes through
+    /// Gates on `scrolledUpByUser` — the gesture-sourced intent flag — NOT on
+    /// `userScrolling`, which a transient selection can strand true while the
+    /// viewport is actually at the bottom (the confirmed paste-drift cause).
+    /// `scrolledUpByUser` is set only by real scroll gestures via `scrollTo`,
+    /// so this is a no-op when the user has deliberately scrolled away — it
+    /// never yanks a reader out of history — and otherwise routes through
     /// `snapToLiveBottom`, which itself no-ops when already pinned
     /// (`yDisp == yBase`) and corrects any drift off the bottom. Safe to call
     /// aggressively on host focus-class events; it only reapplies the user's
     /// own intent and never touches the child process.
     func reassertFollowIfIntended() {
-        guard terminal != nil, !terminal.userScrolling else { return }
+        guard terminal != nil else { return }
+        guard !terminal.scrolledUpByUser else { return }
         snapToLiveBottom()
         // snapToLiveBottom recomputes the caret synchronously, but during a
         // focus burst the view's layout/frame isn't settled yet, so the caret
@@ -150,18 +156,17 @@ class GalacticSwiftTermView: LocalProcessTerminalView {
         DispatchQueue.main.async { [weak self] in self?.repositionCaret() }
     }
 
-    /// A multi-line paste grows the child's input box and can push the
-    /// viewport off the live bottom with no line-feed — the same drift class
-    /// the auto-follow re-pin targets. Re-pin after the paste as a friendly
-    /// backstop. Deferred so the child has rendered the grown input first;
-    /// keystroke-free (never a Ctrl+L, which would land in the input box
-    /// behind the pasted text). No-op when the user is parked in scrollback.
-    /// Delay is tunable — see QA.
+    /// Pasting into the live prompt is an unambiguous follow-intent signal, so
+    /// clear `scrolledUpByUser` and re-pin. The async input-box growth that
+    /// follows is then handled deterministically by the fork: a stranded
+    /// `userScrolling` (e.g. from a click-and-hold selection) is cleared in
+    /// `feedPrepare` before each growth feed, and `Terminal.scroll()` re-pins
+    /// `yDisp` to `yBase` natively. No timer, no race — which is why the 0.1s
+    /// one-shot and the bounded watchdog this method used to arm are gone.
     override func paste(_ sender: Any) {
         super.paste(sender)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.reassertFollowIfIntended()
-        }
+        terminal?.scrolledUpByUser = false
+        reassertFollowIfIntended()
     }
 
     /// Short-circuit key view traversal — same fix as InlineEditField.
@@ -371,14 +376,33 @@ class GalacticSwiftTermView: LocalProcessTerminalView {
     /// observes the transient mid-scroll lie.
     @discardableResult
     private func holdViewportAtLiveBottomIfFollowing() -> Bool {
-        guard terminal != nil,
-              !terminal.userScrolling, !(selection?.active ?? false)
-        else { return false }
+        guard terminal != nil else { return false }
         let buf = terminal.displayBuffer
-        guard buf.yDisp < buf.yBase else { return false }
+        let drifted = buf.yDisp < buf.yBase
+        let gated = terminal.userScrolling || (selection?.active ?? false)
+        guard !gated, drifted else { return false }
         buf.yDisp = buf.yBase
         terminal.refresh(startRow: 0, endRow: terminal.rows)
         return true
+    }
+
+    // MARK: - Live-prompt input snap
+
+    /// Snap to the live bottom on genuine keyboard input into the prompt (the
+    /// chosen policy). A navigation key (page-up / home) routes through
+    /// `scrollTo` and sets `scrolledUpByUser`; a text key does not. So snapping
+    /// only when this key did NOT scroll us up — and only when we weren't
+    /// already parked by a deliberate gesture — captures typing while never
+    /// yanking a reader who paged up or is parked in scrollback. The drift
+    /// guard keeps it free when already pinned.
+    public override func keyDown(with event: NSEvent) {
+        let wasScrolledUp = terminal?.scrolledUpByUser ?? false
+        super.keyDown(with: event)
+        guard let t = terminal, !t.scrolledUpByUser, !wasScrolledUp else { return }
+        let buf = t.displayBuffer
+        if buf.yDisp < buf.yBase {
+            snapToLiveBottom()
+        }
     }
 
 }
