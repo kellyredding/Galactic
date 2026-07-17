@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import Galactic
 
@@ -46,5 +47,22 @@ final class GalacticPublicSurfaceTests: XCTestCase {
 
     func testTerminalDisplayThrottleShared() {
         XCTAssertNotNil(TerminalDisplayThrottle.shared)
+    }
+
+    func testTerminalContainerInsetsContent() {
+        let terminal = NSView()
+        let container = GalacticTerminalContainerView(
+            terminalView: terminal, inset: 4
+        )
+        container.frame = NSRect(x: 0, y: 0, width: 100, height: 80)
+
+        XCTAssertTrue(container.terminalView === terminal)
+        XCTAssertEqual(container.contentInsets.left, 4)
+        // Content rect is the container's bounds inset on every edge —
+        // the rect the terminal fills and overlays align to.
+        XCTAssertEqual(
+            container.contentFrame,
+            NSRect(x: 4, y: 4, width: 92, height: 72)
+        )
     }
 }
