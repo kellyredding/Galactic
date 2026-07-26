@@ -354,23 +354,50 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
     func applyCursor(
         style: ShellCursorStyle, blink: Bool
     ) {
-        // Collapse Galaxy's two orthogonal toggles into
-        // SwiftTerm's 6-case `CursorStyle` enum. Setting
-        // via `terminal.setCursorStyle` fires the delegate
-        // hook which updates `MacCaretView`'s shape and
-        // toggles the blink animation off the CALayer
-        // opacity keypath.
-        let mapped: SwiftTerm.CursorStyle = {
-            switch (style, blink) {
-            case (.block, true):        return .blinkBlock
-            case (.block, false):       return .steadyBlock
-            case (.underline, true):    return .blinkUnderline
-            case (.underline, false):   return .steadyUnderline
-            case (.verticalBar, true):  return .blinkBar
-            case (.verticalBar, false): return .steadyBar
-            }
-        }()
-        terminalView.terminal.setCursorStyle(mapped)
+        // Setting via `terminal.setCursorStyle` fires the
+        // delegate hook which updates the caret's shape and
+        // rebuilds the blink animation on the CALayer opacity
+        // keypath. That hook is the ONLY thing that builds the
+        // animation, and the setter skips it when the requested
+        // style already equals the current one — so applying the
+        // style the engine already holds is a silent no-op. A
+        // caret is also born without an animation, because its
+        // initializer assigns the style directly and property
+        // observers do not run during initialization. Together
+        // those mean a configured style that happens to match the
+        // engine default would never establish its animation at
+        // all, leaving a caret that renders correctly but never
+        // blinks.
+        //
+        // Passing the opposite blink first guarantees the second
+        // call lands as a real change: for a given shape the
+        // blinking and steady variants are always distinct cases,
+        // so whichever the engine currently holds, the pair ends
+        // with the wanted style freshly assigned. Both calls run
+        // in one runloop turn, so nothing is drawn in between and
+        // the intermediate state is never visible.
+        terminalView.terminal.setCursorStyle(
+            Self.cursorStyle(style, blink: !blink)
+        )
+        terminalView.terminal.setCursorStyle(
+            Self.cursorStyle(style, blink: blink)
+        )
+    }
+
+    /// Collapse Galactic's two orthogonal cursor toggles into
+    /// SwiftTerm's 6-case `CursorStyle`, which fuses shape and
+    /// blink into a single value.
+    private static func cursorStyle(
+        _ style: ShellCursorStyle, blink: Bool
+    ) -> SwiftTerm.CursorStyle {
+        switch (style, blink) {
+        case (.block, true):        return .blinkBlock
+        case (.block, false):       return .steadyBlock
+        case (.underline, true):    return .blinkUnderline
+        case (.underline, false):   return .steadyUnderline
+        case (.verticalBar, true):  return .blinkBar
+        case (.verticalBar, false): return .steadyBar
+        }
     }
 
     func setCaretHidden(_ hidden: Bool) {
