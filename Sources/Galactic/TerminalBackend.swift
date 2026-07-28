@@ -133,6 +133,17 @@ public protocol TerminalBackend: AnyObject {
     /// Send bytes to the PTY.
     func send(bytes: [UInt8])
 
+    /// Whether the child process has enabled the kitty keyboard protocol.
+    ///
+    /// Applications negotiate this after they start, so it is false for a
+    /// window at the beginning of a pane's life. That window matters to anyone
+    /// writing a CSI-u sequence directly to the PTY: before the protocol is on,
+    /// such a sequence is not decoded as a key at all — it is discarded
+    /// silently, with no error and no echo. A host that writes one anyway gets
+    /// a keystroke that lands or vanishes depending on how quickly it moved
+    /// after launch.
+    var isKittyKeyboardActive: Bool { get }
+
     /// Send text to the PTY (UTF-8 encoded). When `asPaste` is
     /// true and the terminal has bracketed-paste-mode enabled,
     /// the implementation wraps the text in `ESC[200~` …

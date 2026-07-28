@@ -261,6 +261,13 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
         terminalView.send(bytes)
     }
 
+    var isKittyKeyboardActive: Bool {
+        // Set by the child pushing flags with `CSI > flags u`, cleared when it
+        // pops them. Empty means the engine is still encoding — and decoding —
+        // keys the legacy way.
+        !terminalView.terminal.keyboardEnhancementFlags.isEmpty
+    }
+
     func send(text: String, asPaste: Bool) {
         if asPaste, terminalView.terminal.bracketedPasteMode {
             terminalView.send(
