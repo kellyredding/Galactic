@@ -63,6 +63,36 @@ const EmojiAutocomplete = {
 
     // --- Trigger Detection ---
 
+    // The whole character immediately before `index`.
+    //
+    // Reads a surrogate pair as one character rather than as half of one, so
+    // the character before the colon in "💯:100" is the emoji and not a stray
+    // trailing surrogate.
+    characterBefore: function(text, index) {
+        if (index <= 0) return '';
+        var code = text.charCodeAt(index - 1);
+        if (code >= 0xDC00 && code <= 0xDFFF && index >= 2) {
+            return text.slice(index - 2, index);
+        }
+        return text.charAt(index - 1);
+    },
+
+    // Whether a colon at this position opens a shortcode.
+    //
+    // The guard exists to keep the popup out of text that merely contains a
+    // colon — "10:30", "http://", "key:value" — where a suggestion list would
+    // be noise. Letters, digits and underscores are what signal that, in any
+    // script rather than only in ASCII.
+    //
+    // Everything else opens one, which notably includes emoji: typing a second
+    // shortcode straight after inserting the first, with no space between them,
+    // used to be silently refused because the rule asked for whitespace rather
+    // than for the absence of a word character.
+    canOpenShortcode: function(text, index) {
+        var prev = this.characterBefore(text, index);
+        return prev === '' || !/[\p{L}\p{N}_]/u.test(prev);
+    },
+
     detectTrigger: function(textarea) {
         var text = textarea.value;
         var cursor = textarea.selectionEnd;
@@ -71,7 +101,7 @@ const EmojiAutocomplete = {
         while (i >= 0) {
             var ch = text[i];
             if (ch === this.triggerChar) {
-                if (i === 0 || /[\s]/.test(text[i - 1])) {
+                if (this.canOpenShortcode(text, i)) {
                     var query = text.substring(i + 1, cursor);
                     if (query.length >= this.minQueryLength && !/\s/.test(query)) {
                         return { query: query.toLowerCase(), startIndex: i };
