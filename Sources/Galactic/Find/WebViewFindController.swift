@@ -91,10 +91,15 @@ public final class WebViewFindController: NSObject, ObservableObject {
 
     private func applyQuery() {
         guard isVisible else { return }
-        let escaped = Self.jsEscape(query)
+        // Encoded rather than escaped. A search string is arbitrary user text,
+        // and hand-rolled escaping handles the characters someone thought of
+        // and no others — a double quote or a control character ends the
+        // literal early, which makes the whole injected call a syntax error
+        // rather than a search for the wrong thing. Nothing runs, and the only
+        // trace is a console message inside the page.
         let opts = reverse ? "{reverse:true}" : "{}"
         webView?.evaluateJavaScript(
-            "GalaxyFind.setQuery('\(escaped)', \(opts))"
+            "GalaxyFind.setQuery(\(JavaScriptLiteral.string(query)), \(opts))"
         )
     }
 
@@ -121,18 +126,6 @@ public final class WebViewFindController: NSObject, ObservableObject {
         matchIndex = body["index"] as? Int ?? -1
     }
 
-    private static func jsEscape(_ s: String) -> String {
-        s.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "'", with: "\\'")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "\\r")
-            // U+2028 and U+2029 are line terminators to a JS
-            // parser, so an unescaped one breaks the literal
-            // exactly as a raw newline would. Reachable by
-            // pasting text copied from a web page.
-            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
-            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
-    }
 }
 
 /// Weak proxy mirroring the pattern in `ScrollbackWebView` —
