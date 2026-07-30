@@ -20,12 +20,18 @@ public enum GalacticLog {
         /// Automated submission — the path that fails without symptoms.
         public var submit: (String) -> Void
 
-        /// Everything else Galactic has to say.
-        public var debug: (String) -> Void
+        /// Everything else Galactic has to say, tagged by subject.
+        ///
+        /// The tag arrives separately rather than pre-formatted into the
+        /// message because both hosts already have a house style for it, and
+        /// the tag is what makes these lines greppable by subject once they
+        /// are interleaved with everything else in a log file.
+        public var debug: (_ tag: String, _ message: String) -> Void
 
         public init(
             submit: @escaping (String) -> Void = { _ in },
-            debug: @escaping (String) -> Void = { _ in }
+            debug: @escaping (_ tag: String, _ message: String) -> Void
+                = { _, _ in }
         ) {
             self.submit = submit
             self.debug = debug
@@ -37,5 +43,7 @@ public enum GalacticLog {
 
     static func submit(_ message: String) { sink.submit(message) }
 
-    static func debug(_ message: String) { sink.debug(message) }
+    static func debug(_ tag: String, _ message: String) {
+        sink.debug(tag, message)
+    }
 }

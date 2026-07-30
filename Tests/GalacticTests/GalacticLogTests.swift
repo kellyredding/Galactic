@@ -15,11 +15,11 @@ final class GalacticLogTests: XCTestCase {
         var debugged: [String] = []
         GalacticLog.sink = GalacticLog.Sink(
             submit: { submitted.append($0) },
-            debug: { debugged.append($0) }
+            debug: { _, m in debugged.append(m) }
         )
 
         GalacticLog.submit("wrote text")
-        GalacticLog.debug("resized")
+        GalacticLog.debug("terminal", "resized")
 
         XCTAssertEqual(submitted, ["wrote text"])
         XCTAssertEqual(debugged, ["resized"])
@@ -33,7 +33,7 @@ final class GalacticLogTests: XCTestCase {
         GalacticLog.sink = GalacticLog.Sink(submit: { submitted.append($0) })
 
         GalacticLog.submit("kept")
-        GalacticLog.debug("dropped")
+        GalacticLog.debug("terminal", "dropped")
 
         XCTAssertEqual(submitted, ["kept"])
     }
@@ -43,6 +43,6 @@ final class GalacticLogTests: XCTestCase {
     func testDefaultSinkDiscardsWithoutCrashing() {
         GalacticLog.sink = GalacticLog.Sink()
         GalacticLog.submit("nobody is listening")
-        GalacticLog.debug("nor to this")
+        GalacticLog.debug("terminal", "nor to this")
     }
 }
