@@ -218,23 +218,13 @@ const EmojiAutocomplete = {
 
         var popup = instance.popup;
 
-        // Position near caret
+        // Made visible and placed horizontally before the rows go in, because a
+        // display:none element measures as a zero rect and the vertical
+        // placement below depends on a real height.
         var rect = textarea.getBoundingClientRect();
-        var top = rect.top + window.scrollY + caretCoords.top + caretCoords.height;
-        var left = rect.left + window.scrollX + caretCoords.left;
-
-        popup.style.top = top + 'px';
-        popup.style.left = left + 'px';
+        popup.style.left =
+            (rect.left + window.scrollX + caretCoords.left) + 'px';
         popup.style.display = 'block';
-
-        // Check if popup overflows viewport bottom — flip above caret if so
-        var popupRect = popup.getBoundingClientRect();
-        if (popupRect.bottom > window.innerHeight) {
-            var aboveTop = rect.top + window.scrollY + caretCoords.top - popupRect.height;
-            if (aboveTop > 0) {
-                popup.style.top = aboveTop + 'px';
-            }
-        }
 
         // Render rows
         var query = textarea.value.substring(
@@ -262,7 +252,8 @@ const EmojiAutocomplete = {
 
             html += '<div class="emoji-popup-row' + selectedClass +
                     '" data-index="' + i + '">' +
-                    '<span class="emoji-popup-emoji">' + r.emoji + '</span>' +
+                    '<span class="emoji-popup-emoji">' +
+                    self.emojiPresentation(r.emoji) + '</span>' +
                     '<span class="emoji-popup-name">:' + nameHTML + ':</span>' +
                     '</div>';
         }
@@ -284,6 +275,25 @@ const EmojiAutocomplete = {
                     }
                 });
             })(rows[j], parseInt(rows[j].getAttribute('data-index')));
+        }
+
+        // Vertical placement happens last, against the height the popup
+        // actually has now.
+        //
+        // Measuring before the rows were written meant measuring the previous
+        // query's popup: narrowing ':za' to ':zap' dropped eight rows to one,
+        // but the flip-above placement had already subtracted the eight-row
+        // height, leaving the popup stranded far above the caret with the gap
+        // where the old rows used to be.
+        var caretTop = rect.top + window.scrollY + caretCoords.top;
+        popup.style.top = (caretTop + caretCoords.height) + 'px';
+
+        var popupRect = popup.getBoundingClientRect();
+        if (popupRect.bottom > window.innerHeight) {
+            var aboveTop = caretTop - popupRect.height;
+            if (aboveTop > 0) {
+                popup.style.top = aboveTop + 'px';
+            }
         }
     },
 
@@ -365,9 +375,37 @@ const EmojiAutocomplete = {
 
     // --- Text Insertion ---
 
+    // Force colour-emoji presentation on the characters that would otherwise
+    // lose it to the surrounding font.
+    //
+    // A composer renders in a monospace stack, and several of these emoji are
+    // old enough to predate emoji — U+26A1 ⚡, U+2B50 ⭐, U+2705 ✅, the zodiac,
+    // 64 in all. Menlo and its relatives carry monochrome text glyphs for
+    // them, and a font earlier in the stack wins per glyph regardless of what
+    // Unicode says the default presentation should be. So ⚡ arrived as a thin
+    // grey bolt at text size while 💯 beside it rendered full colour: 💯 lives
+    // outside the BMP, no text font has it, and it fell through to the emoji
+    // font. Nothing was wrong with the sizing — the two characters were being
+    // drawn from different fonts.
+    //
+    // U+FE0F makes the text font's glyph ineligible. Applied only to a lone
+    // BMP character: the dataset already carries the selector where it is
+    // required, and appending one to a flag, a skin-tone modifier, or a ZWJ
+    // sequence would corrupt it.
+    emojiPresentation: function(emoji) {
+        if (!emoji) return emoji;
+        var chars = Array.from(emoji);
+        if (chars.length === 1 && emoji.codePointAt(0) <= 0xFFFF) {
+            return emoji + '\uFE0F';
+        }
+        return emoji;
+    },
+
     insertEmoji: function(textarea, emoji, triggerStartIndex) {
         var instance = this.instances.get(textarea);
         if (instance) instance.suppressNextInput = true;
+
+        emoji = this.emojiPresentation(emoji);
 
         var before = textarea.value.substring(0, triggerStartIndex);
         var after = textarea.value.substring(textarea.selectionEnd);
