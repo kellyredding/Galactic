@@ -1,0 +1,183 @@
+{
+  "_comment": [
+    "The cross-language contract for text-entry keystroke matching.",
+    "",
+    "Read by BOTH the Swift smoke target (KeystrokeSmoke) and the JavaScript",
+    "verifier (scripts/verify-text-entry.mjs). Every keystroke carries two",
+    "spellings of the same physical key: 'keyCode' is the macOS virtual key",
+    "code the Swift matcher compares, and 'code' is the DOM KeyboardEvent.code",
+    "the JavaScript matcher compares, because a WebView never sees a virtual",
+    "key code. Each side reads its own spelling, ignores the other, and must",
+    "arrive at the same 'expect'.",
+    "",
+    "That is the whole point of this file. The failure it exists to prevent is",
+    "the two matchers quietly disagreeing about a chord and nobody noticing for",
+    "months. Adding a case with mismatched spellings makes one side fail.",
+    "",
+    "'modifiers' is a bitmask, shared verbatim by both sides:",
+    "  command 1, option 2, control 4, shift 8",
+    "",
+    "'labels' pins how a binding is spelled for a person. Swift renders it in",
+    "the settings card; the JavaScript module renders it in the composer",
+    "placeholder. Two spellings of one binding would read as a bug in",
+    "whichever surface the user happened to distrust."
+  ],
+  "labels": [
+    { "keyCode": 36, "code": "Enter", "modifiers": 0, "label": "Enter" },
+    { "keyCode": 36, "code": "Enter", "modifiers": 1, "label": "⌘Enter" },
+    { "keyCode": 36, "code": "Enter", "modifiers": 2, "label": "⌥Enter" },
+    { "keyCode": 36, "code": "Enter", "modifiers": 4, "label": "⌃Enter" },
+    { "keyCode": 36, "code": "Enter", "modifiers": 8, "label": "⇧Enter" },
+    { "keyCode": 36, "code": "Enter", "modifiers": 12, "label": "⌃⇧Enter" },
+    { "keyCode": 36, "code": "Enter", "modifiers": 15, "label": "⌃⌥⇧⌘Enter" },
+    { "keyCode": 76, "code": "NumpadEnter", "modifiers": 0, "label": "Enter" },
+    { "keyCode": 38, "code": "KeyJ", "modifiers": 4, "label": "⌃J" },
+    { "keyCode": 38, "code": "KeyJ", "modifiers": 0, "label": "J" },
+    { "keyCode": 0, "code": "KeyA", "modifiers": 1, "label": "⌘A" },
+    { "keyCode": 49, "code": "Space", "modifiers": 0, "label": "Space" },
+    { "keyCode": 48, "code": "Tab", "modifiers": 8, "label": "⇧Tab" },
+    { "keyCode": 123, "code": "ArrowLeft", "modifiers": 0, "label": "←" },
+    { "keyCode": 122, "code": "F1", "modifiers": 0, "label": "F1" },
+    { "keyCode": 24, "code": "Equal", "modifiers": 1, "label": "⌘=" }
+  ],
+  "scenarios": [
+    {
+      "name": "shipped defaults",
+      "bindings": {
+        "submit": [{ "keyCode": 36, "code": "Enter", "modifiers": 0 }],
+        "newline": [
+          { "keyCode": 36, "code": "Enter", "modifiers": 2 },
+          { "keyCode": 38, "code": "KeyJ", "modifiers": 4 }
+        ]
+      },
+      "cases": [
+        {
+          "name": "a bare Return commits",
+          "keyCode": 36, "code": "Enter", "modifiers": 0,
+          "expect": "submit"
+        },
+        {
+          "name": "Option-Return inserts a newline",
+          "keyCode": 36, "code": "Enter", "modifiers": 2,
+          "expect": "newline"
+        },
+        {
+          "name": "Command-Return is not bound by default",
+          "keyCode": 36, "code": "Enter", "modifiers": 1,
+          "expect": null
+        },
+        {
+          "name": "Shift-Return is not bound by default",
+          "keyCode": 36, "code": "Enter", "modifiers": 8,
+          "expect": null
+        },
+        {
+          "name": "Ctrl-J inserts a newline, as it does in the session pane",
+          "keyCode": 38, "code": "KeyJ", "modifiers": 4,
+          "expect": "newline"
+        }
+      ]
+    },
+    {
+      "name": "representative bindings",
+      "bindings": {
+        "submit": [
+          { "keyCode": 36, "code": "Enter", "modifiers": 1 },
+          { "keyCode": 36, "code": "Enter", "modifiers": 12 },
+          { "keyCode": 36, "code": "Enter", "modifiers": 8 }
+        ],
+        "newline": [
+          { "keyCode": 36, "code": "Enter", "modifiers": 0 },
+          { "keyCode": 36, "code": "Enter", "modifiers": 8 }
+        ]
+      },
+      "cases": [
+        {
+          "name": "bare Return inserts a newline",
+          "keyCode": 36, "code": "Enter", "modifiers": 0,
+          "expect": "newline"
+        },
+        {
+          "name": "Command-Return commits",
+          "keyCode": 36, "code": "Enter", "modifiers": 1,
+          "expect": "submit"
+        },
+        {
+          "name": "a keystroke in both lists commits",
+          "keyCode": 36, "code": "Enter", "modifiers": 8,
+          "expect": "submit"
+        },
+        {
+          "name": "Control-Shift-Return commits",
+          "keyCode": 36, "code": "Enter", "modifiers": 12,
+          "expect": "submit"
+        },
+        {
+          "name": "Option-Return is not ours",
+          "keyCode": 36, "code": "Enter", "modifiers": 2,
+          "expect": null
+        },
+        {
+          "name": "Control-Return is not ours",
+          "keyCode": 36, "code": "Enter", "modifiers": 4,
+          "expect": null
+        },
+        {
+          "name": "an unbound modifier combination is not ours",
+          "keyCode": 36, "code": "Enter", "modifiers": 9,
+          "expect": null
+        },
+        {
+          "name": "keypad Enter is a different key from Return",
+          "keyCode": 76, "code": "NumpadEnter", "modifiers": 0,
+          "expect": null
+        },
+        {
+          "name": "keypad Enter does not inherit Return's submit binding",
+          "keyCode": 76, "code": "NumpadEnter", "modifiers": 1,
+          "expect": null
+        },
+        {
+          "name": "the reserved four-modifier chord is not a text-entry binding",
+          "keyCode": 36, "code": "Enter", "modifiers": 15,
+          "expect": null
+        }
+      ]
+    },
+    {
+      "name": "empty bindings never match",
+      "bindings": { "submit": [], "newline": [] },
+      "cases": [
+        {
+          "name": "bare Return is not ours when nothing is bound",
+          "keyCode": 36, "code": "Enter", "modifiers": 0,
+          "expect": null
+        },
+        {
+          "name": "Command-Return is not ours when nothing is bound",
+          "keyCode": 36, "code": "Enter", "modifiers": 1,
+          "expect": null
+        }
+      ]
+    },
+    {
+      "name": "newline-only bindings",
+      "bindings": {
+        "submit": [],
+        "newline": [{ "keyCode": 36, "code": "Enter", "modifiers": 0 }]
+      },
+      "cases": [
+        {
+          "name": "the bound keystroke still resolves with an empty submit list",
+          "keyCode": 36, "code": "Enter", "modifiers": 0,
+          "expect": "newline"
+        },
+        {
+          "name": "an empty submit list matches nothing",
+          "keyCode": 36, "code": "Enter", "modifiers": 1,
+          "expect": null
+        }
+      ]
+    }
+  ]
+}

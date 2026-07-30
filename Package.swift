@@ -29,7 +29,12 @@ let package = Package(
         ),
         .testTarget(
             name: "GalacticTests",
-            dependencies: ["Galactic"]
+            dependencies: ["Galactic"],
+            // The fixture both matchers are checked against. Copied rather
+            // than processed: it is read as bytes and parsed as JSON, and
+            // processing would let the toolchain rewrite what the two sides
+            // are supposed to agree on.
+            resources: [.copy("Fixtures/text-entry-cases.json")]
         ),
     ],
     swiftLanguageModes: [.v5]
