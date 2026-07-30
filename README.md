@@ -8,13 +8,13 @@ directly to any specific implementation.
 
 ## Status
 
-v0.1.0 — initial release. The public API surface is intentionally
-small and may evolve as additional use cases come online.
+v0.5.0. The public API surface is intentionally small and may
+evolve as additional use cases come online.
 
 ## Requirements
 
 - macOS 14+
-- Swift tools 6.3 (language mode 5)
+- Swift tools 6.0 (language mode 5)
 
 ## Installation
 
@@ -24,7 +24,7 @@ released tag:
 ```swift
 .package(
     url: "https://github.com/kellyredding/Galactic.git",
-    exact: "0.1.0"
+    exact: "0.5.0"
 )
 ```
 
