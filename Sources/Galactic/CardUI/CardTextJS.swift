@@ -153,13 +153,22 @@ public let cardTextJS: String = """
         ta.value = before + prefix + text + suffix + after;
 
         var newPos = start + prefix.length + text.length + suffix.length;
-        ta.selectionStart = newPos;
-        ta.selectionEnd = newPos;
+        ta.setSelectionRange(newPos, newPos);
 
-        // Drives the autosize listener above, so the box grows to fit what was
-        // just dropped into it.
-        ta.dispatchEvent(new Event('input'));
+        // Order matters, and it is the reverse of what reads naturally.
+        //
+        // Focus is taken *before* the event is dispatched, because the input
+        // listeners this wakes can reflow the surface — on a surface whose
+        // cards are absolutely positioned, growing this box repositions
+        // everything below it. Focusing after that reflow lands on an element
+        // the layout has already moved out from under, and the caret is lost
+        // even though the text arrived. Focusing first survives it.
+        //
+        // The event bubbles for the same reason the suggestion button's does:
+        // a listener delegated to a container never sees an event that does
+        // not travel, and the two insertion paths write into the same forms.
         ta.focus();
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
     window.GalaxyCardText = {

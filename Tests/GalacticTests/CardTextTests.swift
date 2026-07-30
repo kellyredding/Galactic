@@ -19,7 +19,11 @@ final class CardTextTests: XCTestCase {
         // The module dispatches an input event so the autosize listener sees
         // the text it just inserted. A bare context has no DOM, so stand up
         // just enough of one for the call to be made.
-        context.evaluateScript("var Event = function (type) { this.type = type; };")
+        context.evaluateScript(
+            "var Event = function (type, init) {"
+                + " this.type = type;"
+                + " this.bubbles = !!(init && init.bubbles); };"
+        )
         context.evaluateScript(cardTextJS)
         if let thrown { XCTFail("loading the module threw: \(thrown)") }
         return context
@@ -119,8 +123,21 @@ final class CardTextTests: XCTestCase {
                     value: '\(value)',
                     selectionStart: \(caret),
                     selectionEnd: \(caret),
-                    dispatchEvent: function () {},
-                    focus: function () {}
+                    focused: false,
+                    events: [],
+                    setSelectionRange: function (s, e) {
+                        this.selectionStart = s;
+                        this.selectionEnd = e;
+                    },
+                    dispatchEvent: function (e) {
+                        // Records order: focus must already have happened.
+                        this.events.push({
+                            type: e.type,
+                            bubbles: !!e.bubbles,
+                            focusedFirst: this.focused
+                        });
+                    },
+                    focus: function () { this.focused = true; }
                 };
                 window.GalaxyCardText.insertPaths(ta, [\(list)]);
                 return ta.value;
@@ -153,6 +170,43 @@ final class CardTextTests: XCTestCase {
         XCTAssertEqual(
             insertPaths(context, into: "", caret: 0, paths: ["/a", "/b"]),
             "[/a] [/b]\n"
+        )
+    }
+
+    /// Focus is taken before the input event is dispatched.
+    ///
+    /// The listeners that event wakes can reflow the surface — on a surface
+    /// whose cards are absolutely positioned, growing this box moves
+    /// everything below it. Focusing afterwards lands on an element the layout
+    /// has already moved, and the caret is lost even though the text arrived.
+    /// The suggestion-insert path has always done it in this order; the drop
+    /// path had it reversed.
+    func testFocusIsTakenBeforeTheInputEventIsDispatched() throws {
+        let context = try makeContext()
+        let ordered = context.evaluateScript(
+            """
+            (function () {
+                var ta = {
+                    value: '', selectionStart: 0, selectionEnd: 0,
+                    focused: false, focusedFirst: null,
+                    setSelectionRange: function (s, e) {
+                        this.selectionStart = s; this.selectionEnd = e;
+                    },
+                    dispatchEvent: function (e) {
+                        this.focusedFirst = this.focused;
+                        this.bubbled = !!e.bubbles;
+                    },
+                    focus: function () { this.focused = true; }
+                };
+                window.GalaxyCardText.insertPaths(ta, ['/tmp/a']);
+                return ta.focusedFirst === true && ta.bubbled === true;
+            })();
+            """
+        )?.toBool()
+        assertNoThrow()
+        XCTAssertEqual(
+            ordered, true,
+            "insertPaths must focus before dispatching, and the event must bubble"
         )
     }
 
