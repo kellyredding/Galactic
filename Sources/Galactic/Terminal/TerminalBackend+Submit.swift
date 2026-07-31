@@ -193,14 +193,18 @@ extension TerminalBackend {
     /// a late write beats no write, and the log line is what makes the
     /// difference visible after the fact.
     public func whenAcceptingInput(_ body: @escaping (Bool) -> Void) {
-        waitForKittyKeyboard(
+        waitForInputReady(
             deadline: Date() + SessionSubmit.kittyReadyTimeout, body)
     }
 
-    /// Poll until the child enables the kitty protocol, or the deadline passes.
+    /// Poll until the child can decode a CSI-u chord, or the deadline passes.
     ///
-    /// Polling rather than observing because the engine exposes the flag but
-    /// publishes no change for it, and the wait is bounded and short-lived.
+    /// Decodability alone, deliberately. This is for the submit keystroke,
+    /// which follows text already written through `whenAcceptingInput` — so
+    /// something has painted by the time this runs, and re-checking for it
+    /// here would be asking a question already answered. Kept separate from
+    /// the fuller gate so neither can be widened by accident into the other's
+    /// job.
     private func waitForKittyKeyboard(
         deadline: Date, _ completion: @escaping (Bool) -> Void
     ) {
@@ -217,6 +221,57 @@ extension TerminalBackend {
         ) { [weak self] in
             guard let self else { return }
             self.waitForKittyKeyboard(deadline: deadline, completion)
+        }
+    }
+
+    /// Poll until the child can both decode input and has somewhere to put it,
+    /// or the deadline passes.
+    ///
+    /// Three conditions, because no single one of them is honest and each is
+    /// wrong in a way the other two are not.
+    ///
+    /// The keyboard protocol answers whether a chord written as a CSI-u
+    /// sequence will be decoded at all — without it the bytes are discarded
+    /// rather than misread. It says nothing about timing: a program pushes
+    /// those flags early in its startup, and never pops them, so on a reused
+    /// terminal the flag is already true before the new child has run.
+    ///
+    /// Output received answers freshness, and only freshness. It is cleared at
+    /// each process start, so it cannot be satisfied by the child that just
+    /// died — but a program's first bytes are terminal setup rather than
+    /// anything drawn, so it goes true at nearly the same moment the protocol
+    /// flag does.
+    ///
+    /// Visible content answers timing, and only timing. A drawn screen is a
+    /// program with an input layer, roughly a sixth of a second after its
+    /// first byte. Alone it is the most convincing of the three lies, because
+    /// a restarted child inherits a terminal that genuinely does have the
+    /// previous lifecycle's output on it.
+    ///
+    /// Required together, they mean: content is on screen, and a child that is
+    /// known to be running put it there, and a chord sent now will be decoded.
+    /// That is still not proof an input field is focused — nothing observable
+    /// from out here is — but each signal's failure mode is covered by
+    /// another's, which none of them manages on its own.
+    ///
+    /// Polling rather than observing because the engine exposes all three as
+    /// state and publishes a change for none, and the wait is bounded.
+    private func waitForInputReady(
+        deadline: Date, _ completion: @escaping (Bool) -> Void
+    ) {
+        if isKittyKeyboardActive, hasReceivedOutput, hasVisibleContent {
+            completion(true)
+            return
+        }
+        guard Date() < deadline else {
+            completion(false)
+            return
+        }
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + SessionSubmit.kittyPollInterval
+        ) { [weak self] in
+            guard let self else { return }
+            self.waitForInputReady(deadline: deadline, completion)
         }
     }
 }

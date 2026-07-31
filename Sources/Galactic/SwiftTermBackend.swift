@@ -166,6 +166,10 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
         execName: String,
         currentDirectory: String
     ) {
+        // Forget the last child's output before the next one starts, so
+        // readiness answers for the process about to run rather than for the
+        // terminal it inherits.
+        terminalView.beginProcessLifecycle()
         terminalView.startProcess(
             executable: executable,
             args: args,
@@ -259,6 +263,41 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
 
     func send(bytes: [UInt8]) {
         terminalView.send(bytes)
+    }
+
+    var hasReceivedOutput: Bool {
+        terminalView.hasReceivedOutput
+    }
+
+    var hasVisibleContent: Bool {
+        // Nil while the view is being torn down. Answering false there is
+        // correct rather than merely safe: a terminal that is going away is
+        // not one anything should be typed into.
+        guard let terminal = terminalView.terminal else { return false }
+        let buffer = terminal.buffer
+
+        // Anchored at the screen (`yBase`) rather than at the scroll position.
+        // `Terminal.getLine(row:)` resolves against `yDisp`, which follows the
+        // user's scrollback — and a host that clears the screen before a
+        // restart typically sends ESC[2J alone, keeping scroll history on
+        // purpose. A yDisp-anchored scan then reads that preserved history and
+        // reports content while the screen itself is still blank.
+        //
+        // Read in place and stop at the first hit. `captureScrollbackSnapshot`
+        // answers the same question, but deep-copies the whole buffer to do
+        // it, which is far too heavy to run on a poll interval.
+        for row in 0..<terminal.rows {
+            let index = buffer.yBase + row
+            guard index >= 0, index < buffer.lines.count else { continue }
+            let line = buffer.lines[index]
+            for col in 0..<terminal.cols {
+                let code = line[col].code
+                // Unwritten cells read as 0; an erased screen fills with
+                // spaces. Everything else counts as something drawn.
+                if code != 0, code != 32 { return true }
+            }
+        }
+        return false
     }
 
     var isKittyKeyboardActive: Bool {

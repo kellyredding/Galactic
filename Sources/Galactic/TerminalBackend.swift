@@ -144,6 +144,43 @@ public protocol TerminalBackend: AnyObject {
     /// after launch.
     var isKittyKeyboardActive: Bool { get }
 
+    /// Whether the child has written a single byte since its process started.
+    ///
+    /// Deliberately weak, and paired with `hasVisibleContent` for that reason.
+    /// A program's first bytes are terminal setup — switching to the alternate
+    /// screen, hiding the cursor, pushing the keyboard flags — emitted before
+    /// it draws anything a user would recognise. So this goes true at very
+    /// nearly the same instant `isKittyKeyboardActive` does, and answers only
+    /// the narrow question of whether *this* child is alive.
+    ///
+    /// What it does answer, that nothing else here does, is freshness. It is
+    /// cleared when a process starts, so it cannot be satisfied by the child
+    /// that just died. Both other signals can: the keyboard flags are never
+    /// taken back down once pushed, and the screen a restarted child inherits
+    /// still holds the last one's output.
+    var hasReceivedOutput: Bool { get }
+
+    /// Whether the screen holds a single non-blank cell.
+    ///
+    /// The screen, emphatically, and not the scrollback above it or whatever
+    /// the view happens to be scrolled to. A host that clears before a restart
+    /// generally erases the screen while keeping scroll history deliberately,
+    /// so those two regions disagree at exactly the moment this is asked:
+    /// history is full, screen is blank. An implementation that reads the wrong
+    /// one reports drawn against a screen the child has not touched.
+    ///
+    /// Read what this says literally and do not promote it. It answers whether
+    /// *something* has been drawn — not whether an input layer exists, and not
+    /// whether that something came from the child. Measured against Claude
+    /// Code launched through a wrapper, this is already true before Claude Code
+    /// starts, satisfied by the launcher's own one-line banner. A restarted
+    /// child inheriting a screen satisfies it too.
+    ///
+    /// Neither this nor `hasReceivedOutput` is evidence a prompt can be typed
+    /// at. Nothing observable from out here is; confirmation that a prompt was
+    /// taken comes from the agent, via `SubmitVerification`.
+    var hasVisibleContent: Bool { get }
+
     /// Send text to the PTY (UTF-8 encoded). When `asPaste` is
     /// true and the terminal has bracketed-paste-mode enabled,
     /// the implementation wraps the text in `ESC[200~` …

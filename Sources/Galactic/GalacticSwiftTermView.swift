@@ -14,6 +14,32 @@ class GalacticSwiftTermView: LocalProcessTerminalView {
     /// (U+2500–U+257F) fall through to CoreText font rendering,
     /// matching Terminal.app. Baked into init so callers don't
     /// have to remember to set it.
+    /// Whether the child has written a single byte since the current process
+    /// started.
+    ///
+    /// Answers freshness, not readiness, and is only useful alongside a check
+    /// on what is actually drawn. A program's opening bytes are terminal setup
+    /// rather than anything a user would see, so this goes true well before
+    /// there is an input layer to type at.
+    ///
+    /// What it uniquely provides is that `beginProcessLifecycle()` clears it
+    /// at each start, so it answers for this child rather than for this
+    /// terminal. Every other signal available out here survives a restart: the
+    /// keyboard protocol flags are pushed and never popped, and the screen a
+    /// new child inherits still holds the last one's output.
+    private(set) var hasReceivedOutput = false
+
+    /// Called by the backend when a process is about to start, so output from
+    /// the child that just died cannot be mistaken for the one about to run.
+    func beginProcessLifecycle() {
+        hasReceivedOutput = false
+    }
+
+    override func dataReceived(slice: ArraySlice<UInt8>) {
+        if !slice.isEmpty { hasReceivedOutput = true }
+        super.dataReceived(slice: slice)
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         self.customBlockGlyphs = false
