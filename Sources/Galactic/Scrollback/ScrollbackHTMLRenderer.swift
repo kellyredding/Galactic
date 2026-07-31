@@ -1202,28 +1202,11 @@ public enum ScrollbackHTMLRenderer {
                 );
             }
 
-            // Keyboard handling — emoji handleKeyDown must be first
-            ta.addEventListener('keydown', (e) => {
-                if (typeof EmojiAutocomplete !== 'undefined' &&
-                    EmojiAutocomplete.handleKeyDown(ta, e)) {
-                    return;
-                }
-                const action = window.GalaxyTextEntry.actionFor(e);
-                if (action === 'submit') {
-                    e.preventDefault();
-                    self.submitNote();
-                    return;
-                }
-                if (action === 'newline') {
-                    window.GalaxyTextEntry.handleNewline(ta, e);
-                    return;
-                }
-                // Don't let Escape propagate to ScrollbackManager.handleKey
-                if (e.key === 'Escape') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    self.handleFormEscape(ta);
-                }
+            // Escape is claimed here so it cannot reach the overlay's own key
+            // handler, which would exit scrollback out from under an open form.
+            window.GalaxyCardText.bindCardComposer(ta, {
+                onSubmit: () => { self.submitNote(); },
+                onEscape: () => { self.handleFormEscape(ta); }
             });
 
             // Auto-grow/shrink textarea via the rAF-deferred
@@ -1634,25 +1617,12 @@ public enum ScrollbackHTMLRenderer {
 
             const self = this;
 
-            ta.addEventListener('keydown', (e) => {
-                if (typeof EmojiAutocomplete !== 'undefined' &&
-                    EmojiAutocomplete.handleKeyDown(ta, e)) {
-                    return;
-                }
-                const action = window.GalaxyTextEntry.actionFor(e);
-                if (action === 'submit') {
-                    e.preventDefault();
-                    self.saveEdit(noteId, ta.value);
-                    return;
-                }
-                if (action === 'newline') {
-                    window.GalaxyTextEntry.handleNewline(ta, e);
-                    return;
-                }
-                if (e.key === 'Escape') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    // Check emoji popup first
+            window.GalaxyCardText.bindCardComposer(ta, {
+                onSubmit: () => { self.saveEdit(noteId, ta.value); },
+                onEscape: () => {
+                    // An open emoji popup owns Escape before the edit does —
+                    // dismissing the popup is what the user means, not
+                    // abandoning what they have typed.
                     if (typeof EmojiAutocomplete !== 'undefined' &&
                         EmojiAutocomplete.isActive(ta)) {
                         EmojiAutocomplete.dismiss(ta);

@@ -293,23 +293,12 @@ endBlock);
 
             var ta = form.querySelector('textarea');
             installAutoGrow(ta);
-            ta.addEventListener('keydown', function(e) {
-                if (typeof EmojiAutocomplete \
-!== 'undefined' &&
-                    EmojiAutocomplete.handleKeyDown(\
-ta, e)) {
-                    return;
-                }
-                var action = window.GalaxyTextEntry
-                    .actionFor(e);
-                if (action === 'submit') {
-                    e.preventDefault();
+            // Escape is deliberately not claimed here: this surface reports
+            // its escape context to the host, which decides between closing a
+            // popup, abandoning the form, and leaving the reader.
+            window.GalaxyCardText.bindCardComposer(ta, {
+                onSubmit: function() {
                     AnnotationManager.submitCreate();
-                    return;
-                }
-                if (action === 'newline') {
-                    window.GalaxyTextEntry
-                        .handleNewline(ta, e);
                 }
             });
 
@@ -669,23 +658,12 @@ state.expandedNumber);
                 AnnotationManager.collapseExpanded();
             });
             installAutoGrow(ta);
-            ta.addEventListener('keydown', function(e) {
-                if (typeof EmojiAutocomplete \
-!== 'undefined' &&
-                    EmojiAutocomplete.handleKeyDown(\
-ta, e)) {
-                    return;
-                }
-                var action = window.GalaxyTextEntry
-                    .actionFor(e);
-                if (action === 'submit') {
-                    e.preventDefault();
+            // Escape is deliberately not claimed here: this surface reports
+            // its escape context to the host, which decides between closing a
+            // popup, abandoning the form, and leaving the reader.
+            window.GalaxyCardText.bindCardComposer(ta, {
+                onSubmit: function() {
                     AnnotationManager.submitCreate();
-                    return;
-                }
-                if (action === 'newline') {
-                    window.GalaxyTextEntry
-                        .handleNewline(ta, e);
                 }
             });
 
@@ -2109,24 +2087,9 @@ endVal);
 
             autoGrow(ta);
             installAutoGrow(ta);
-            ta.addEventListener('keydown', function(e) {
-                if (typeof EmojiAutocomplete \
-!== 'undefined' &&
-                    EmojiAutocomplete.handleKeyDown(\
-ta, e)) {
-                    return;
-                }
-                var action = window.GalaxyTextEntry
-                    .actionFor(e);
-                if (action === 'submit') {
-                    e.preventDefault();
-                    AnnotationManager.submitUpdate(\
-number);
-                    return;
-                }
-                if (action === 'newline') {
-                    window.GalaxyTextEntry
-                        .handleNewline(ta, e);
+            window.GalaxyCardText.bindCardComposer(ta, {
+                onSubmit: function() {
+                    AnnotationManager.submitUpdate(number);
                 }
             });
 

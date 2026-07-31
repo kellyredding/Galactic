@@ -145,6 +145,35 @@ public let cardTextJS: String = """
         };
     }
 
+    // Wire a card composer's keys.
+    //
+    // Every note and annotation composer — the create forms and the in-card
+    // edit textareas alike — agreed on the same three rules and each spelled
+    // them out again: let the emoji autocomplete claim a key first, then submit
+    // on the user's configured submit keystroke, then insert a newline on the
+    // configured newline keystroke. Five copies of the same listener, differing
+    // only in which function submit called.
+    //
+    // The generic half of that already existed in the keystroke module and was
+    // never wired to anything. This supplies the part that is specific to a
+    // card — that an emoji popup is what gets first claim — and hands the rest
+    // to it.
+    //
+    // `onEscape` is optional and passes straight through: a surface that
+    // answers Escape on the textarea supplies it, and a surface that reports
+    // its context to the host instead leaves it out so the key propagates.
+    function bindCardComposer(ta, handlers) {
+        var opts = handlers || {};
+        window.GalaxyTextEntry.bind(ta, {
+            guard: function(e) {
+                return typeof EmojiAutocomplete !== 'undefined'
+                    && EmojiAutocomplete.handleKeyDown(ta, e);
+            },
+            submit: opts.onSubmit,
+            escape: opts.onEscape
+        });
+    }
+
     // Grow a textarea to fit its content, debounced.
     //
     // Resizing on every keystroke is visibly jumpy while typing, but waiting
@@ -262,6 +291,7 @@ public let cardTextJS: String = """
         armDeleteButton: armDeleteButton,
         disarmDeleteButton: disarmDeleteButton,
         createDeleteConfirmation: createDeleteConfirmation,
+        bindCardComposer: bindCardComposer,
         installAutosize: installAutosize,
         insertPaths: insertPaths
     };

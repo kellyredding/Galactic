@@ -192,15 +192,19 @@ public let textEntryJS: String = """
             return true;
         },
 
-        // handlers: { submit: fn, guard: fn }
+        // handlers: { submit: fn, guard: fn, newline: fn, escape: fn }
         //
         // `guard` runs before the matcher and bails out entirely when it
         // returns true — that is how an autocomplete popup keeps first claim
         // on a keystroke. Newline is handled by handleNewline unless the
         // caller supplies its own.
         //
-        // Sites that also own other keys (Escape, say) should call actionFor
-        // from their own listener instead, so their ordering stays explicit.
+        // `escape` is optional and deliberately last, because the surfaces
+        // that use this disagree about Escape: some answer it on the textarea,
+        // others report their state to a host and let it decide. Supplying a
+        // handler claims the key — the default and the propagation are both
+        // stopped before it runs. Omitting it leaves Escape untouched, which is
+        // what a surface answering it elsewhere needs.
         bind: function (textarea, handlers) {
             var opts = handlers || {};
             textarea.addEventListener('keydown', function (e) {
@@ -219,6 +223,12 @@ public let textEntryJS: String = """
                         return;
                     }
                     window.GalaxyTextEntry.handleNewline(textarea, e);
+                    return;
+                }
+                if (e.key === 'Escape' && opts.escape) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    opts.escape(e);
                 }
             });
         }
