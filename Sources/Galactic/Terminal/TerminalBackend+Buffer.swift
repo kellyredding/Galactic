@@ -1,9 +1,6 @@
-import Galactic
-
-/// Buffer-level terminal operations layered on the Galactic
-/// `TerminalBackend` chokepoints. Kept in Galaxy (not Galactic) so the
-/// gesture needs no engine release: it rides existing public protocol
-/// requirements.
+/// Buffer-level terminal operations layered on the `TerminalBackend`
+/// chokepoints, so a host asks for the operation rather than reaching for the
+/// engine underneath it.
 extension TerminalBackend {
     /// Trim the scrollback history and reflow the viewport — the
     /// "Trim Buffer" gesture.
