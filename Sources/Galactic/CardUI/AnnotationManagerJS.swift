@@ -65,9 +65,7 @@ public let annotationManagerJS: String = """
         resizeObserver: null,
         editingNumber: null,
         expandedNumber: null,
-        confirmingDeleteNumber: null,
-        confirmDeleteTimer: null,
-        confirmArmedAt: null,
+        _deleteConfirmation: null,
         submitting: false,
         deleting: false,
         // Config
@@ -2339,68 +2337,40 @@ this.highlightStart, this.highlightEnd);
             });
         },
 
-        handleDeleteClick(number) {
-            if (this.deleting) return;
-            if (this.confirmingDeleteNumber === number) {
-                // Reject clicks too close to arming — this
-                // catches the second click of a double-click
-                // regardless of whether btn.disabled worked.
-                var elapsed = Date.now() - this.confirmArmedAt;
-                if (elapsed
-                    < window.GalaxyCardText.DELETE_ARM_REJECT_MS) return;
-                this.deleting = true;
-                this.clearDeleteConfirmation();
-                this.requestDelete(number);
-            } else {
-                this.showDeleteConfirmation(number);
-            }
-        },
-
-        showDeleteConfirmation(number) {
-            this.clearDeleteConfirmation();
-            this.confirmingDeleteNumber = number;
-            this.confirmArmedAt = Date.now();
-
-            var btn = document.querySelector(
-                '.annotation-card[data-number="'
-                + number
-                + '"] .annotation-btn-delete'
-            );
-            if (!btn) return;
-            window.GalaxyCardText.armDeleteButton(btn);
-
-            this.confirmDeleteTimer = setTimeout(\
-function() {
-                AnnotationManager\
-.clearDeleteConfirmation();
-            }, window.GalaxyCardText.DELETE_REVERT_MS);
-        },
-
-        clearDeleteConfirmation() {
-            if (this.confirmDeleteTimer) {
-                clearTimeout(this.confirmDeleteTimer);
-                this.confirmDeleteTimer = null;
-            }
-            this.confirmArmedAt = null;
-            var number = this.confirmingDeleteNumber;
-            if (number === null) return;
-            this.confirmingDeleteNumber = null;
-
-            var btn = document.querySelector(
-                '.annotation-card[data-number="'
-                + number
-                + '"] .annotation-btn-delete'
-            );
-            if (!btn) return;
-            window.GalaxyCardText.disarmDeleteButton(btn);
-        },
-
-        requestDelete(number) {
-            window.webkit.messageHandlers.annotation\
+        // The machine is shared; locating this surface's button and telling
+        // this surface's host are not. Built on first use so it does not
+        // depend on where initialize() happens to run.
+        deleteConfirmation() {
+            if (!this._deleteConfirmation) {
+                this._deleteConfirmation =
+                    window.GalaxyCardText.createDeleteConfirmation({
+                        findButton: function(number) {
+                            return document.querySelector(
+                                '.annotation-card[data-number="'
+                                + number
+                                + '"] .annotation-btn-delete'
+                            );
+                        },
+                        onConfirmed: function(number) {
+                            window.webkit.messageHandlers.annotation\
 .postMessage({
-                action: 'delete',
-                number: number
-            });
+                                action: 'delete',
+                                number: number
+                            });
+                        }
+                    });
+            }
+            return this._deleteConfirmation;
+        },
+
+        handleDeleteClick(number) {
+            this.deleteConfirmation().handleClick(number);
+        },
+
+        // Kept as a name of its own because the card teardown calls it while
+        // rebuilding, where there is no click involved.
+        clearDeleteConfirmation() {
+            this.deleteConfirmation().clear();
         },
 
         annotationCreated(data) {
@@ -2518,7 +2488,7 @@ data.annotation.number]
         },
 
         annotationDeleted(number) {
-            this.deleting = false;
+            this.deleteConfirmation().finish();
 
             if (this.expandedNumber === number) {
                 this.collapseExpanded();

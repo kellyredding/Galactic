@@ -9,9 +9,14 @@ import Foundation
 // Inject ahead of any module that calls into it. Idempotent — a second
 // injection returns immediately.
 //
-// What is deliberately NOT here: the create/edit/delete lifecycle. The two
-// managers orchestrate different things and are structured differently, and
-// merging them is a separate job. This is the substrate they both stand on.
+// The delete lifecycle IS here, as a state machine the surfaces drive — it was
+// the one lifecycle whose rules were identical in intent, and consolidating it
+// resolved a difference between the two copies rather than papering over one.
+//
+// What is deliberately NOT here: creating and editing. Those two managers
+// orchestrate genuinely different things — one anchors cards to source ranges
+// and repositions them, the other lets them sit in the document flow — and
+// merging them would mean restructuring one side for no shared behavior.
 
 // js-validate
 public let cardTextJS: String = """
@@ -60,6 +65,84 @@ public let cardTextJS: String = """
         if (!btn) return;
         btn.classList.remove('confirming');
         btn.innerHTML = DELETE_ICON_SVG;
+    }
+
+    // The two-click delete, as a state machine both card surfaces drive.
+    //
+    // Click once to arm, again to confirm. What the surfaces used to share was
+    // only the timings and the button styling; the machine around them was
+    // written twice, once inlined into a single method and once spread across
+    // four, and the two had drifted into different behavior.
+    //
+    // Arming a card disarms whichever card was armed before it, so at most one
+    // is ever armed. Without that rule the revert timers overlap: the first
+    // card's timer fires while the second is armed and clears the shared
+    // state, leaving the second button reading "Are you sure?" while a click
+    // on it re-arms instead of confirming. One surface had the rule and one
+    // did not.
+    //
+    // `findButton(id)` locates the delete button for an id — each surface
+    // names its cards differently, and that is the only part of this that ever
+    // legitimately differed. `onConfirmed(id)` is the surface's own way of
+    // telling its host to go through with it.
+    //
+    // The button is resolved before any state is written, so a card that has
+    // gone from the DOM leaves the machine idle rather than armed against
+    // something that cannot be clicked.
+    function createDeleteConfirmation(opts) {
+        var findButton = opts.findButton;
+        var onConfirmed = opts.onConfirmed;
+
+        var confirmingId = null;
+        var armedAt = null;
+        var timer = null;
+        var deleting = false;
+
+        function clear() {
+            if (timer !== null) {
+                clearTimeout(timer);
+                timer = null;
+            }
+            armedAt = null;
+            var id = confirmingId;
+            if (id === null) return;
+            confirmingId = null;
+            disarmDeleteButton(findButton(id));
+        }
+
+        function handleClick(id) {
+            // A delete already in flight ignores further clicks: the card is
+            // about to leave, and the host has not said so yet.
+            if (deleting) return;
+
+            if (confirmingId === id) {
+                if (Date.now() - armedAt < DELETE_ARM_REJECT_MS) return;
+                deleting = true;
+                clear();
+                onConfirmed(id);
+                return;
+            }
+
+            clear();
+            var btn = findButton(id);
+            if (!btn) return;
+            confirmingId = id;
+            armedAt = Date.now();
+            armDeleteButton(btn);
+            timer = setTimeout(clear, DELETE_REVERT_MS);
+        }
+
+        // Called once the host has confirmed the card is gone, which is what
+        // releases the machine to accept clicks again.
+        function finish() {
+            deleting = false;
+        }
+
+        return {
+            handleClick: handleClick,
+            clear: clear,
+            finish: finish
+        };
     }
 
     // Grow a textarea to fit its content, debounced.
@@ -178,6 +261,7 @@ public let cardTextJS: String = """
         DELETE_REVERT_MS: DELETE_REVERT_MS,
         armDeleteButton: armDeleteButton,
         disarmDeleteButton: disarmDeleteButton,
+        createDeleteConfirmation: createDeleteConfirmation,
         installAutosize: installAutosize,
         insertPaths: insertPaths
     };

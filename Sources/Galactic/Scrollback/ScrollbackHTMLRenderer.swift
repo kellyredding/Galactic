@@ -922,9 +922,7 @@ public enum ScrollbackHTMLRenderer {
         cardSpacers: {},
         editingId: null,
         expandedId: null,
-        confirmingDeleteId: null,
-        confirmDeleteTimer: null,
-        confirmArmedAt: null,
+        _deleteConfirmation: null,
         submitting: false,
         deleting: false,
         highlightedLines: [],
@@ -1395,7 +1393,7 @@ public enum ScrollbackHTMLRenderer {
         },
 
         noteDeleted(id) {
-            this.deleting = false;
+            this.deleteConfirmation().finish();
 
             this.items = this.items.filter(n => n.id !== id);
 
@@ -1721,45 +1719,35 @@ public enum ScrollbackHTMLRenderer {
 
         // --- Delete ---
 
-        handleDelete(noteId) {
-            if (this.deleting) return;
-            if (this.confirmingDeleteId === noteId) {
-                // Reject clicks too close to arming — this
-                // catches the second click of a double-click
-                // regardless of whether btn.disabled worked.
-                const elapsed = Date.now() - this.confirmArmedAt;
-                if (elapsed
-                    < window.GalaxyCardText.DELETE_ARM_REJECT_MS) return;
-                this.deleting = true;
-                clearTimeout(this.confirmDeleteTimer);
-                this.confirmingDeleteId = null;
-                this.confirmDeleteTimer = null;
-                this.confirmArmedAt = null;
-
-                window.webkit.messageHandlers.scrollback.postMessage({
-                    action: 'deleteNote',
-                    id: noteId
-                });
-                return;
+        // The machine is shared; locating this surface's button and telling
+        // this surface's host are not. Built on first use so it does not
+        // depend on where initialize() happens to run.
+        deleteConfirmation() {
+            if (!this._deleteConfirmation) {
+                this._deleteConfirmation =
+                    window.GalaxyCardText.createDeleteConfirmation({
+                        findButton: (noteId) => {
+                            const card = document.querySelector(
+                                '[data-note-id=\"' + noteId + '\"]'
+                            );
+                            return card
+                                ? card.querySelector('.note-btn-delete')
+                                : null;
+                        },
+                        onConfirmed: (noteId) => {
+                            window.webkit.messageHandlers.scrollback
+                                .postMessage({
+                                    action: 'deleteNote',
+                                    id: noteId
+                                });
+                        }
+                    });
             }
+            return this._deleteConfirmation;
+        },
 
-            // First click — show confirmation
-            const card = document.querySelector('[data-note-id=\"' + noteId + '\"]');
-            if (!card) return;
-
-            this.confirmingDeleteId = noteId;
-            this.confirmArmedAt = Date.now();
-
-            const btn = card.querySelector('.note-btn-delete');
-            window.GalaxyCardText.armDeleteButton(btn);
-
-            const self = this;
-            this.confirmDeleteTimer = setTimeout(() => {
-                window.GalaxyCardText.disarmDeleteButton(btn);
-                self.confirmingDeleteId = null;
-                self.confirmDeleteTimer = null;
-                self.confirmArmedAt = null;
-            }, window.GalaxyCardText.DELETE_REVERT_MS);
+        handleDelete(noteId) {
+            this.deleteConfirmation().handleClick(noteId);
         },
 
         // --- Highlight Management ---
