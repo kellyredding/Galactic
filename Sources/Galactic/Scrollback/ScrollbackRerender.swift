@@ -42,7 +42,13 @@ public extension ScrollbackOverlayView {
             "ScrollbackManager.getVisibleLine()"
         ) { [weak self] result, _ in
             guard let self else { return }
-            let scrollLine = result as? Int ?? 0
+            // A missing answer is not line zero. The page returns 0 legitimately
+            // when the reader is at the top, but returns *nothing* when it has
+            // not finished loading — and treating those alike re-renders a
+            // half-built page and dumps the reader at the top of several
+            // thousand lines. Holding position is the whole point of this
+            // method, so decline rather than guess.
+            guard let scrollLine = result as? Int else { return }
             let font = resolveTerminalFont(family: fontFamily, size: fontSize)
             let html = ScrollbackHTMLRenderer.render(
                 snapshot: snapshot,
