@@ -27,6 +27,15 @@ final class ShippedJavaScriptTests: XCTestCase {
             ("addNoteButtonJS", addNoteButtonJS),
             ("cardTextJS", cardTextJS),
             ("GalaxyFindJS.userScriptSource", GalaxyFindJS.userScriptSource),
+            (
+                "ScrollbackHTMLRenderer.scrollbackManagerJS",
+                ScrollbackHTMLRenderer.scrollbackManagerJS
+            ),
+            (
+                "ScrollbackHTMLRenderer.noteManagerJS",
+                ScrollbackHTMLRenderer.noteManagerJS
+            ),
+            ("annotationManagerJS", annotationManagerJS),
         ]
     }
 
@@ -73,7 +82,7 @@ final class ShippedJavaScriptTests: XCTestCase {
     /// leave an app without someone being told, and this is where it has to
     /// arrive.
     func testCoverageHasNotShrunk() {
-        XCTAssertGreaterThanOrEqual(embeddedLiterals.count, 6)
+        XCTAssertGreaterThanOrEqual(embeddedLiterals.count, 9)
         XCTAssertGreaterThanOrEqual(bundledResources.count, 2)
     }
 }
