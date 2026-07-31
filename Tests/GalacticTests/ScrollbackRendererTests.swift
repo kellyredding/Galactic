@@ -101,6 +101,46 @@ final class ScrollbackRendererTests: XCTestCase {
         )
     }
 
+    /// The note form asks the shared builder for its composer.
+    ///
+    /// Deliberately not an end-to-end check, because there is no end to reach
+    /// from here: the textarea is constructed at runtime inside the page, so it
+    /// never appears in the rendered document. What the document carries is the
+    /// manager's source, and this asserts the form delegates rather than
+    /// spelling the attributes out again — which is the drift the shared
+    /// builder exists to prevent. The markup itself is covered where it is
+    /// produced.
+    func testTheNoteFormAsksTheSharedBuilderForItsComposer() {
+        let html = render()
+        XCTAssertTrue(
+            html.contains("composerTextareaHTML("),
+            "the note form no longer asks the shared builder for its textarea"
+        )
+        XCTAssertTrue(
+            html.contains("'note-textarea'"),
+            "the composer class name is missing from the builder call"
+        )
+    }
+
+    /// This surface prompts for a note, not an annotation.
+    ///
+    /// It asked for an annotation for a long time — the wording was copied
+    /// across from the reader surface and nothing pointed at it, because the
+    /// two composers are otherwise identical and neither app's tests looked at
+    /// the prompt. Worth pinning now that the builder is shared, since a
+    /// future caller reaching for the nearest example would copy it again.
+    func testTheNoteFormPromptsForANoteRatherThanAnAnnotation() {
+        let html = render()
+        XCTAssertTrue(
+            html.contains("Add note"),
+            "the note composer should prompt for a note"
+        )
+        XCTAssertFalse(
+            html.contains("Add annotation"),
+            "the note composer is prompting for an annotation again"
+        )
+    }
+
     /// Host-supplied values have to survive the trip into the document, or the
     /// page silently falls back to its own defaults.
     func testThemeAndMetricsReachTheStylesheet() {

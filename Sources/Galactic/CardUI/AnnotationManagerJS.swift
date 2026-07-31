@@ -280,16 +280,10 @@ endBlock);
                 '<div class="annotation-form-header">'
                 + '<span class="annotation-form-ref">'
                 + label + '</span></div>'
-                + '<textarea class="annotation-textarea"'
-                + ' spellcheck="false"'
-                + ' autocorrect="off"'
-                + ' autocapitalize="off"'
-                + ' autocomplete="off"'
-                + ' placeholder="Add annotation\\u2026'
-                + window.GalaxyTextEntry
-                    .placeholderHint('save')
-                + '"'
-                + ' rows="1"></textarea>';
+                + window.GalaxyCardText.composerTextareaHTML(
+                    'annotation-textarea',
+                    { placeholder: 'Add annotation\\u2026', hint: 'save' }
+                );
 
             var ta = form.querySelector('textarea');
             installAutoGrow(ta);
@@ -642,16 +636,10 @@ state.expandedNumber);
                 + suggestBtnHTML
                 + addNoteBtnHTML
                 + '</div>'
-                + '<textarea class="annotation-textarea"'
-                + ' spellcheck="false"'
-                + ' autocorrect="off"'
-                + ' autocapitalize="off"'
-                + ' autocomplete="off"'
-                + ' placeholder="Add annotation\\u2026'
-                + window.GalaxyTextEntry
-                    .placeholderHint('save')
-                + '"'
-                + ' rows="1"></textarea>';
+                + window.GalaxyCardText.composerTextareaHTML(
+                    'annotation-textarea',
+                    { placeholder: 'Add annotation\\u2026', hint: 'save' }
+                );
 
             var ta = form.querySelector('textarea');
             ta.addEventListener('focus', function() {
@@ -2076,13 +2064,9 @@ endVal);
             );
             if (!ann || !contentDiv) return;
 
-            var ta = document.createElement('textarea');
-            ta.className = 'annotation-edit-textarea';
-            ta.spellcheck = false;
-            ta.setAttribute('autocorrect', 'off');
-            ta.setAttribute('autocapitalize', 'off');
-            ta.setAttribute('autocomplete', 'off');
-            ta.value = ann.content;
+            var ta = window.GalaxyCardText.createComposerTextarea(
+                'annotation-edit-textarea', ann.content
+            );
             contentDiv.replaceWith(ta);
 
             autoGrow(ta);

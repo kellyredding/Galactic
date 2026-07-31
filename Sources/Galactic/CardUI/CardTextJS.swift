@@ -145,6 +145,55 @@ public let cardTextJS: String = """
         };
     }
 
+    // What every card composer's textarea switches off.
+    //
+    // Five composers each listed these for themselves — three as markup, two as
+    // DOM nodes. The list is not the interesting part of any of them, and a
+    // composer that quietly lost one would gain macOS text substitution in the
+    // middle of a sentence: the kind of thing nobody notices until it has
+    // rewritten a path somebody pasted.
+    var COMPOSER_TEXTAREA_ATTRS = {
+        spellcheck: 'false',
+        autocorrect: 'off',
+        autocapitalize: 'off',
+        autocomplete: 'off'
+    };
+
+    // Markup for a composer textarea, for the forms that build as HTML.
+    //
+    // `hint` names the action whose configured keystroke is appended to the
+    // placeholder, so the prompt tells the user which key commits rather than
+    // asserting one the settings may have changed.
+    function composerTextareaHTML(className, opts) {
+        var o = opts || {};
+        var attrs = '';
+        for (var name in COMPOSER_TEXTAREA_ATTRS) {
+            attrs += ' ' + name + '="'
+                + COMPOSER_TEXTAREA_ATTRS[name] + '"';
+        }
+        var placeholder = o.placeholder || '';
+        if (o.hint) {
+            placeholder += window.GalaxyTextEntry.placeholderHint(o.hint);
+        }
+        return '<textarea class="' + className + '"'
+            + attrs
+            + ' placeholder="' + placeholder + '"'
+            + ' rows="' + (o.rows || 1) + '"></textarea>';
+    }
+
+    // The same textarea as a node, for the edit paths that swap a rendered
+    // element in place rather than rebuilding a whole form.
+    function createComposerTextarea(className, value, rows) {
+        var ta = document.createElement('textarea');
+        ta.className = className;
+        for (var name in COMPOSER_TEXTAREA_ATTRS) {
+            ta.setAttribute(name, COMPOSER_TEXTAREA_ATTRS[name]);
+        }
+        ta.value = value || '';
+        if (rows) ta.rows = rows;
+        return ta;
+    }
+
     // Wire a card composer's keys.
     //
     // Every note and annotation composer — the create forms and the in-card
@@ -291,6 +340,8 @@ public let cardTextJS: String = """
         armDeleteButton: armDeleteButton,
         disarmDeleteButton: disarmDeleteButton,
         createDeleteConfirmation: createDeleteConfirmation,
+        composerTextareaHTML: composerTextareaHTML,
+        createComposerTextarea: createComposerTextarea,
         bindCardComposer: bindCardComposer,
         installAutosize: installAutosize,
         insertPaths: insertPaths

@@ -1148,15 +1148,10 @@ public enum ScrollbackHTMLRenderer {
                     formSuggestHTML +
                     formAddNoteHTML +
                 '</div>' +
-                '<textarea class="note-textarea" ' +
-                    'spellcheck="false" ' +
-                    'autocorrect="off" ' +
-                    'autocapitalize="off" ' +
-                    'autocomplete="off" ' +
-                    'placeholder="Add annotation\\u2026' +
-                    window.GalaxyTextEntry.placeholderHint('save') +
-                    '" ' +
-                    'rows="1"></textarea>';
+                window.GalaxyCardText.composerTextareaHTML(
+                    'note-textarea',
+                    { placeholder: 'Add note\\u2026', hint: 'save' }
+                );
 
             // Don't append to DOM yet — positionForm() will place it
             const self = this;
@@ -1601,14 +1596,9 @@ public enum ScrollbackHTMLRenderer {
             contentEl.innerHTML = '';
             contentEl.classList.remove('collapsed');
 
-            const ta = document.createElement('textarea');
-            ta.className = 'note-edit-textarea';
-            ta.spellcheck = false;
-            ta.setAttribute('autocorrect', 'off');
-            ta.setAttribute('autocapitalize', 'off');
-            ta.setAttribute('autocomplete', 'off');
-            ta.value = originalContent;
-            ta.rows = 2;
+            const ta = window.GalaxyCardText.createComposerTextarea(
+                'note-edit-textarea', originalContent, 2
+            );
             contentEl.appendChild(ta);
 
             // Auto-size
