@@ -19,7 +19,10 @@ public enum TerminalEngine: String, Codable {
 /// future engine impls that meaningfully differentiate Shell
 /// vs Session usage (e.g. cursor handling, process delegate
 /// shape) can specialize without changing the call sites.
-public enum TerminalPaneKind {
+/// String-backed so a host recording which pane an event came from gets a
+/// stable identifier without inventing its own mapping, while routing code
+/// still switches exhaustively.
+public enum TerminalPaneKind: String {
     case session
     case shell
 }
