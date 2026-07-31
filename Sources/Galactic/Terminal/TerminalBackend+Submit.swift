@@ -1,16 +1,18 @@
 import Foundation
-import Galactic
 
-/// Prompt submission for text Galaxy composed itself — Send to Claude,
-/// Review with Claude, /handoff, /compact, /clear. Kept in Galaxy (not
-/// Galactic) so the gesture needs no engine release: it rides existing
-/// public protocol requirements.
+/// Prompt submission for text a host composed itself — Send to Claude,
+/// Review with Claude, /handoff, /compact, /clear, and the prose that
+/// re-enters a resumed session.
 ///
 /// None of these are keystrokes the user pressed, so none of them may
 /// depend on whichever keystroke the user bound to submit. Routing them
 /// through one seam keeps automated submission correct when text-entry
 /// settings change, instead of scattering the assumption across every
 /// call site.
+///
+/// What a host still owns is the *signal* that a prompt was taken: that
+/// comes from its own agent integration, not from the terminal. See
+/// `SubmitVerification`.
 public enum SessionSubmit {
     /// Bytes that Claude Code resolves to `chat:submit`.
     ///
@@ -74,6 +76,35 @@ public enum SessionSubmit {
     public static let kittyReadyTimeout: TimeInterval = 5.0
     public static let kittyPollInterval: TimeInterval = 0.05
 
+    /// How long to keep waiting for confirmation that a submit was accepted
+    /// before treating it as swallowed.
+    ///
+    /// This bound has to exceed however long the host's acceptance signal
+    /// takes to arrive — a window shorter than the signal it waits on reports
+    /// every send as lost. Measured against Claude Code's
+    /// UserPromptSubmit hook: ~68ms mid-session, and 299–430ms on resume,
+    /// where the child is replaying a conversation when the hook fires and is
+    /// slower to dispatch it. A 250ms window sat between those two figures and
+    /// retyped a prompt that had already been accepted 35ms later.
+    ///
+    /// Generous on purpose, because the two directions cost differently. Too
+    /// long only delays recovering a genuinely lost prompt, on a path nobody
+    /// is waiting on interactively. Too short duplicates a prompt that
+    /// worked — and duplicate work is worse than late work.
+    public static let submitVerifyTimeout: TimeInterval = 2.0
+
+    /// How often to check for that confirmation within the bound above.
+    ///
+    /// Polled rather than slept through so a fast acceptance is noticed when it
+    /// happens instead of at the deadline: the bound governs when a send is
+    /// declared lost, not how long a successful one is watched.
+    public static let submitVerifyPollInterval: TimeInterval = 0.05
+
+    /// Maximum resend attempts before giving up. Each costs up to one
+    /// `submitVerifyTimeout` plus an `inputPacingDelay`, so a prompt that never
+    /// lands is abandoned after roughly six seconds.
+    public static let maxSubmitRetries: Int = 2
+
     /// Diagnostics for automated submission.
     ///
     /// Kept in place deliberately, and on a standing channel rather than a
@@ -130,7 +161,131 @@ public enum SessionSubmit {
     }
 }
 
+/// How a host recognises that an automated prompt was actually taken.
+///
+/// Supplied by the host rather than resolved here, because nothing observable
+/// from the terminal answers it. Five signals available on this side were
+/// measured and every one reported ready against a prompt that did not exist:
+/// the keyboard protocol flag (pushed early, never popped), bytes received from
+/// the child (its first bytes are terminal setup), screen content under three
+/// different anchors (a launcher's banner and a restored screen both satisfy
+/// it), silence in the child's output (there is a long quiet gap mid-startup),
+/// and the agent's own readiness hook (it fires before the input layer paints).
+///
+/// What does answer it is the agent reporting receipt in its own words — for
+/// Claude Code, the UserPromptSubmit hook. That arrives over a host's event
+/// channel, so the host provides it and the mechanism here consumes it.
+public struct SubmitVerification {
+    /// True once the agent has reported receiving the prompt.
+    ///
+    /// Must be a genuine report from the agent, not an inference about the
+    /// terminal. A predicate that guesses turns this from a safety net into a
+    /// prompt duplicator.
+    public let isAccepted: () -> Bool
+
+    /// Whether the session is still alive and worth retrying into.
+    public let isAlive: () -> Bool
+
+    public init(
+        isAccepted: @escaping () -> Bool,
+        isAlive: @escaping () -> Bool
+    ) {
+        self.isAccepted = isAccepted
+        self.isAlive = isAlive
+    }
+}
+
 extension TerminalBackend {
+    /// Watch for confirmation that a just-submitted prompt was taken, and
+    /// retype it if it was not.
+    ///
+    /// Verification rather than prediction, because readiness is not observable
+    /// from out here — see `SubmitVerification` for the five signals that were
+    /// tried and disproved. A prompt lost on this path fails with no echo and
+    /// no error, so without a closed loop the only symptom is an agent that
+    /// never answers.
+    ///
+    /// A nil `verification` disables the loop and returns immediately. That is
+    /// the supported way for a host to opt out — by passing a value, so the
+    /// mechanism stays wired and adopting it later is a value change rather
+    /// than a new integration.
+    ///
+    /// The retry repeats the whole gesture — text, pause, submit — rather than
+    /// the submit alone. Resending a bare submit is what made this unsafe to
+    /// run on a resumed session: by the time a retry fires the prompt is
+    /// usually empty, and Claude Code reads Enter-on-empty as "repeat the last
+    /// command", so a retry meant to rescue a lost prompt would re-run whatever
+    /// ran before it. Typing first means Enter never arrives against an empty
+    /// box.
+    ///
+    /// It trades that for a narrower hazard: if the text did land and only the
+    /// submit was lost, retyping doubles it. Nothing observable distinguishes
+    /// those two states — a buffer read shows the statusline and hint rows,
+    /// never the input line — so the bound on `submitVerifyTimeout` is what
+    /// keeps this safe, not a screen read.
+    public func verifySubmission(
+        text: String,
+        verification: SubmitVerification?,
+        retriesLeft: Int = SessionSubmit.maxSubmitRetries
+    ) {
+        guard let verification else { return }
+        awaitAcceptance(
+            deadline: Date() + SessionSubmit.submitVerifyTimeout,
+            verification: verification
+        ) { [weak self] accepted in
+            guard let self, verification.isAlive() else { return }
+
+            if accepted {
+                SessionSubmit.log("  accepted (\(retriesLeft) retries unused)")
+                return
+            }
+            if retriesLeft <= 0 {
+                SessionSubmit.log("  NOT accepted — retries exhausted, giving up")
+                return
+            }
+
+            SessionSubmit.log(
+                "  NOT accepted — retyping and resubmitting (\(retriesLeft) left)"
+            )
+            self.send(text: text, asPaste: false)
+
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + SessionSubmit.inputPacingDelay
+            ) { [weak self] in
+                guard let self, verification.isAlive() else { return }
+                self.submitPrompt()
+                self.verifySubmission(
+                    text: text,
+                    verification: verification,
+                    retriesLeft: retriesLeft - 1
+                )
+            }
+        }
+    }
+
+    /// Poll until the host reports the prompt taken, or the deadline passes.
+    private func awaitAcceptance(
+        deadline: Date,
+        verification: SubmitVerification,
+        _ completion: @escaping (Bool) -> Void
+    ) {
+        if verification.isAccepted() {
+            completion(true)
+            return
+        }
+        guard Date() < deadline else {
+            completion(false)
+            return
+        }
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + SessionSubmit.submitVerifyPollInterval
+        ) { [weak self] in
+            guard let self, verification.isAlive() else { return }
+            self.awaitAcceptance(
+                deadline: deadline, verification: verification, completion)
+        }
+    }
+
     /// Submit whatever was last written to this backend.
     ///
     /// Callers that pace their own write-then-submit must keep doing so; this
