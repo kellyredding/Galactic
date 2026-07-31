@@ -52,8 +52,19 @@ public protocol TerminalPane: AnyObject {
     /// `TerminalTabSplitView`) uses this to tear down.
     var onProcessExit: ((Int32) -> Void)? { get set }
 
-    /// Called when the terminal rings the bell. Owning
-    /// container routes into the session-bell pipeline.
+    /// Called when the terminal rings the bell.
+    ///
+    /// A pane must make this reachable — most forward it straight to the
+    /// engine's own bell callback, so assigning here claims that callback.
+    /// A pane that runs bell policy itself instead consumes the engine's
+    /// callback and re-emits through this one, which is the same signal a beat
+    /// later.
+    ///
+    /// Either way, a host adopts bells by assigning this and declines by
+    /// leaving it nil. Declaring it without wiring it is the one thing a pane
+    /// must not do: the signal then has nowhere to go, and the omission is
+    /// invisible from the outside — a host can assign a closure that will
+    /// never be called.
     var onBell: (() -> Void)? { get set }
 
     /// Which kind of surface this pane is.
