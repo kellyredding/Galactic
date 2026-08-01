@@ -36,7 +36,12 @@ public protocol BackendBackedPane: TerminalPane {
     ///
     /// Gates both closing it — there is nothing to signal otherwise — and
     /// accepting file drops, since a path pasted into a dead shell goes nowhere.
-    var isRunning: Bool { get }
+    ///
+    /// Settable because both transitions belong to the defaults below rather
+    /// than to a conformer: starting a shell sets it and the process exiting
+    /// clears it, and those were the only two writes either pane had. A
+    /// conformer typically publishes it, so the write announces itself.
+    var isRunning: Bool { get set }
 
     /// This pane's own font size, which zooming moves.
     ///
@@ -155,6 +160,44 @@ public extension BackendBackedPane {
     func requestClose() {
         guard isRunning else { return }
         backend.terminateProcess(signal: SIGHUP)
+    }
+
+    /// Start a shell in this pane.
+    ///
+    /// Everything the two applications disagreed about is in the value handed
+    /// in; what is left is the order, which neither had any reason to differ on.
+    /// Settings go on before the process starts so the first thing painted is
+    /// already the right size and colour — applying afterwards makes a shell
+    /// visibly reflow as its prompt appears.
+    func startShell(_ launch: ShellLaunch) {
+        applyCurrentSettings()
+        backend.startProcess(
+            executable: launch.executable,
+            args: launch.arguments,
+            environment: launch.environment,
+            execName: launch.executableName,
+            currentDirectory: launch.workingDirectory
+        )
+        isRunning = true
+        GalacticLog.debug(
+            "shell-pane",
+            "started \(launch.executable) in \(launch.workingDirectory)"
+        )
+    }
+
+    /// Let the backend's process exit reach this pane and anything watching it.
+    ///
+    /// Hopped to main rather than delivered wherever the process happened to
+    /// die on, because the flag it clears is published and the observer it
+    /// calls redraws.
+    func forwardProcessExit() {
+        backend.onProcessTerminated = { [weak self] exitCode in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isRunning = false
+                self.onProcessExit?(exitCode)
+            }
+        }
     }
 
     /// Push the whole configuration to the backend, at this pane's own size.
