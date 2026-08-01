@@ -76,6 +76,13 @@ public protocol GalacticConfiguration {
     /// Whether the caret blinks. Pushed together with the shape, per above.
     var terminalCursorBlink: Bool { get }
 
+    /// How a text entry decides that a keystroke submits rather than inserts.
+    ///
+    /// On the protocol because the scrollback surface builds its composer from
+    /// it, and that surface is shared: a host that had to pass these in would
+    /// be the only reason it needed a settings store at all.
+    var textEntry: TextEntryBindings { get }
+
     /// Whether scrolling up on a live terminal opens its scrollback surface.
     ///
     /// The entire opt-out for that behaviour, and the reason it can be shared

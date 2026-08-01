@@ -10,5 +10,6 @@ struct StubConfiguration: GalacticConfiguration {
     var terminalScrollbackLines = 1000
     var terminalCursorStyle: ShellCursorStyle = .block
     var terminalCursorBlink = false
+    var textEntry: TextEntryBindings = .default
     var scrollToEnterScrollback = false
 }
