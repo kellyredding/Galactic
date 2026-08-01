@@ -178,4 +178,92 @@ final class TerminalFocusTests: XCTestCase {
         settle()
         XCTAssertFalse(resolved, "a view with no window has nothing to ask")
     }
+
+    // MARK: - Giving focus back up
+
+    /// Both hosts wired their own copy of this, and only one of them closed
+    /// the find bar — which is why the bar could be left floating over
+    /// whatever the user switched to.
+    @MainActor
+    func testResigningClosesAnOpenFindBar() {
+        let find = WebViewFindController(webView: nil)
+        find.isVisible = true
+
+        TerminalFocus.resignIfHeld(
+            in: window, host: pane, paneView: pane, findController: find
+        )
+
+        XCTAssertFalse(
+            find.isVisible,
+            "the bar is not a descendant of the pane, so nothing else closes it"
+        )
+    }
+
+    /// The find bar closes even when this pane never held focus: it is a
+    /// separate panel, and whether it should still be up is a separate
+    /// question from who has the caret.
+    @MainActor
+    func testTheFindBarClosesEvenWhenFocusIsElsewhere() {
+        let other = AcceptingView(frame: .zero)
+        window.contentView?.addSubview(other)
+        window.makeFirstResponder(other)
+        let find = WebViewFindController(webView: nil)
+        find.isVisible = true
+
+        TerminalFocus.resignIfHeld(
+            in: window, host: pane, paneView: pane, findController: find
+        )
+
+        XCTAssertFalse(find.isVisible)
+        XCTAssertTrue(
+            window.firstResponder === other,
+            "a responder that is not this pane's must be left alone"
+        )
+    }
+
+    @MainActor
+    func testResigningGivesUpFirstResponderWhenThePaneHoldsIt() {
+        window.makeFirstResponder(pane)
+
+        TerminalFocus.resignIfHeld(
+            in: window, host: pane, paneView: pane, findController: nil
+        )
+
+        XCTAssertFalse(
+            window.firstResponder === pane,
+            "keystrokes must not keep reaching a pane the user has left"
+        )
+    }
+
+    /// Descendants count too — an open scrollback overlay's web view is what
+    /// holds focus in that case, not the terminal view.
+    @MainActor
+    func testResigningCoversAnythingInsideTheHost() {
+        let host = NSView(frame: NSRect(x: 0, y: 0, width: 50, height: 50))
+        let inner = AcceptingView(frame: .zero)
+        host.addSubview(inner)
+        window.contentView?.addSubview(host)
+        window.makeFirstResponder(inner)
+
+        TerminalFocus.resignIfHeld(
+            in: window, host: host, paneView: pane, findController: nil
+        )
+
+        XCTAssertFalse(window.firstResponder === inner)
+    }
+
+    @MainActor
+    func testResigningWithNoWindowStillClosesTheFindBar() {
+        let find = WebViewFindController(webView: nil)
+        find.isVisible = true
+
+        TerminalFocus.resignIfHeld(
+            in: nil, host: pane, paneView: pane, findController: find
+        )
+
+        XCTAssertFalse(
+            find.isVisible,
+            "the bar has its own window, so this one's absence is irrelevant"
+        )
+    }
 }

@@ -69,4 +69,59 @@ public enum TerminalFocus {
             }
         }
     }
+
+    /// Give up first responder if this pane, or anything inside it, is holding
+    /// it — and close the find bar on the way out.
+    ///
+    /// Called as a pane stops being the one in front of the user. *When* that
+    /// is remains the host's question, and the two hosts answer it differently
+    /// for good reason: one hides the pane when its session is deselected, the
+    /// other leaves it mounted and goes by which tab is showing. Converging the
+    /// bodies is the point here; converging the triggers would be wrong.
+    ///
+    /// Without this, keystrokes meant for whatever the user switched to bleed
+    /// into a live PTY — list navigation being the case that bites, since j and
+    /// k are also ordinary input.
+    ///
+    /// Descendants count, not just the terminal view, so an open scrollback
+    /// overlay's web view resigns too.
+    ///
+    /// Doing it here rather than leaving it to AppKit is also a large
+    /// performance matter for a host that hides: the auto-resign inside
+    /// `setHidden:` does around 800ms of synchronous work when the first
+    /// responder is a descendant of the view being hidden — measured on a
+    /// shell-pane session switch. Resigning first drops that under a
+    /// millisecond. The workaround names no engine type, so a backend change
+    /// leaves it intact.
+    /// Annotated where `request` above is not, and deliberately: the find
+    /// controller it closes is itself main-actor isolated, so the requirement
+    /// is already the type system's rather than a comment's. The hosts call it
+    /// from the main thread as they always have.
+    @MainActor
+    public static func resignIfHeld(
+        in window: NSWindow?,
+        host: NSView,
+        paneView: NSView,
+        findController: WebViewFindController?
+    ) {
+        // The find bar lives in its own panel, so unlike everything else here
+        // it is not a descendant of the pane and nothing about leaving the pane
+        // takes it with it. Left open, it floats over whatever the user
+        // switched to.
+        //
+        // Only closed when actually open: the setter runs a script into the
+        // page and publishes on every write, including one that changes
+        // nothing, and this runs on every switch away.
+        if findController?.isVisible == true {
+            findController?.isVisible = false
+        }
+
+        guard let window else { return }
+        let responder = window.firstResponder
+        let holdsFocus =
+            responder === paneView
+            || (responder as? NSView)?.isDescendant(of: host) == true
+        guard holdsFocus else { return }
+        window.makeFirstResponder(nil)
+    }
 }
