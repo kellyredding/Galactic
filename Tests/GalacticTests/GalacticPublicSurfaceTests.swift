@@ -138,6 +138,24 @@ final class GalacticPublicSurfaceTests: XCTestCase {
         )
     }
 
+    /// The strip left by the container's inset has to end up the terminal's own
+    /// colour, or it reads as a seam between the terminal and the chrome above.
+    func testTheHostBackgroundTakesTheThemeColour() {
+        let view = NSView()
+        let theme = TerminalColorTheme.theme(named: "galaxy-default")
+
+        TerminalHostBackground.apply(to: view, themeNamed: "galaxy-default")
+
+        XCTAssertTrue(
+            view.wantsLayer,
+            "the paint is meaningless unbacked, so it turns backing on rather "
+                + "than assuming it"
+        )
+        XCTAssertEqual(
+            view.layer?.backgroundColor, theme.backgroundColorValue.cgColor
+        )
+    }
+
     func testPaneKindCarriesAStableIdentifier() {
         XCTAssertEqual(TerminalPaneKind.session.rawValue, "session")
         XCTAssertEqual(TerminalPaneKind.shell.rawValue, "shell")
