@@ -15,7 +15,7 @@ final class TerminalTimelineRecorderTests: XCTestCase {
     func testNoRecorderRecordsNothing() {
         let recorder: TerminalTimelineRecorder? = nil
 
-        recorder.record(sessionID: 42) { id in
+        recorder.record(sessionID: 42) { id, _ in
             TerminalTimelineEvent(
                 sessionID: id, type: "scrollback:entered",
                 paneKind: .session, source: "test"
@@ -30,7 +30,7 @@ final class TerminalTimelineRecorderTests: XCTestCase {
         let recorder: TerminalTimelineRecorder? = nil
         var built = 0
 
-        recorder.record(sessionID: 42) { id in
+        recorder.record(sessionID: 42) { id, _ in
             built += 1
             return TerminalTimelineEvent(
                 sessionID: id, type: "scrollback:exited",
@@ -49,12 +49,15 @@ final class TerminalTimelineRecorderTests: XCTestCase {
     /// nothing — and again does not pay to find that out.
     func testNoSessionRecordsNothingAndBuildsNothing() {
         var recorded: [TerminalTimelineEvent] = []
-        let recorder: TerminalTimelineRecorder? = TerminalTimelineRecorder {
+        let recorder: TerminalTimelineRecorder? = TerminalTimelineRecorder(
+            terminalSource: "views/terminal",
+            scrollbackSource: "views/scrollback"
+        ) {
             recorded.append($0)
         }
         var built = 0
 
-        recorder.record(sessionID: nil) { id in
+        recorder.record(sessionID: nil) { id, _ in
             built += 1
             return TerminalTimelineEvent(
                 sessionID: id, type: "scrollback:entered",
@@ -70,11 +73,14 @@ final class TerminalTimelineRecorderTests: XCTestCase {
 
     func testAnEventReachesTheRecorderWithItsSession() {
         var recorded: [TerminalTimelineEvent] = []
-        let recorder: TerminalTimelineRecorder? = TerminalTimelineRecorder {
+        let recorder: TerminalTimelineRecorder? = TerminalTimelineRecorder(
+            terminalSource: "views/terminal",
+            scrollbackSource: "views/scrollback"
+        ) {
             recorded.append($0)
         }
 
-        recorder.record(sessionID: 7) { id in
+        recorder.record(sessionID: 7) { id, _ in
             TerminalTimelineEvent(
                 sessionID: id,
                 type: "scrollback:entered",
@@ -139,11 +145,14 @@ final class TerminalTimelineRecorderTests: XCTestCase {
 
     func testTheSizeHintTravelsToTheRecorder() {
         var recorded: [TerminalTimelineEvent] = []
-        let recorder: TerminalTimelineRecorder? = TerminalTimelineRecorder {
+        let recorder: TerminalTimelineRecorder? = TerminalTimelineRecorder(
+            terminalSource: "views/terminal",
+            scrollbackSource: "views/scrollback"
+        ) {
             recorded.append($0)
         }
 
-        recorder.record(sessionID: 1) { id in
+        recorder.record(sessionID: 1) { id, _ in
             TerminalTimelineEvent(
                 sessionID: id, type: "scrollback:reviewed",
                 paneKind: .session, source: "s",
@@ -157,5 +166,74 @@ final class TerminalTimelineRecorderTests: XCTestCase {
             "a recorder passing detail as command arguments needs this to pick "
                 + "a transport without a size ceiling"
         )
+    }
+
+    // MARK: - Source attribution
+
+    /// The app's own names for where an event came from reach the event
+    /// untouched, for both of the places it can come from.
+    ///
+    /// This is the half of an event that is *identity* rather than vocabulary.
+    /// The `type` is shared — every app that opens a scrollback records
+    /// `scrollback:entered` — but `source` is what an app calls its own code,
+    /// and it is already written into rows that outlive any refactor.
+    ///
+    /// Asserted because it silently was not. When the emitting code moved into
+    /// this package it brought a constant of its own along, and every new row
+    /// from that point on disagreed with every row before it about where it
+    /// came from. Nothing failed, because nothing was watching.
+    func testTheAppsSourcesReachTheEventUntouched() {
+        var recorded: [TerminalTimelineEvent] = []
+        let recorder: TerminalTimelineRecorder? = TerminalTimelineRecorder(
+            terminalSource: "some-app/views/terminal",
+            scrollbackSource: "some-app/views/scrollback"
+        ) {
+            recorded.append($0)
+        }
+
+        recorder.record(sessionID: 1) { id, recorder in
+            TerminalTimelineEvent(
+                sessionID: id, type: "scrollback:entered",
+                paneKind: .session, source: recorder.terminalSource
+            )
+        }
+        recorder.record(sessionID: 1) { id, recorder in
+            TerminalTimelineEvent(
+                sessionID: id, type: "scrollback.note:created",
+                paneKind: .session, source: recorder.scrollbackSource
+            )
+        }
+
+        XCTAssertEqual(
+            recorded.map(\.source),
+            ["some-app/views/terminal", "some-app/views/scrollback"],
+            "shared code stamps what the app supplied, and picks between the "
+                + "two by which part of the surface raised the event"
+        )
+    }
+
+    /// Nothing between the app and the row reformats the value.
+    ///
+    /// A source is an opaque label the app chose, so shared code must not trim,
+    /// normalise, prefix or case-fold it — each of which stays invisible right
+    /// up until someone groups a year of rows by it.
+    func testNothingBetweenTheAppAndTheRowRewritesASource() {
+        let awkward = "  App/Views Terminal_v2 (legacy)  "
+        var recorded: [TerminalTimelineEvent] = []
+        let recorder: TerminalTimelineRecorder? = TerminalTimelineRecorder(
+            terminalSource: awkward,
+            scrollbackSource: awkward
+        ) {
+            recorded.append($0)
+        }
+
+        recorder.record(sessionID: 1) { id, recorder in
+            TerminalTimelineEvent(
+                sessionID: id, type: "scrollback:exited",
+                paneKind: .shell, source: recorder.terminalSource
+            )
+        }
+
+        XCTAssertEqual(recorded.first?.source, awkward)
     }
 }

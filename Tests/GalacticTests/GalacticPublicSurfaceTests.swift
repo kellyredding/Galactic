@@ -188,4 +188,77 @@ final class GalacticPublicSurfaceTests: XCTestCase {
             )
         )
     }
+
+    // MARK: - The terminal host
+
+    /// The host takes every application-owned answer as a value, and an
+    /// application that has none of them can still supply all of them.
+    ///
+    /// This is the whole claim the move rests on, so it is asserted rather than
+    /// described: nil recorder, nil turn interrupt, nil registry and a surface
+    /// nothing ends are a complete set of arguments. An application adopting any
+    /// of these later changes a value here, not the host.
+    func testAHostIsBuiltEntirelyFromValuesAnAppSupplies() {
+        let pane = StubPane()
+        let host = TerminalHostView(
+            pane: pane,
+            timelineRecorder: nil,
+            settings: StubConfigurationSource(),
+            findActivations: .never,
+            scrollbackActivations: .never,
+            turnInterrupt: nil,
+            paneRegistry: nil,
+            surfaceEndings: .never,
+            sendBlockerChanges: .never
+        )
+
+        // The one member an application reads back off the host, when a ⌘W
+        // interceptor walks up from the first responder asking whose pane this
+        // is.
+        XCTAssertTrue(host.pane === pane)
+        XCTAssertFalse(host.isScrollbackActive)
+
+        // Both flags start false, so a host that is never told is never treated
+        // as the surface in front of the user — the safe way round for a
+        // question whose wrong answer steals the caret.
+        XCTAssertFalse(host.isActiveSession)
+        XCTAssertFalse(host.isVisibleSurface)
+    }
+
+    /// The representable's equality is what `.equatable()` at a call site
+    /// depends on to skip an update, and skipping one wrongly means a focus
+    /// re-assert that does not happen.
+    func testTheRepresentableComparesIdentityAndActivity() {
+        let pane = StubPane()
+        let registry = StubPaneRegistry()
+        let settings = StubConfigurationSource()
+
+        func view(
+            pane: TerminalPane = pane,
+            isActiveSession: Bool = true,
+            isVisibleSurface: Bool = true,
+            shouldResignFocus: Bool = false
+        ) -> FocusableTerminalView {
+            FocusableTerminalView(
+                pane: pane,
+                timelineRecorder: nil,
+                settings: settings,
+                findActivations: .never,
+                scrollbackActivations: .never,
+                turnInterrupt: nil,
+                paneRegistry: registry,
+                surfaceEndings: .never,
+                sendBlockerChanges: .never,
+                isActiveSession: isActiveSession,
+                isVisibleSurface: isVisibleSurface,
+                shouldResignFocus: shouldResignFocus
+            )
+        }
+
+        XCTAssertEqual(view(), view())
+        XCTAssertNotEqual(view(), view(pane: StubPane()))
+        XCTAssertNotEqual(view(), view(isActiveSession: false))
+        XCTAssertNotEqual(view(), view(isVisibleSurface: false))
+        XCTAssertNotEqual(view(), view(shouldResignFocus: true))
+    }
 }
