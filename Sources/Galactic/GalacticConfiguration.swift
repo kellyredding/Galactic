@@ -13,15 +13,18 @@ import AppKit
 /// their own settings type, or build a small adapter that maps
 /// their settings shape to these members.
 ///
-/// The surface is intentionally minimal — only the values the
-/// engine bridge actually reads at `applySettings` time. Per-
-/// pane overrides (font-size adjustments, cursor-style
-/// subscriptions, etc.) stay on the host app and reach the
-/// backend through other `TerminalBackend` protocol members
-/// (`setFont`, `applyCursor`, etc.). Settings that vary by
-/// pane lifecycle (Session vs Shell) are not on this protocol
-/// because the engine bridge treats `applySettings` as
-/// pane-agnostic.
+/// The surface is what *shared terminal code* reads, which is
+/// wider than what `applySettings` applies — the cursor pair is
+/// on it and deliberately not applied there, because the engine
+/// fuses shape and blink into one value that has to be pushed
+/// through `applyCursor` instead of as per-property writes.
+///
+/// What stays off the protocol is anything genuinely per-pane.
+/// A font *size* is the clear case: two panes of one split zoom
+/// independently, so a size read from configuration would be the
+/// wrong size for at least one of them. Sizes travel as arguments
+/// (`applySettings(_:fontSize:)`, `setFont`) for that reason, and
+/// the default below is only where a pane starts.
 ///
 /// Property names match Galaxy's `AppSettings` shape exactly
 /// so the conformance is empty. A future protocol-rename pass
@@ -54,4 +57,15 @@ public protocol GalacticConfiguration {
     /// passes this through to the engine's scrollback
     /// allocator on every `applySettings` call.
     var terminalScrollbackLines: Int { get }
+
+    /// Caret shape.
+    ///
+    /// Read by shared terminal code but deliberately *not* applied by
+    /// `applySettings`: the engine fuses shape and blink into a single cursor
+    /// style, so the pair has to be pushed together through `applyCursor` and
+    /// cannot ride along with the per-property writes.
+    var terminalCursorStyle: ShellCursorStyle { get }
+
+    /// Whether the caret blinks. Pushed together with the shape, per above.
+    var terminalCursorBlink: Bool { get }
 }

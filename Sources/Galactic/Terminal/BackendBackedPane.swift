@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 
 /// A pane that owns a terminal backend, and so can answer most of the pane
 /// contract by asking it.
@@ -23,20 +24,25 @@ public protocol BackendBackedPane: TerminalPane {
     /// The backend this pane owns. Every default below is a call on it.
     var backend: TerminalBackend { get }
 
+    /// Where this pane reads configuration and hears about changes to it.
+    ///
+    /// A source rather than a value, because a pane has to react to a change as
+    /// well as read the current state — and the only way to hear about one used
+    /// to be to name the host's settings singleton, which is exactly the name
+    /// that cannot move.
+    var settings: GalacticConfigurationSource { get }
+
+    /// Whether the pane's process is running.
+    ///
+    /// Gates both closing it — there is nothing to signal otherwise — and
+    /// accepting file drops, since a path pasted into a dead shell goes nowhere.
+    var isRunning: Bool { get }
+
     /// This pane's own font size, which zooming moves.
     ///
     /// Settable because the zoom defaults below write it. A conformer typically
     /// publishes it, so the write announces itself to whatever is drawing.
     var fontSize: CGFloat { get set }
-
-    /// Push `fontSize` down to the backend.
-    ///
-    /// The conformer's job because resolving a point size into an actual font
-    /// needs the configured family, and settings storage is the app's.
-    func applyFontSize()
-
-    /// The size `resetFontSize()` returns to — the app's configured default.
-    var defaultFontSize: CGFloat { get }
 
     /// The zoom window. Defaults to the shared one; a conformer overrides only
     /// to differ from it deliberately.
@@ -87,9 +93,32 @@ public extension BackendBackedPane {
 
     func focus() { backend.focus() }
 
+    var acceptsFileDrops: Bool { isRunning }
+
     // MARK: - Zoom
 
     var fontSizeBounds: TerminalFontSizeBounds { .standard }
+
+    /// The size resetting zoom returns to — the configured default, held inside
+    /// the window in case a stored value predates a narrower one.
+    var defaultFontSize: CGFloat {
+        settings.configuration.defaultTerminalFontSize
+    }
+
+    /// Push this pane's own size to the backend.
+    ///
+    /// Only the font: a zoom has no business rebuilding the colour table or
+    /// reallocating scrollback, which a full settings re-apply would do. The
+    /// family comes from configuration because a size alone does not name a
+    /// font, and the family is never per-pane.
+    func applyFontSize() {
+        backend.setFont(
+            resolveTerminalFont(
+                family: settings.configuration.terminalFontFamily,
+                size: fontSize
+            )
+        )
+    }
 
     func increaseFontSize() {
         fontSize = fontSizeBounds.increased(from: fontSize)
@@ -112,5 +141,65 @@ public extension BackendBackedPane {
 
     var canDecreaseFontSize: Bool {
         fontSizeBounds.canDecrease(from: fontSize)
+    }
+
+    // MARK: - Lifecycle
+
+    /// Ask the process to exit.
+    ///
+    /// SIGHUP rather than SIGTERM: it is the canonical terminal-hangup signal,
+    /// so a shell exits gracefully and flushes its history in response, and the
+    /// backend escalates to the harsher signals for anything that ignores it.
+    /// Exit arrives back through the process-terminated callback, which is what
+    /// prompts teardown — this only asks.
+    func requestClose() {
+        guard isRunning else { return }
+        backend.terminateProcess(signal: SIGHUP)
+    }
+
+    /// Push the whole configuration to the backend, at this pane's own size.
+    ///
+    /// The caret is shown explicitly because a terminal-hosted program relies on
+    /// the terminal to draw its cursor, and the engine's default has been false
+    /// only by luck of initialisation — one app asserted it and the other did
+    /// not, which is precisely the kind of difference this being shared removes.
+    ///
+    /// The cursor needs its own call: the engine fuses shape and blink into one
+    /// style, so it is not part of the configuration surface `applySettings`
+    /// reads.
+    func applyCurrentSettings() {
+        let configuration = settings.configuration
+        backend.applySettings(configuration, fontSize: fontSize)
+        backend.setCaretHidden(false)
+        backend.applyCursor(
+            style: configuration.terminalCursorStyle,
+            blink: configuration.terminalCursorBlink
+        )
+    }
+
+    /// Re-apply configuration to the backend whenever it changes, storing the
+    /// subscription in `cancellables`.
+    ///
+    /// Takes the store rather than owning one because a protocol extension has
+    /// nowhere to keep it, and the pane's lifetime is the right lifetime for it
+    /// anyway.
+    ///
+    /// One subscription, not two. Both apps ran a second stream purely to
+    /// deduplicate the cursor pair, because two independent subscriptions would
+    /// each push a cursor on their first emission. A single already-deduplicated
+    /// source removes the reason for it.
+    func observeSettings(storingIn cancellables: inout Set<AnyCancellable>) {
+        settings.configurationChanges
+            .sink { [weak self] configuration in
+                guard let self else { return }
+                self.backend.applySettings(
+                    configuration, fontSize: self.fontSize
+                )
+                self.backend.applyCursor(
+                    style: configuration.terminalCursorStyle,
+                    blink: configuration.terminalCursorBlink
+                )
+            }
+            .store(in: &cancellables)
     }
 }
