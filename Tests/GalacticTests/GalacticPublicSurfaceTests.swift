@@ -80,6 +80,64 @@ final class GalacticPublicSurfaceTests: XCTestCase {
         XCTAssertNotNil(registry.sessionPaneScrollbackActivePublisher)
     }
 
+    /// A public struct's memberwise init is internal, so the explicit one is
+    /// what makes the bar reachable by a host app at all. Constructing it here
+    /// is a weaker check than it looks — this target imports the module
+    /// `@testable` — so the real proof of the surface is both apps compiling.
+    func testShellPaneBarTakesItsFourCallbacks() {
+        let bar = ShellPaneBar(
+            onDragBegan: {}, onDrag: { _ in },
+            onDragEnded: {}, onResetSplit: {}
+        )
+
+        XCTAssertNotNil(bar)
+    }
+
+    /// The one branch in the bar worth pinning: a double-click resets the
+    /// split, and must not also be read as the start of a drag. Getting that
+    /// wrong leaves the divider mid-drag with no mouseUp coming.
+    func testADoubleClickResetsRatherThanBeginningADrag() throws {
+        var began = 0
+        var reset = 0
+        let view = ShellPaneBarNSView()
+        view.onDragBegan = { began += 1 }
+        view.onResetSplit = { reset += 1 }
+
+        view.mouseDown(with: try mouseDown(clickCount: 2))
+
+        XCTAssertEqual(reset, 1, "a double-click resets the split")
+        XCTAssertEqual(began, 0, "and must not also begin a drag")
+    }
+
+    func testASingleClickBeginsADrag() throws {
+        var began = 0
+        var reset = 0
+        let view = ShellPaneBarNSView()
+        view.onDragBegan = { began += 1 }
+        view.onResetSplit = { reset += 1 }
+
+        view.mouseDown(with: try mouseDown(clickCount: 1))
+
+        XCTAssertEqual(began, 1)
+        XCTAssertEqual(reset, 0)
+    }
+
+    private func mouseDown(clickCount: Int) throws -> NSEvent {
+        try XCTUnwrap(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                eventNumber: 0,
+                clickCount: clickCount,
+                pressure: 1
+            )
+        )
+    }
+
     func testPaneKindCarriesAStableIdentifier() {
         XCTAssertEqual(TerminalPaneKind.session.rawValue, "session")
         XCTAssertEqual(TerminalPaneKind.shell.rawValue, "shell")
