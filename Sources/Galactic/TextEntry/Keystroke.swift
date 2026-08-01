@@ -14,6 +14,7 @@ public struct Keystroke: Codable, Hashable {
     public enum Key {
         public static let ret: UInt16 = 36
         public static let keypadEnter: UInt16 = 76
+        public static let esc: UInt16 = 53
     }
 
     public let keyCode: UInt16

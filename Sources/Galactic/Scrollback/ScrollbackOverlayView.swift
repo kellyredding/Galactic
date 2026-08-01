@@ -293,7 +293,7 @@ public class ScrollbackOverlayView: NSView {
             matching: .keyDown
         ) { [weak self] event in
             guard let self = self,
-                  event.keyCode == 53,           // Esc
+                  event.keyCode == Keystroke.Key.esc,
                   self.findController.isVisible,
                   self.isActiveSurface()
             else { return event }
