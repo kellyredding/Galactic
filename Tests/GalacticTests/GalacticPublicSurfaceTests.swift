@@ -65,4 +65,25 @@ final class GalacticPublicSurfaceTests: XCTestCase {
             NSRect(x: 4, y: 4, width: 92, height: 72)
         )
     }
+
+    /// The registry is reached as an existential, never as a concrete type —
+    /// that is the whole point of it being a protocol, so the surface test
+    /// exercises the form the hosts actually hold.
+    func testPaneRegistryIsReachableAsAnExistential() {
+        let registry: any TerminalPaneRegistry = StubPaneRegistry()
+
+        registry.lastFocusedPaneKind = .shell
+        registry.setSessionPaneScrollbackActive(true)
+
+        XCTAssertEqual(registry.lastFocusedPaneKind, .shell)
+        XCTAssertTrue(registry.sessionPaneScrollbackActive)
+        XCTAssertNotNil(registry.sessionPaneScrollbackActivePublisher)
+    }
+
+    func testPaneKindCarriesAStableIdentifier() {
+        XCTAssertEqual(TerminalPaneKind.session.rawValue, "session")
+        XCTAssertEqual(TerminalPaneKind.shell.rawValue, "shell")
+        // Hashable by synthesis, which is what lets the registry take a Set.
+        XCTAssertEqual(Set<TerminalPaneKind>([.shell, .shell]).count, 1)
+    }
 }
