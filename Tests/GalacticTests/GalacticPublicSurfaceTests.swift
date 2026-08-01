@@ -162,4 +162,30 @@ final class GalacticPublicSurfaceTests: XCTestCase {
         // Hashable by synthesis, which is what lets the registry take a Set.
         XCTAssertEqual(Set<TerminalPaneKind>([.shell, .shell]).count, 1)
     }
+
+    /// A host reaches scroll entry through three members and nothing else: it
+    /// builds one, asks it, and tells it a surface was dismissed.
+    func testScrollEntryAnswersAHostThroughItsConfiguration() {
+        var configuration = StubConfiguration()
+        configuration.scrollToEnterScrollback = true
+        let entry = ScrollToEnterScrollback()
+
+        XCTAssertTrue(
+            entry.shouldEnter(
+                configuration: configuration,
+                isSurfaceOpen: false,
+                hasContent: true
+            )
+        )
+
+        entry.beginCooldown(configuration: configuration)
+
+        XCTAssertFalse(
+            entry.shouldEnter(
+                configuration: configuration,
+                isSurfaceOpen: false,
+                hasContent: true
+            )
+        )
+    }
 }

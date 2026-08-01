@@ -19,6 +19,13 @@ import AppKit
 /// fuses shape and blink into one value that has to be pushed
 /// through `applyCursor` instead of as per-property writes.
 ///
+/// Wider again than the engine: a member here can govern shared
+/// *behaviour* rather than describe the terminal's appearance, and
+/// an app that wants none of that behaviour supplies the value
+/// that turns it off. That is what keeps a behaviour one app has
+/// and the other does not from being the difference between code
+/// that exists and code that does not.
+///
 /// What stays off the protocol is anything genuinely per-pane.
 /// A font *size* is the clear case: two panes of one split zoom
 /// independently, so a size read from configuration would be the
@@ -68,4 +75,12 @@ public protocol GalacticConfiguration {
 
     /// Whether the caret blinks. Pushed together with the shape, per above.
     var terminalCursorBlink: Bool { get }
+
+    /// Whether scrolling up on a live terminal opens its scrollback surface.
+    ///
+    /// The entire opt-out for that behaviour, and the reason it can be shared
+    /// at all: an app that answers false keeps the mechanism, never opens a
+    /// surface by scroll, and arms no cooldown — so wanting it later is
+    /// changing this value rather than building the behaviour.
+    var scrollToEnterScrollback: Bool { get }
 }
