@@ -223,7 +223,26 @@ public protocol TerminalBackend: AnyObject {
     /// Idempotent and incremental: callers can fire on every
     /// settings change; the backend is responsible for
     /// skipping no-ops where it cares about that.
-    func applySettings(_ settings: GalacticConfiguration)
+    ///
+    /// `fontSize` is the *caller's* size, not the configured
+    /// default, and is required rather than read from the
+    /// settings for a reason worth stating. Font size is
+    /// per-surface — two panes of one split zoom
+    /// independently — so a backend applying the configured
+    /// default would be applying a size its own pane may have
+    /// moved away from. It used to do exactly that, leaving
+    /// every caller to re-apply its real size immediately
+    /// afterwards, and a caller that forgot silently snapped to
+    /// the default. Worse, the pair of applications changed the
+    /// cell geometry twice, and a full-screen program on the
+    /// other end of the PTY repaints on every geometry change —
+    /// so a settings change nothing to do with fonts made the
+    /// terminal flash. Taking the size as an argument means
+    /// there is no wrong intermediate value to flash through,
+    /// and no way to forget to supply the right one.
+    func applySettings(
+        _ settings: GalacticConfiguration, fontSize: CGFloat
+    )
 
     /// When true, the next `becomeFirstResponder` /
     /// `resignFirstResponder` call suppresses focus-event

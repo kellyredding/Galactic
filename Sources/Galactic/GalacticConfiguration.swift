@@ -42,10 +42,12 @@ public protocol GalacticConfiguration {
     /// fallback.
     var terminalFontFamily: String { get }
 
-    /// Default point size for terminal text. Per-pane size
-    /// overrides (e.g. ⌘+/⌘− in the Shell pane, session-level
-    /// adjustments) reach the backend through `setFont(_:)`
-    /// separately — `applySettings` always uses this default.
+    /// Point size a terminal surface *starts* at — what a
+    /// fresh pane is seeded with and what resetting zoom
+    /// returns to. Not what any live surface currently uses:
+    /// size is per-surface, so both `applySettings` and
+    /// `setFont` take it from the caller. Nothing inside the
+    /// engine bridge reads this.
     var defaultTerminalFontSize: CGFloat { get }
 
     /// Scrollback history depth in lines. The engine bridge

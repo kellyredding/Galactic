@@ -348,7 +348,9 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
         terminalView.galacticBoldForegroundColor = color
     }
 
-    func applySettings(_ settings: GalacticConfiguration) {
+    func applySettings(
+        _ settings: GalacticConfiguration, fontSize: CGFloat
+    ) {
         // Theme.
         let theme = TerminalColorTheme.theme(
             named: settings.terminalColorThemeName
@@ -358,15 +360,14 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
         setBoldForegroundColor(theme.boldForegroundColor)
         installColors(theme.terminalPalette)
 
-        // Font (uses the global default size; per-pane size
-        // overrides are applied separately by the consumer
-        // that owns the override — Session via
-        // `applyPerSessionFontSize`, ShellTerminalPane via
-        // `applyPerPaneFontSize`).
+        // Font: the family from settings, the size from the caller. The
+        // configured default is the size a surface *starts* at, not the size it
+        // currently is, so applying it here would undo whatever zoom this
+        // surface holds.
         setFont(
             resolveTerminalFont(
                 family: settings.terminalFontFamily,
-                size: settings.defaultTerminalFontSize
+                size: fontSize
             )
         )
 
@@ -393,7 +394,20 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
         terminalView.feed(text: text)
     }
 
+    /// Install `font`, unless it is already installed.
+    ///
+    /// The guard is not an optimisation. The engine's font setter rebuilds its
+    /// font set, recomputes cell dimensions, resizes, forces a redraw — and
+    /// clears the selection, unconditionally. The resize itself is guarded
+    /// downstream and costs nothing when the geometry is unchanged, but the
+    /// selection is not: assigning the font a surface already has silently
+    /// throws away whatever the user had selected.
+    ///
+    /// Callers re-apply the font on every settings change, so without this
+    /// guard, changing any unrelated preference dropped the selection in every
+    /// terminal on screen.
     func setFont(_ font: NSFont) {
+        guard terminalView.font != font else { return }
         terminalView.font = font
     }
 

@@ -44,7 +44,9 @@ final class StubBackend: TerminalBackend {
     func setFont(_ font: NSFont) {}
     func applyCursor(style: ShellCursorStyle, blink: Bool) {}
     func setCaretHidden(_ hidden: Bool) {}
-    func applySettings(_ settings: GalacticConfiguration) {}
+    func applySettings(
+        _ settings: GalacticConfiguration, fontSize: CGFloat
+    ) {}
     func feed(text: String) {}
     func startProcess(
         executable: String,
