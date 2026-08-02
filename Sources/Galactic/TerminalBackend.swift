@@ -1,17 +1,17 @@
 import AppKit
 
 /// Abstraction over the PTY + terminal rendering library.
-/// Implementations wrap a concrete library (SwiftTerm via
-/// `SwiftTermBackend` today; libghostty target in the
-/// future). Callers address this protocol, not the library
-/// directly.
+/// Implementations wrap a concrete library — SwiftTerm via
+/// `SwiftTermBackend` is the only one today. Callers address
+/// this protocol, not the library directly.
 ///
-/// The surface is intentionally minimal — just what the
-/// Shell pane needs (later phases). Buffer inspection calls
-/// beyond `captureScrollbackSnapshot()` (like `getLine`,
-/// mouse-mode queries, etc.) are deliberately not on the
-/// protocol; adding them would bloat the libghostty swap
-/// surface. Extend only when a concrete use appears.
+/// The surface serves every pane kind in both applications
+/// and has grown accordingly. It is still deliberately not
+/// exhaustive: buffer inspection beyond
+/// `captureScrollbackSnapshot()` (like `getLine`, mouse-mode
+/// queries) stays off the protocol, because each addition is
+/// something a second engine would have to answer for.
+/// Extend only when a concrete use appears.
 ///
 /// ## Auto-follow invariants
 ///
@@ -267,20 +267,29 @@ public protocol TerminalBackend: AnyObject {
     /// Apply cursor appearance. SwiftTerm's native
     /// `CursorStyle` enum fuses shape + blink into one
     /// value, so we pass both here and let the backend
-    /// map to the 6-case combination. Shell-only in
-    /// practice today — the Session pane's caret is
-    /// hidden by Claude Code's own cursor rendering, so
-    /// it doesn't subscribe.
+    /// map to the 6-case combination.
+    ///
+    /// Every pane kind applies it, in both applications:
+    /// the session controllers push it at setup and again
+    /// on each settings change, and `BackendBackedPane`
+    /// does the same for shell panes.
     func applyCursor(style: ShellCursorStyle, blink: Bool)
 
-    /// Hide or show the engine's native text caret. The
-    /// Session pane sets this true at setup because Claude
-    /// Code self-renders the cursor and the engine's caret
-    /// would double up; other panes leave it at the default
-    /// (false). Each engine implements this against its own
-    /// caret view — SwiftTerm exposes `caretView.isHidden`
-    /// on `MacTerminalView`, libghostty exposes a similar
-    /// config knob.
+    /// Hide or show the engine's native text caret.
+    ///
+    /// Every call site passes false, both session panes
+    /// included: the caret there *is* Claude's live prompt
+    /// cursor, not a second one drawn over it. The
+    /// parameter exists because suppression is still wanted
+    /// transiently — `GalacticSwiftTermView` records this
+    /// as the app's intent and layers scroll-position
+    /// hiding on top of it, so the caret disappears while
+    /// the user reads back and returns when the viewport
+    /// re-pins to the live bottom.
+    ///
+    /// Each engine implements this against whatever its own
+    /// caret is; SwiftTerm exposes `caretView.isHidden` on
+    /// `MacTerminalView`.
     func setCaretHidden(_ hidden: Bool)
 
     /// Capture the current scrollback buffer. Returns an

@@ -2,10 +2,10 @@ import Foundation
 
 /// A recorded keystroke — a virtual key code plus the modifiers held with it.
 ///
-/// Deliberately Foundation-only, with no AppKit import. Two things rest on
-/// that: the smoke target links this file directly without pulling in AppKit,
-/// and the matcher stays exercisable in a plain executable. The `NSEvent`
-/// bridge lives in its own file for the same reason.
+/// Deliberately Foundation-only, with no AppKit import, so the matcher stays
+/// exercisable without a window server. The `NSEvent` bridge lives in its own
+/// file for the same reason. A standalone smoke executable used to depend on
+/// this and no longer exists — the separation is kept on its own merits.
 public struct Keystroke: Codable, Hashable {
     /// Virtual key codes this feature needs to name, so call sites and
     /// fixtures do not repeat bare numbers. Return and keypad Enter are

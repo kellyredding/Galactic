@@ -33,11 +33,10 @@ public func resolveTerminalFont(
 /// subclass that intercepts scroll events, suppresses the
 /// default bell NSBeep, and exposes focus-event quenching.
 ///
-/// The Shell pane reaches the SwiftTerm engine through this
-/// backend. The Session pane currently constructs
-/// `GalacticSwiftTermView` directly via `Session.swift`; that
-/// path will migrate to a `TerminalBackend` reference in a
-/// follow-up slice of the terminal-backend unification work.
+/// Every pane in both applications reaches the SwiftTerm
+/// engine through this backend, constructed by
+/// `TerminalBackendFactory.make`. Nothing names
+/// `GalacticSwiftTermView` from outside this package.
 final class SwiftTermBackend: NSObject, TerminalBackend,
     LocalProcessTerminalViewDelegate {
 
@@ -381,14 +380,15 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
         changeHistorySize(settings.terminalScrollbackLines)
 
         // NOTE: cursor styling is intentionally NOT applied
-        // here. `shellCursorStyle` / `shellCursorBlink` are
-        // Shell-only — the Shell pane subscribes to those via
-        // its own deduplication wrapper. The Session pane
-        // keeps SwiftTerm's caret hidden (Claude Code self-
-        // renders the cursor), so applying cursor settings on
-        // every Session-pane settings change would be churn at
-        // best, and risks the cursor-style delegate hook
-        // re-touching caret view state we want to stay hidden.
+        // here. `terminalCursorStyle` / `terminalCursorBlink`
+        // reach the engine through `applyCursor`, which every
+        // pane calls directly — the session controllers at
+        // setup and on each settings change, and
+        // `BackendBackedPane` for shell panes, each behind its
+        // own deduplication. Pushing them from here as well
+        // would apply the same pair twice per change, and the
+        // cursor-style delegate hook touches caret view state
+        // on every application.
     }
 
     var suppressFocusEvents: Bool {

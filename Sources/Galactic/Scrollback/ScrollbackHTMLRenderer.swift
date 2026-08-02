@@ -503,9 +503,6 @@ public enum ScrollbackHTMLRenderer {
         let textColorFaint = isLight
             ? "rgba(0, 0, 0, 0.3)"
             : "rgba(255, 255, 255, 0.3)"
-        let textColorHover = isLight
-            ? "rgba(0, 0, 0, 0.8)"
-            : "rgba(255, 255, 255, 0.8)"
         let inputBg = isLight
             ? "rgba(0, 0, 0, 0.04)"
             : "rgba(255, 255, 255, 0.05)"

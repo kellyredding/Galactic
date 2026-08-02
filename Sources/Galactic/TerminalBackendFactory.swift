@@ -7,8 +7,10 @@ import AppKit
 /// flipping the global setting never affects panes already
 /// running.
 ///
-/// `Codable` so it rides along inside `AppSettings`. Default
-/// is `.swiftTerm` for backward compatibility.
+/// `Codable` so it can ride along inside a host's own
+/// settings type. No default here — an application that
+/// persists this chooses what an absent value means, and
+/// only one of the two applications persists it at all.
 public enum TerminalEngine: String, Codable {
     case swiftTerm
     case libghostty

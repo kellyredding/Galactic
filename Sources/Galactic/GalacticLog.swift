@@ -39,7 +39,25 @@ public enum GalacticLog {
     }
 
     /// Discards until a host replaces it.
-    public static var sink = Sink()
+    ///
+    /// Written exactly once, at launch, before anything in this package can
+    /// run, and read on the main thread thereafter — every call site is
+    /// reached through work already dispatched to main, and nothing in the
+    /// reach of a log line touches a background queue.
+    ///
+    /// `nonisolated(unsafe)` states that discipline rather than proving it,
+    /// which is the honest position: the compiler cannot see an invariant this
+    /// loose, and the alternatives buy nothing against the actual usage. A lock
+    /// would be taken on every line — including inside the submission poll loop
+    /// — to guard a value nothing writes twice. Main-actor isolation would be
+    /// accurate, but it would force `await` onto call sites with no other
+    /// reason to be async, which is the trade this package already declined
+    /// once for the pane registry.
+    ///
+    /// Two things would make this wrong: a host assigning after launch, or a
+    /// log line reached from a background queue. Neither happens today, and
+    /// they are what to check first if it ever needs revisiting.
+    nonisolated(unsafe) public static var sink = Sink()
 
     static func submit(_ message: String) { sink.submit(message) }
 

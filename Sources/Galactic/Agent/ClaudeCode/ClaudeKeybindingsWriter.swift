@@ -15,17 +15,20 @@ import Foundation
 public enum ClaudeKeybindingsWriter {
     /// Where Claude Code keeps its keybindings.
     ///
-    /// Settable so the smoke target can aim the whole writer at a temp file and
-    /// exercise it against real JSON — reading, merging, unbinding, removing —
-    /// rather than asserting on a hand-built dictionary free to disagree with
-    /// what the file would actually say. That distinction is not
-    /// theoretical: the rule about which submit bytes a pane will act on was
-    /// wrong for a day, and no assertion about this type's internals could have
-    /// caught it, because the question is what the *file* says.
+    /// Constant. It was settable so a test harness could aim the whole writer
+    /// at a temp file and exercise it against real JSON — reading, merging,
+    /// unbinding, removing — rather than asserting on a hand-built dictionary
+    /// free to disagree with what the file would actually say. That harness
+    /// was never written, which left a mutable global deciding where a user's
+    /// real keybindings file gets written, read on every automated submission.
     ///
-    /// Nothing in the app assigns this, and nothing should. It is read on every
-    /// automated submission, from whatever thread that submission runs on.
-    public static var fileURL = URL(fileURLWithPath: NSHomeDirectory())
+    /// The distinction it was reaching for is still real: the rule about which
+    /// submit bytes a pane will act on was wrong for a day, and no assertion
+    /// about this type's internals could have caught it, because the question
+    /// is what the *file* says. Whoever writes those tests should reintroduce
+    /// injection in the shape the tests actually need — a parameter or an
+    /// injected path — rather than restoring a settable static.
+    public static let fileURL = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent(".claude/keybindings.json")
 
     /// The copy taken before every write, alongside whatever `fileURL` names.
@@ -259,7 +262,7 @@ public enum ClaudeKeybindingsWriter {
     /// say — while an explicit null *removes* a default rather than overriding
     /// it. Anything reasoning about what a keystroke will do there has to start
     /// from the defaults and apply the file over them, in that order.
-    private static func effectiveBindings(
+    static func effectiveBindings(
         given present: [String: String?]
     ) -> [String: String] {
         var effective = defaultBindings
@@ -282,9 +285,24 @@ public enum ClaudeKeybindingsWriter {
     /// Read rather than inferred from this app's settings, because the file is
     /// what the pane obeys. If the two have drifted, the file is right and the
     /// settings are a wish.
+    ///
+    /// Asks for *every* binding, not just this app's. Return bound to any of
+    /// the other Chat actions — cancel, undo, external editor, a `command:`
+    /// binding — is Return not submitting, exactly as much as if it were bound
+    /// to newline. Reading only this app's actions there left Claude Code's
+    /// `enter: chat:submit` default apparently in force and answered true,
+    /// which sends a carriage return into a key bound to something else.
     public static var plainReturnSubmits: Bool {
-        effectiveBindings(given: presentEntries())["enter"]
-            == Action.submit.rawValue
+        returnSubmits(in: (try? readRoot()) ?? [:])
+    }
+
+    /// The same question against a document rather than the file on disk, so
+    /// the decision — including which of the two reads it asks for — is
+    /// exercisable. Keeping the `ownedOnly: false` choice inside here rather
+    /// than at the property is the point: it is the part that was wrong.
+    static func returnSubmits(in root: [String: Any]) -> Bool {
+        let all = chatEntries(in: root, ownedOnly: false)
+        return effectiveBindings(given: all)["enter"] == Action.submit.rawValue
     }
 
     /// What the file would say if these settings were written to it. A nil
@@ -302,12 +320,27 @@ public enum ClaudeKeybindingsWriter {
         return entries
     }
 
-    /// What the file says now, narrowed to the entries this app claims: keys
-    /// bound to one of its two actions, plus explicit unbinds on the keys
-    /// Claude Code binds by default. A null anywhere else belongs to someone
-    /// else and is none of this app's business.
-    private static func presentEntries() -> [String: String?] {
-        let root = (try? readRoot()) ?? [:]
+    /// The Chat block's bindings, as a map with nil for an explicit unbind.
+    ///
+    /// `ownedOnly` picks which of two different questions is being asked, and
+    /// they need different answers:
+    ///
+    /// - **What did this app write?** Only keys bound to one of its two
+    ///   actions, plus explicit unbinds on the keys Claude Code binds by
+    ///   default. A binding to somebody else's action is not this app's and
+    ///   must not read as ours when comparing the file against settings.
+    /// - **What will the pane actually do?** Everything. A key bound to
+    ///   another action is *bound*, and the default no longer governs it —
+    ///   filtering it out leaves the default in force and reports the opposite
+    ///   of the truth.
+    ///
+    /// Split out from the file read so both can be exercised against a literal
+    /// document. Every branch here decides which bytes an automated submission
+    /// sends, and getting it wrong has no symptom.
+    static func chatEntries(
+        in root: [String: Any],
+        ownedOnly: Bool
+    ) -> [String: String?] {
         let blocks = root["bindings"] as? [[String: Any]] ?? []
         guard
             let block = blocks.first(where: {
@@ -319,13 +352,20 @@ public enum ClaudeKeybindingsWriter {
         let ours = ownedActions
         var entries: [String: String?] = [:]
         for (key, value) in existing {
-            if let action = value as? String, ours.contains(action) {
-                entries[key] = action
+            if let action = value as? String {
+                if !ownedOnly || ours.contains(action) {
+                    entries[key] = action
+                }
             } else if value is NSNull, defaultBindings.keys.contains(key) {
                 entries.updateValue(nil, forKey: key)
             }
         }
         return entries
+    }
+
+    /// What the file says now, narrowed to the entries this app claims.
+    private static func presentEntries() -> [String: String?] {
+        chatEntries(in: (try? readRoot()) ?? [:], ownedOnly: true)
     }
 
     // MARK: - Writing
@@ -351,7 +391,10 @@ public enum ClaudeKeybindingsWriter {
             ) || changed
 
         // The reserved chord additionally goes wherever an automated prompt
-        // might land — see `reservedContexts`.
+        // might land. `reservedContexts` holds exactly one entry today and it
+        // names the same context written above, so this loop currently does
+        // nothing — it is the hook for a second context rather than live
+        // routing, and `reservedContexts` is where that decision is recorded.
         for entry in reservedContexts where entry.context != context {
             guard let binding = entry.binding.claudeBinding else { continue }
             changed =
@@ -548,6 +591,10 @@ public enum ClaudeKeybindingsWriter {
     /// prompt can land in. Present in some but not others is the state that
     /// makes automation work for plain text and fail for slash commands, so it
     /// counts as absent and gets repaired.
+    ///
+    /// `reservedContexts` names exactly one context today, so in practice this
+    /// is a single lookup. The plural is the shape rather than the current
+    /// state, and it is what makes adding a second context safe.
     public static var hasReservedBinding: Bool {
         let root = (try? readRoot()) ?? [:]
         let blocks = root["bindings"] as? [[String: Any]] ?? []

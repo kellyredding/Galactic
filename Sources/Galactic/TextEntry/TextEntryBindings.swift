@@ -2,8 +2,8 @@ import Foundation
 
 /// Which keystrokes commit text and which insert a newline.
 ///
-/// Foundation-only for the same reason as `Keystroke`: the smoke target links
-/// it directly, so the resolver is covered without an app or a WebView.
+/// Foundation-only for the same reason as `Keystroke`: the resolver stays
+/// coverable without an app or a WebView.
 public struct TextEntryBindings: Codable, Equatable {
     public var submit: [Keystroke]
     public var newline: [Keystroke]

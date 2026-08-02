@@ -9,10 +9,12 @@ import Combine
 /// A host app supplies one conformer per kind of surface it hosts —
 /// typically an agent session pane and a plain shell pane.
 ///
-/// This is the libghostty swap seam at the chrome boundary.
-/// Backends (PTY + rendering library) swap via
-/// `TerminalBackend`; chrome hosts (drag-drop, scrollback,
-/// focus, keyboard) swap via this protocol.
+/// This is the swap seam at the chrome boundary. Backends
+/// (PTY + rendering library) swap via `TerminalBackend`;
+/// chrome hosts (drag-drop, scrollback, focus, keyboard)
+/// swap via this protocol. Only one backend exists today —
+/// the second engine is a possibility the split anticipates,
+/// not a thing being built.
 public protocol TerminalPane: AnyObject {
     /// The inner NSView that renders the terminal.
     var view: NSView { get }
@@ -39,7 +41,7 @@ public protocol TerminalPane: AnyObject {
 
     /// Whether this pane should accept dropped files right now.
     /// Gates drag-drop registration in
-    /// `TerminalHostView.updateDragRegistration`.
+    /// `TerminalHostView.refreshDragRegistration`.
     ///
     /// Names file drops specifically because it has nothing to do with
     /// whether the child can read typed input — that is
@@ -172,7 +174,7 @@ public protocol TerminalPane: AnyObject {
     func decreaseFontSize()
 
     /// Reset this pane's terminal font size to the default
-    /// from `AppSettings.defaultTerminalFontSize`.
+    /// from `GalacticConfiguration.defaultTerminalFontSize`.
     func resetFontSize()
 
     /// Whether the pane's font size is below the ceiling and

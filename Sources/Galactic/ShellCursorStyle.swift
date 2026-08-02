@@ -1,9 +1,14 @@
 import Foundation
 
-/// Shape of the cursor rendered in the Shell pane. Pairs
-/// with `shellCursorBlink` to pick one of SwiftTerm's six
-/// `CursorStyle` cases at apply time (see
+/// Shape of the terminal cursor, in every pane that has one.
+/// Pairs with `terminalCursorBlink` to pick one of SwiftTerm's
+/// six `CursorStyle` cases at apply time (see
 /// `SwiftTermBackend.applyCursor`).
+///
+/// The `Shell` in the name is historical — this began as a
+/// shell-pane-only setting and the session panes adopted it
+/// later. The configuration members it pairs with say
+/// `terminal`, which is the accurate word for both.
 ///
 /// User-facing settings keep style + blink as two
 /// orthogonal knobs because that's the clearer mental

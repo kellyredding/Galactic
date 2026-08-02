@@ -116,7 +116,10 @@ public enum SessionSubmit {
     /// it", and later what revealed that one send path skips the readiness
     /// gate: the giveaway was a line that was absent, not one that was wrong.
     ///
-    ///     tail -f ~/.claude/galaxy/galaxy.log | grep Galaxy/submit
+    /// The lines land wherever the host pointed `GalacticLog.sink`, so the
+    /// file to follow is that application's own log rather than a fixed path:
+    ///
+    ///     tail -f <the host's log> | grep Galaxy/submit
     public static func log(_ message: String) {
         GalacticLog.submit(message)
     }
