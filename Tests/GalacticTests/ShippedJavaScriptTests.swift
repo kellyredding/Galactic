@@ -36,6 +36,10 @@ final class ShippedJavaScriptTests: XCTestCase {
                 ScrollbackHTMLRenderer.noteManagerJS
             ),
             ("annotationManagerJS", annotationManagerJS),
+            (
+                "HTMLEscape.javaScriptFunction",
+                HTMLEscape.javaScriptFunction
+            ),
         ]
     }
 
@@ -82,7 +86,7 @@ final class ShippedJavaScriptTests: XCTestCase {
     /// leave an app without someone being told, and this is where it has to
     /// arrive.
     func testCoverageHasNotShrunk() {
-        XCTAssertGreaterThanOrEqual(embeddedLiterals.count, 9)
+        XCTAssertGreaterThanOrEqual(embeddedLiterals.count, 10)
         XCTAssertGreaterThanOrEqual(bundledResources.count, 2)
     }
 }
