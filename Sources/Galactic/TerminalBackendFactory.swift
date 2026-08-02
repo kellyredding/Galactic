@@ -7,13 +7,21 @@ import AppKit
 /// flipping the global setting never affects panes already
 /// running.
 ///
+/// **One case today, and the abstraction is kept deliberately.**
+/// Bringing in a second terminal backend is a live possibility
+/// and this is the shape that makes it a change to this file
+/// plus one new conformer, rather than a change everywhere a
+/// terminal is constructed. A candidate was explored and set
+/// aside as not ready; the seam outlasted the candidate on
+/// purpose. Do not collapse it back into a direct
+/// construction call.
+///
 /// `Codable` so it can ride along inside a host's own
 /// settings type. No default here — an application that
 /// persists this chooses what an absent value means, and
 /// only one of the two applications persists it at all.
 public enum TerminalEngine: String, Codable {
     case swiftTerm
-    case libghostty
 }
 
 /// Pane lifecycle classification. Today both panes use the
@@ -30,13 +38,15 @@ public enum TerminalPaneKind: String {
 }
 
 /// Constructs a `TerminalBackend` for the given pane kind
-/// using the specified engine. The caller (Session.init,
-/// ShellTerminalPane.init, etc.) reads
-/// `SettingsManager.shared.settings.terminalEngine` at its
-/// own construction time and passes it here — that's the
-/// D-pane construction-time pinning point. Once a libghostty
-/// integration ships, this factory grows a second engine
-/// case; consumers are unchanged.
+/// using the specified engine. The caller reads its own
+/// settings at construction time and passes the answer here —
+/// that is the construction-time pinning point, and it is why
+/// flipping the setting cannot disturb a running pane.
+///
+/// The switch has one case today. Adding a second backend is
+/// a case here and a new `TerminalBackend` conformer; every
+/// consumer stays as it is, which is the whole reason this
+/// indirection is worth its keep.
 public struct TerminalBackendFactory {
     public static func make(
         engine: TerminalEngine,
@@ -45,19 +55,6 @@ public struct TerminalBackendFactory {
     ) -> TerminalBackend {
         switch engine {
         case .swiftTerm:
-            return SwiftTermBackend(frame: frame)
-        case .libghostty:
-            // Not yet implemented. Falling back to SwiftTerm
-            // keeps the app running if `terminalEngine` is
-            // somehow set to `.libghostty` before the
-            // integration ships (e.g. a settings file hand-
-            // edited from a future build). Will become
-            //   return LibghosttyBackend(frame: frame)
-            // when the libghostty backend lands.
-            assertionFailure(
-                "libghostty engine not yet implemented; "
-                + "falling back to SwiftTerm"
-            )
             return SwiftTermBackend(frame: frame)
         }
     }

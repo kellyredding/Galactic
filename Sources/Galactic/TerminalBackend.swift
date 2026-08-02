@@ -104,8 +104,8 @@ import AppKit
 ///   scroll path runs, since an orphaned inertial tail at
 ///   the live tail is never a deliberate scroll.
 ///
-/// A libghostty backend may use different internal
-/// mechanisms but the observable behavior must match.
+/// A second backend may use different internal mechanisms,
+/// but the observable behaviour must match this exactly.
 public protocol TerminalBackend: AnyObject {
     /// The terminal surface as an NSView.
     var view: NSView { get }
@@ -204,8 +204,8 @@ public protocol TerminalBackend: AnyObject {
     /// Set the bold-rendering foreground color (the effective
     /// foreground for cells with the SGR bold attribute set).
     /// Wraps the fork-patched `galacticBoldForegroundColor` on
-    /// the SwiftTerm side; a future libghostty backend exposes
-    /// a config knob with equivalent semantics.
+    /// the SwiftTerm side; a second backend is expected to
+    /// expose a config knob with equivalent semantics.
     func setBoldForegroundColor(_ color: NSColor)
 
     /// Apply the host app's terminal configuration to the
@@ -216,9 +216,8 @@ public protocol TerminalBackend: AnyObject {
     /// can conform their own settings type or build an adapter.
     /// Translates the protocol values into the backend's native
     /// config shape — for SwiftTerm that's per-property writes
-    /// (font, palette, scrollback, etc.); for a future
-    /// libghostty backend that's a config blob plus an
-    /// `update_config` call.
+    /// (font, palette, scrollback, etc.); an engine taking a
+    /// whole config at once would translate here instead.
     ///
     /// Idempotent and incremental: callers can fire on every
     /// settings change; the backend is responsible for

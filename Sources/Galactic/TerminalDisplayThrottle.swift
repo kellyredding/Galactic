@@ -9,13 +9,12 @@ import Combine
 /// Backend- and chrome-agnostic. The throttle exposes `pause`
 /// and publishes `isPaused`. Chrome code (in the host app)
 /// calls `pause(for:)` from animation-trigger sites; each
-/// backend's implementation (`SwiftTermBackend`, future
-/// `LibghosttyBackend`, etc.) subscribes to `$isPaused` from
+/// backend's implementation subscribes to `$isPaused` from
 /// its own init and translates the signal into whatever pause
 /// mechanism its rendering layer supports — for SwiftTerm
 /// that's a flag on `GalacticSwiftTermView` consulted inside
-/// an override of `setNeedsDisplay(_:)`; for libghostty that
-/// would be its native invalidation hook. Neither the
+/// an override of `setNeedsDisplay(_:)`; another engine would
+/// use its own invalidation hook. Neither the
 /// throttle nor the chrome cares which backend is below the
 /// `TerminalBackend` adapter seam.
 ///

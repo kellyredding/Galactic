@@ -118,10 +118,9 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
     /// throttle, SidebarPreferences, or Combine exist —
     /// the view exposes a backend-agnostic `displayPaused`
     /// flag, and this subscription is what flips it. A
-    /// future libghostty backend would have an analogous
-    /// subscription in its own init translating
-    /// `$isPaused` into whatever its rendering layer
-    /// supports.
+    /// second backend would carry an analogous subscription
+    /// in its own init, translating `$isPaused` into whatever
+    /// its rendering layer supports.
     private var displayThrottleCancellable: AnyCancellable?
 
     init(frame: NSRect) {

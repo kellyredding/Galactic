@@ -17,9 +17,9 @@ import Foundation
 /// (e.g. `SwiftTermScrollbackSnapshot` in `SwiftTermBackend`)
 /// own backend-typed fields privately and translate to the
 /// engine-agnostic `ScrollbackCell` representation during
-/// iteration. When a future libghostty backend lands, it gets
-/// its own snapshot impl reading from Ghostty's buffer types —
-/// chrome doesn't change.
+/// iteration. A second backend brings its own snapshot impl
+/// reading from its own buffer types — chrome doesn't change,
+/// which is what this seam is for.
 ///
 /// Rendering format choice lives in chrome. The protocol's
 /// surface is intentionally limited to data accessors — no

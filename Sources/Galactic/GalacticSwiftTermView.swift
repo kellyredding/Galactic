@@ -56,10 +56,9 @@ class GalacticSwiftTermView: LocalProcessTerminalView {
     /// to `TerminalDisplayThrottle` events; the view
     /// itself has no knowledge of the throttle, of
     /// SidebarPreferences, or of why it's being paused.
-    /// A future libghostty backend would expose an
-    /// equivalent flag on its own view layer (or use
-    /// libghostty's native pause API) and consume the same
-    /// throttle from its backend init.
+    /// A second backend would expose an equivalent flag on
+    /// its own view layer, or use its engine's native pause
+    /// API, and consume the same throttle from its init.
     var displayPaused: Bool = false
 
     /// Suppress display invalidation when the backend has
