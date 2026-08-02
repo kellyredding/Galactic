@@ -75,6 +75,33 @@ public enum ClaudeKeybindingsWriter {
     ///
     /// Reading in the other direction, these are also part of what there is to
     /// adopt: a default the file never mentions is still governing the pane.
+    ///
+    /// ### This is a model of another program, and nothing checks it
+    ///
+    /// These two entries are a belief about what Claude Code does when the
+    /// keybindings file is silent. They were arrived at by observation, and
+    /// there is no interface that would confirm them: the file records
+    /// *overrides only*, so a default appears nowhere in it, and the published
+    /// schema enumerates the valid actions and contexts without saying which
+    /// key starts bound to what. Verified by use as of 2026-08-02.
+    ///
+    /// **If Claude Code changes them, everything here keeps working and stops
+    /// being true.** The whole test suite passes — the tests pin how the file
+    /// is read and how the two answers combine, both of which stay correct —
+    /// while `plainReturnSubmits` returns the opposite of reality for any user
+    /// whose file happens not to mention the key that moved.
+    ///
+    /// The `enter` entry is the dangerous half. Believing Return submits when
+    /// it no longer does means `SessionSubmit.bytes` answers with a carriage
+    /// return, and an automated prompt then sits fully typed and uncommitted:
+    /// no echo, no error, nothing in a log that names a cause. If that symptom
+    /// ever appears, **suspect this constant first** — it is the only input to
+    /// that decision which cannot be checked from inside this process.
+    ///
+    /// The `ctrl+j` entry is milder. Being wrong there writes an unbind for a
+    /// key that was not bound, or omits one for a key that is, so the settings
+    /// card and the pane disagree about a newline — visible, and recoverable
+    /// by the user changing the setting.
     public static let defaultBindings: [String: String] = [
         "enter": Action.submit.rawValue,
         "ctrl+j": Action.newline.rawValue,
