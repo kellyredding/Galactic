@@ -12,13 +12,20 @@ final class StubBackend: TerminalBackend {
     var output = false
     var drawn = false
     var written: [String] = []
+    /// Whether each write asked to be bracketed, parallel to `written`.
+    /// Recorded because "an automated send never pastes" is an invariant, and
+    /// one no test could see while this threw the flag away.
+    var pasted: [Bool] = []
     var bytesWritten: [[UInt8]] = []
 
     var isKittyKeyboardActive: Bool { kitty }
     var hasReceivedOutput: Bool { output }
     var hasVisibleContent: Bool { drawn }
 
-    func send(text: String, asPaste: Bool) { written.append(text) }
+    func send(text: String, asPaste: Bool) {
+        written.append(text)
+        pasted.append(asPaste)
+    }
     func send(bytes: [UInt8]) { bytesWritten.append(bytes) }
 
     // Unused by the tests that share this.

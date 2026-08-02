@@ -233,6 +233,99 @@ public enum SubmitRetryPolicy {
 }
 
 extension TerminalBackend {
+    /// Put a command in front of the agent and commit it — the whole automated
+    /// send, in the order that makes it land.
+    ///
+    /// Compose, wait until the agent can read, write, pace, submit, watch for
+    /// acceptance. Every step is load-bearing and several are counter-intuitive
+    /// enough that a reimplementation gets them wrong: the wait guards the
+    /// *write* rather than the submit, because a pane reporting ready means its
+    /// process exists and not that its input layer does; the pause between the
+    /// two exists because input arriving in one batch is decoded before the
+    /// screen re-renders, so the first piece has not taken effect when the
+    /// second is dispatched.
+    ///
+    /// It is one function because it was three, and each copy lost something
+    /// different. One paced with a number of its own and never gained the
+    /// readiness wait at all, for three months. One pasted its text before
+    /// submitting — the single combination that lets the submit be swallowed
+    /// into the paste — and never composed the trailing space that closes a
+    /// completion popup. One declined verification by not calling for it, so
+    /// there was nothing to opt out of. All three were written by someone
+    /// reading the original carefully.
+    ///
+    /// So the shape here is deliberately narrow. There is no flag for pasting,
+    /// because anything that submits must type: the two together is the failure
+    /// above, and this way it cannot be spelled. Composition happens here, once,
+    /// which is also what guarantees a retype re-sends exactly what the first
+    /// attempt sent. And `verification` is an argument rather than an option, so
+    /// a caller with no acceptance signal says so by passing nothing rather than
+    /// by quietly leaving the question out.
+    ///
+    /// What stays with the caller is policy: whether a report can arrive at all,
+    /// whether a lost payload is worth retyping, and what to do afterwards.
+    ///
+    /// - Parameters:
+    ///   - command: Raw text. Composed here; do not pre-compose it.
+    ///   - isAlive: Whether the session is still worth writing to. Checked
+    ///     before the write and again before the submit, because the gap
+    ///     between them is long enough for a process to die in.
+    ///   - then: Runs exactly once when the gesture finishes or abandons, on
+    ///     either path. A caller serializing sends releases its gate here, so
+    ///     skipping it on the abandon path would strand a queue.
+    public func deliverPrompt(
+        _ command: String,
+        harness: AgentHarness,
+        isAlive: @escaping () -> Bool,
+        verification: SubmitVerification?,
+        retry: SubmitRetryPolicy = .retype,
+        then: (() -> Void)? = nil
+    ) {
+        let text = harness.composedCommand(command)
+        SessionSubmit.log("  text=\(SessionSubmit.describe(text: text))")
+
+        if !isKittyKeyboardActive {
+            SessionSubmit.log("  waiting for input readiness…")
+        }
+        let t0 = Date()
+
+        // Strongly held across the wait: readiness established for this backend
+        // must not be credited to a replacement, and a half-written gesture is
+        // worse than one that never started.
+        whenAcceptingInput(harness: harness) { ready in
+            guard isAlive() else {
+                SessionSubmit.log("  session gone before the write")
+                then?()
+                return
+            }
+            self.send(text: text, asPaste: false)
+            SessionSubmit.log(
+                String(
+                    format: "  input %@ (+%.0fms) — wrote text",
+                    ready ? "ready" : "TIMED OUT",
+                    Date().timeIntervalSince(t0) * 1000)
+            )
+
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + harness.inputPacingDelay
+            ) {
+                guard isAlive() else {
+                    SessionSubmit.log("  session gone before the submit")
+                    then?()
+                    return
+                }
+                self.submitPrompt(harness: harness)
+                self.verifySubmission(
+                    text: text,
+                    harness: harness,
+                    verification: verification,
+                    retry: retry
+                )
+                then?()
+            }
+        }
+    }
+
     /// Watch for confirmation that a just-submitted prompt was taken, and
     /// retype it if it was not.
     ///
