@@ -65,7 +65,7 @@ public class ScrollbackOverlayView: NSView {
     public init(
         frame: NSRect,
         scrollbackView: ScrollbackWebView,
-        isActiveSurface: @escaping () -> Bool = { true }
+        isActiveSurface: @escaping () -> Bool
     ) {
         self.scrollbackView = scrollbackView
         self.pillLabel = NSTextField(labelWithString: "Scrollback · Esc to exit")

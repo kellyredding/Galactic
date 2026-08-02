@@ -36,7 +36,7 @@ public extension ScrollbackOverlayView {
         theme: TerminalColorTheme,
         fontFamily: String,
         fontSize: CGFloat,
-        textEntry: [String: [[String: Any]]]? = nil
+        textEntry: [String: [[String: Any]]]?
     ) {
         scrollbackView.webView.evaluateJavaScript(
             "ScrollbackManager.getVisibleLine()"

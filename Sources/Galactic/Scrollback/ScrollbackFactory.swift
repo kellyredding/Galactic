@@ -32,7 +32,7 @@ public enum ScrollbackFactory {
     public static func open(
         pane: TerminalPane,
         theme: TerminalColorTheme,
-        textEntry: [String: [[String: Any]]]? = nil,
+        textEntry: [String: [[String: Any]]]?,
         initialScrollLine: Int? = nil
     ) -> Opened? {
         guard let snapshot = pane.captureScrollbackSnapshot() else {

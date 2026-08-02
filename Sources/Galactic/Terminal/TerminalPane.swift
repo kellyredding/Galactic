@@ -77,7 +77,16 @@ public protocol TerminalPane: AnyObject {
     /// Ledger session ID for timeline event attribution.
     /// Nil if the pane has no ledger context (shell pane
     /// whose owning Claude session hasn't been enriched
-    /// yet, for example).
+    /// yet, for example), or if the application keeps no
+    /// such notion at all.
+    ///
+    /// Deliberately has no default. A recorder drops every
+    /// event whose session id is nil, so a pane that never
+    /// answered and a pane that answered nil are the same
+    /// silence — and the first only becomes visible on the
+    /// day an application adopts a timeline and wonders
+    /// where its events went. Answering nil is one line;
+    /// leaving it unanswered has to stay impossible.
     var ledgerSessionId: Int64? { get }
 
     /// Target terminal that receives "Send to Claude" pastes
@@ -190,12 +199,4 @@ public protocol TerminalPane: AnyObject {
     /// (no-op in scrollback or when parked). Fired on focus-class events as a
     /// friendly re-pin. Forwards to `TerminalBackend.reassertFollowIfIntended()`.
     func reassertFollowIfIntended()
-}
-
-public extension TerminalPane {
-
-    /// Identifier for attributing events to a session, for hosts that keep
-    /// one. Defaults to nothing, so a host with no such notion implements
-    /// nothing.
-    var ledgerSessionId: Int64? { nil }
 }

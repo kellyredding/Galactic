@@ -26,16 +26,16 @@ public enum ScrollbackHTMLRenderer {
     ///   `window.GalaxyTextEntry.configure` expects. Passed in rather than read
     ///   from a settings singleton because this file is shared verbatim with
     ///   assist-ant, whose settings type differs — reading one here would end
-    ///   that. Defaults to nil, which leaves the matcher on the keystrokes
-    ///   these composers used before the setting existed, so a caller that has
-    ///   not been taught to pass it still behaves correctly.
+    ///   that. Stated by every caller, including the ones that mean nil: an
+    ///   omitted binding set and a deliberately absent one are different
+    ///   answers, and a default cannot tell them apart.
     public static func render(
         snapshot: ScrollbackSnapshot,
         theme: TerminalColorTheme,
         fontFamily: String,
         fontSize: CGFloat,
         cellHeight: CGFloat,
-        textEntry: [String: [[String: Any]]]? = nil
+        textEntry: [String: [[String: Any]]]?
     ) -> String {
         let resolver = ColorResolver(theme: theme)
         var html = ""
@@ -172,7 +172,7 @@ public enum ScrollbackHTMLRenderer {
         fontFamily: String,
         fontSize: CGFloat,
         cellHeight: CGFloat,
-        textEntry: [String: [[String: Any]]]? = nil
+        textEntry: [String: [[String: Any]]]?
     ) -> String {
         // Map font family for CSS — system monospace needs special handling
         let cssFontFamily: String

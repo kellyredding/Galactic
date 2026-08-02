@@ -73,13 +73,19 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
     var font: NSFont { terminalView.font }
 
     var cellHeight: CGFloat {
-        // SwiftTerm computes cellDimension lazily on first
-        // layout — it's effectively never nil after the
-        // surface has been shown. Force-unwrap matches the
-        // existing chrome read site that this method
-        // replaces; if the assumption ever breaks we'll see
-        // it here, in one place, instead of scattered.
-        terminalView.cellDimension!.height
+        // SwiftTerm computes cellDimension lazily on first layout, so it is nil
+        // until the surface has been through one. That is reachable rather than
+        // theoretical: opening find on a pane that has been made first
+        // responder but not yet laid out reaches here through the scrollback
+        // factory, and a trap there would take the application down over a
+        // metric with a perfectly good answer.
+        if let dimension = terminalView.cellDimension {
+            return dimension.height
+        }
+        // The line height of the font SwiftTerm derives the cell from, which is
+        // the same number to within rounding rather than an invented one.
+        let font = terminalView.font
+        return ceil(font.ascender - font.descender + font.leading)
     }
 
     func redraw() {

@@ -261,36 +261,32 @@ public class ScrollbackWebView: NSView {
         onNoteChanged?("deleted", detail)
     }
 
+    /// The note as a JavaScript object expression, ready to splice into an
+    /// injected call.
+    ///
+    /// Serialised rather than escaped by hand. A note body is text the user
+    /// typed, so it can legally contain a quote, a backslash, a line terminator
+    /// or a bare control character — each of which ends the string literal
+    /// early and makes the whole injected snippet a syntax error. The failure
+    /// is then that nothing runs at all, with no trace outside the page's own
+    /// console, which is exactly the category `JavaScriptLiteral` exists to
+    /// remove.
     private func noteToJSON(_ note: ScrollbackNote) -> String {
-        let escapedContent = note.content
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "\\r")
-        let escapedLineContent = note.lineContent
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "\\r")
-        // Escape the note body on the Swift side with the same
-        // helper artifact and snapshot annotations use. Notes render
-        // verbatim — there is no markdown parsing here — so this
-        // only makes the text safe to splice into the card body. The
-        // JS splices `renderedHTML` there directly; raw `content`
-        // ships alongside it so the edit textarea can be seeded with
-        // exactly what the user typed.
-        let escapedRenderedHTML = escapeAnnotationContent(note.content)
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "\\r")
-        return """
-        {"id":"\(note.id.uuidString)","startLine":\(note.startLine),\
-        "endLine":\(note.endLine),"lineContent":"\(escapedLineContent)",\
-        "content":"\(escapedContent)",\
-        "renderedHTML":"\(escapedRenderedHTML)",\
-        "number":\(note.number)}
-        """
+        JavaScriptLiteral.object([
+            "id": note.id.uuidString,
+            "startLine": note.startLine,
+            "endLine": note.endLine,
+            "lineContent": note.lineContent,
+            "content": note.content,
+            // Escaped with the same helper artifact and snapshot annotations
+            // use. Notes render verbatim — there is no markdown parsing here —
+            // so this only makes the text safe to splice into the card body.
+            // The JS splices `renderedHTML` there directly; raw `content` ships
+            // alongside it so the edit textarea can be seeded with exactly what
+            // the user typed.
+            "renderedHTML": escapeAnnotationContent(note.content),
+            "number": note.number,
+        ])
     }
 
     // MARK: - JavaScript Interface
@@ -348,6 +344,7 @@ public class ScrollbackWebView: NSView {
         onSendToClaude = nil
         onConfirmDiscardForm = nil
         onConfirmDiscardEdit = nil
+        onConfirmDragReplace = nil
         onConfirmSendWithUnsavedComment = nil
         onNoteChanged = nil
     }

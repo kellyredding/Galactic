@@ -51,6 +51,22 @@ public enum JavaScriptLiteral {
         return escapeLineSeparators(String(inner))
     }
 
+    /// A JavaScript object expression for `value`, safe to interpolate into
+    /// source that will be evaluated.
+    ///
+    /// Members must be JSON-serialisable — strings, numbers, booleans, or
+    /// nested arrays and dictionaries of those. Anything else returns an empty
+    /// object, so a caller degrades to handing the page nothing rather than to
+    /// injecting a script that cannot parse.
+    public static func object(_ value: [String: Any]) -> String {
+        guard
+            JSONSerialization.isValidJSONObject(value),
+            let data = try? JSONSerialization.data(withJSONObject: value),
+            let json = String(data: data, encoding: .utf8)
+        else { return "{}" }
+        return escapeLineSeparators(json)
+    }
+
     private static func escapeLineSeparators(_ source: String) -> String {
         source
             .replacingOccurrences(of: "\u{2028}", with: "\\u2028")

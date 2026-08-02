@@ -24,12 +24,12 @@ public struct ShellLaunch {
 
     /// Arguments the shell is started with.
     ///
-    /// Login and interactive by default, which is not an arbitrary pair: a
-    /// pane's shell is a user sitting at a prompt, so it needs the profile a
-    /// login shell reads and the behaviour an interactive one has. Both
-    /// applications had spelled this out identically and neither had a reason
-    /// to differ, so the default carries it and a caller that genuinely needs
-    /// something else can still say so.
+    /// Login and interactive is not an arbitrary pair: a pane's shell is a user
+    /// sitting at a prompt, so it needs the profile a login shell reads and the
+    /// behaviour an interactive one has. Both applications want exactly that
+    /// today, and both say so, because which flags a user's shell gets is an
+    /// application's policy rather than this type's — a default would make an
+    /// app that never considered the question look like one that decided.
     public let arguments: [String]
 
     /// The name the process reports as, which is the shell's own filename.
@@ -43,7 +43,7 @@ public struct ShellLaunch {
         executable: String,
         workingDirectory: String,
         environment: [String],
-        arguments: [String] = ["-il"]
+        arguments: [String]
     ) {
         self.executable = executable
         self.workingDirectory = workingDirectory
