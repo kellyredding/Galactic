@@ -9,9 +9,26 @@ import Foundation
 /// --card-active-bg, --card-active-border,
 /// --annotation-active-block-bg,
 /// --annotation-active-block-border.
+///
+/// ### Gutter
+///
+/// Cards and forms are absolutely positioned against the page's own left and
+/// right edges. Both insets come from `--annotation-gutter-left` and
+/// `--annotation-gutter-right`, declared below with the value every reader
+/// used when they were literals, so a host that sets neither is unaffected.
+///
+/// A reader with furniture down one side sets the corresponding property
+/// instead of restating the two selectors. Galaxy's diff reader does exactly
+/// that for its table-of-contents sidebar, and previously carried a copy of
+/// `.annotation-card` and `.annotation-form` purely to shift `left` — a copy
+/// that had to be found and updated every time either rule changed here.
 public let annotationCSS: String = """
     \(noteUXTokens(textSize: "13px"))
     \(hostResetCSS(prefix: "annotation"))
+    :root {
+        --annotation-gutter-left: 24px;
+        --annotation-gutter-right: 24px;
+    }
     .annotation-highlight {
         background-color: rgba(88, 166, 255, 0.12);
         border-left: 3px solid rgba(88, 166, 255, 0.6);
@@ -21,8 +38,8 @@ public let annotationCSS: String = """
     }
     .annotation-form {
         position: absolute;
-        left: 24px;
-        right: 24px;
+        left: var(--annotation-gutter-left);
+        right: var(--annotation-gutter-right);
         z-index: 10;
         padding: var(--note-box-pad-y) var(--note-box-pad-x);
         border: 1px solid rgba(88, 166, 255, 0.4);
@@ -68,8 +85,8 @@ public let annotationCSS: String = """
     }
     .annotation-card {
         position: absolute;
-        left: 24px;
-        right: 24px;
+        left: var(--annotation-gutter-left);
+        right: var(--annotation-gutter-right);
         z-index: 10;
         padding: var(--note-box-pad-y) var(--note-box-pad-x);
         border: 1px solid var(--code-border);
