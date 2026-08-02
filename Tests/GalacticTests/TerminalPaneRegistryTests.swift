@@ -17,9 +17,11 @@ import XCTest
 /// `testTheLastResortFindsTheOnlyRemainingPane`. It rests on the protocol's doc
 /// comment and on review until a third kind exists.
 ///
-/// These test the reference conformer. They do not prove either app conforms
-/// correctly — that is what the apps' own adoption and QA are for — but they
-/// pin what "correctly" means in executable form, which prose alone did not.
+/// These run against `TerminalPaneCoordinator` — the implementation both
+/// applications actually hold — rather than against a double written to agree
+/// with the protocol. Until there was one shared implementation there was
+/// nothing else to point them at; now that there is, a double passing these
+/// would have proved only that the double was right.
 final class TerminalPaneRegistryTests: XCTestCase {
 
     /// Let the main queue drain.
@@ -34,7 +36,7 @@ final class TerminalPaneRegistryTests: XCTestCase {
     /// The requirement's whole point: the path where the answer is already
     /// known is the one that must still not answer inline.
     func testTheCompletionIsAsynchronousWithNothingRegistered() {
-        let registry = StubPaneRegistry()
+        let registry = TerminalPaneCoordinator()
         var completed = false
 
         registry.checkUnsavedWork(kinds: [.session, .shell]) { _ in
@@ -53,9 +55,9 @@ final class TerminalPaneRegistryTests: XCTestCase {
     /// The same requirement on the populated path, so a conformer cannot pass
     /// by being async only when it has work to do.
     func testTheCompletionIsAsynchronousWithPanesRegistered() {
-        let registry = StubPaneRegistry()
-        let pane = NSObject()
-        registry.registerPane(pane, kind: .session)
+        let registry = TerminalPaneCoordinator()
+        let harness = PaneHarness()
+        harness.registerPane(.session, on: registry)
         var completed = false
 
         registry.checkUnsavedWork(kinds: [.session]) { _ in completed = true }
@@ -72,12 +74,11 @@ final class TerminalPaneRegistryTests: XCTestCase {
     // MARK: - Which panes, not whether any
 
     func testTheCompletionNamesThePanesHoldingWork() {
-        let registry = StubPaneRegistry()
-        let session = NSObject()
-        let shell = NSObject()
-        registry.registerPane(session, kind: .session)
-        registry.registerPane(shell, kind: .shell)
-        registry.kindsWithWork = [.shell]
+        let registry = TerminalPaneCoordinator()
+        let harness = PaneHarness()
+        harness.registerPane(.session, on: registry)
+        harness.registerPane(.shell, on: registry)
+        harness.kindsWithWork = [.shell]
         var reported: Set<TerminalPaneKind>?
 
         registry.checkUnsavedWork(kinds: [.session, .shell]) { reported = $0 }
@@ -91,12 +92,11 @@ final class TerminalPaneRegistryTests: XCTestCase {
     }
 
     func testKindsNotAskedAboutAreNotReported() {
-        let registry = StubPaneRegistry()
-        let session = NSObject()
-        let shell = NSObject()
-        registry.registerPane(session, kind: .session)
-        registry.registerPane(shell, kind: .shell)
-        registry.kindsWithWork = [.session, .shell]
+        let registry = TerminalPaneCoordinator()
+        let harness = PaneHarness()
+        harness.registerPane(.session, on: registry)
+        harness.registerPane(.shell, on: registry)
+        harness.kindsWithWork = [.session, .shell]
         var reported: Set<TerminalPaneKind>?
 
         registry.checkUnsavedWork(kinds: [.shell]) { reported = $0 }
@@ -109,10 +109,10 @@ final class TerminalPaneRegistryTests: XCTestCase {
     }
 
     func testAWithdrawnCheckerIsNotAsked() {
-        let registry = StubPaneRegistry()
-        let pane = NSObject()
-        registry.registerPane(pane, kind: .shell)
-        registry.kindsWithWork = [.shell]
+        let registry = TerminalPaneCoordinator()
+        let harness = PaneHarness()
+        let pane = harness.registerPane(.shell, on: registry)
+        harness.kindsWithWork = [.shell]
         registry.unregisterUnsavedWorkChecker(ObjectIdentifier(pane))
         var reported: Set<TerminalPaneKind>?
 
@@ -128,7 +128,7 @@ final class TerminalPaneRegistryTests: XCTestCase {
     // MARK: - The setter assigns only on a change
 
     func testTheScrollbackFlagPublishesOnlyRealChanges() {
-        let registry = StubPaneRegistry()
+        let registry = TerminalPaneCoordinator()
         var seen: [Bool] = []
         let subscription = registry.sessionPaneScrollbackActivePublisher
             .sink { seen.append($0) }
@@ -146,7 +146,7 @@ final class TerminalPaneRegistryTests: XCTestCase {
     }
 
     func testTheScrollbackFlagReadsBackWhatWasSet() {
-        let registry = StubPaneRegistry()
+        let registry = TerminalPaneCoordinator()
 
         registry.setSessionPaneScrollbackActive(true)
 
@@ -156,29 +156,28 @@ final class TerminalPaneRegistryTests: XCTestCase {
     // MARK: - Focus restoration
 
     func testThePreferredPaneIsRestoredWhenItIsRegistered() {
-        let registry = StubPaneRegistry()
-        let session = NSObject()
-        let shell = NSObject()
-        registry.registerPane(session, kind: .session)
-        registry.registerPane(shell, kind: .shell)
+        let registry = TerminalPaneCoordinator()
+        let harness = PaneHarness()
+        harness.registerPane(.session, on: registry)
+        harness.registerPane(.shell, on: registry)
         registry.lastFocusedPaneKind = .shell
 
         registry.restorePreferredPaneFocus()
 
-        XCTAssertEqual(registry.restored, [.shell])
+        XCTAssertEqual(harness.restored, [.shell])
     }
 
     /// The fallback that must not read whatever the storage yields first.
     func testAnAbsentPreferredPaneFallsBackToTheSessionPane() {
-        let registry = StubPaneRegistry()
-        let session = NSObject()
-        registry.registerPane(session, kind: .session)
+        let registry = TerminalPaneCoordinator()
+        let harness = PaneHarness()
+        harness.registerPane(.session, on: registry)
         registry.lastFocusedPaneKind = .shell
 
         registry.restorePreferredPaneFocus()
 
         XCTAssertEqual(
-            registry.restored, [.session],
+            harness.restored, [.session],
             "the pane that always exists is the named fallback"
         )
     }
@@ -197,58 +196,58 @@ final class TerminalPaneRegistryTests: XCTestCase {
     /// makes it falsifiable, and this is the test that should grow when one
     /// arrives.
     func testTheLastResortFindsTheOnlyRemainingPane() {
-        let registry = StubPaneRegistry()
-        let shell = NSObject()
-        registry.registerPane(shell, kind: .shell)
+        let registry = TerminalPaneCoordinator()
+        let harness = PaneHarness()
+        harness.registerPane(.shell, on: registry)
         registry.lastFocusedPaneKind = .session
 
         registry.restorePreferredPaneFocus()
 
-        XCTAssertEqual(registry.restored, [.shell])
+        XCTAssertEqual(harness.restored, [.shell])
     }
 
     func testRestoringWithNothingRegisteredIsANoOp() {
-        let registry = StubPaneRegistry()
+        let registry = TerminalPaneCoordinator()
+        let harness = PaneHarness()
 
         registry.restorePreferredPaneFocus()
         registry.restoreFocus(kind: .shell)
 
-        XCTAssertEqual(registry.restored, [])
+        XCTAssertEqual(harness.restored, [])
     }
 
     func testRestoringByKindTargetsThatKind() {
-        let registry = StubPaneRegistry()
-        let session = NSObject()
-        let shell = NSObject()
-        registry.registerPane(session, kind: .session)
-        registry.registerPane(shell, kind: .shell)
+        let registry = TerminalPaneCoordinator()
+        let harness = PaneHarness()
+        harness.registerPane(.session, on: registry)
+        harness.registerPane(.shell, on: registry)
         registry.lastFocusedPaneKind = .session
 
         registry.restoreFocus(kind: .shell)
 
         XCTAssertEqual(
-            registry.restored, [.shell],
+            harness.restored, [.shell],
             "an explicit kind ignores the focus memory"
         )
     }
 
     func testAWithdrawnRestorerIsNotInvoked() {
-        let registry = StubPaneRegistry()
-        let pane = NSObject()
-        registry.registerPane(pane, kind: .shell)
+        let registry = TerminalPaneCoordinator()
+        let harness = PaneHarness()
+        let pane = harness.registerPane(.shell, on: registry)
         registry.unregisterFocusRestorer(ObjectIdentifier(pane))
 
         registry.restoreFocus(kind: .shell)
 
         XCTAssertEqual(
-            registry.restored, [],
+            harness.restored, [],
             "a stale entry restores focus into a pane that is gone"
         )
     }
 
     /// A host that appears, goes away and appears again must not accumulate.
     func testRegisteringTwiceUnderOneKeyReplaces() {
-        let registry = StubPaneRegistry()
+        let registry = TerminalPaneCoordinator()
         let pane = NSObject()
         var firstRan = false
         var secondRan = false
@@ -271,10 +270,10 @@ final class TerminalPaneRegistryTests: XCTestCase {
     /// registry per session: two registries answer independently, so a consumer
     /// handed the wrong one is wrong in a way a test can see.
     func testTwoRegistriesDoNotShareState() {
-        let first = StubPaneRegistry()
-        let second = StubPaneRegistry()
-        let pane = NSObject()
-        first.registerPane(pane, kind: .shell)
+        let first = TerminalPaneCoordinator()
+        let second = TerminalPaneCoordinator()
+        let harness = PaneHarness()
+        harness.registerPane(.shell, on: first)
         first.lastFocusedPaneKind = .shell
         first.setSessionPaneScrollbackActive(true)
 
@@ -283,9 +282,42 @@ final class TerminalPaneRegistryTests: XCTestCase {
 
         second.restoreFocus(kind: .shell)
         XCTAssertEqual(
-            second.restored, [],
+            harness.restored, [],
             "a consumer fetching a registry from a static would pass this "
                 + "wrongly in an app that keeps one per session"
         )
+    }
+}
+
+/// Drives a registry the way panes do, and records what came back.
+///
+/// The two conveniences the old test double provided — registering on behalf of
+/// a pane, and remembering which restorers fired — live here instead, so the
+/// subject of these tests can be the shipped implementation. Panes are retained
+/// because a registration is keyed by object identity, and a deallocated pane
+/// would free an address a later one could reuse.
+private final class PaneHarness {
+    private(set) var restored: [TerminalPaneKind] = []
+    var kindsWithWork: Set<TerminalPaneKind> = []
+    private var panes: [NSObject] = []
+
+    /// Register a pane of `kind` for both focus restoration and unsaved-work
+    /// reporting, as a real host does. Returns the object it registered under
+    /// so a test can withdraw that registration.
+    @discardableResult
+    func registerPane(
+        _ kind: TerminalPaneKind, on registry: TerminalPaneRegistry
+    ) -> NSObject {
+        let pane = NSObject()
+        panes.append(pane)
+        let key = ObjectIdentifier(pane)
+        registry.registerFocusRestorer(key, kind: kind) { [weak self] in
+            self?.restored.append(kind)
+        }
+        registry.registerUnsavedWorkChecker(key, kind: kind) {
+            [weak self] answer in
+            answer(self?.kindsWithWork.contains(kind) ?? false)
+        }
+        return pane
     }
 }
