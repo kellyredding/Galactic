@@ -198,6 +198,40 @@ public struct SubmitVerification {
     }
 }
 
+/// What to do about a prompt the agent never confirmed receiving.
+///
+/// Separate from `SubmitVerification` because noticing a lost prompt and
+/// retyping one are different decisions with very different costs, and having
+/// only one control for both made every caller that feared the retype give up
+/// the signal as well. Detecting costs a bounded poll nobody waits on.
+/// Retyping costs a second write of the entire payload, and doubles a prompt
+/// in the case where the text landed and only the submit was lost — which
+/// nothing observable can distinguish from a total loss.
+///
+/// So the size of the payload decides this, not whether anyone is watching.
+/// A slash command is a dozen bytes and worth retyping; a scrollback selection
+/// runs to tens of thousands and is not.
+///
+/// The second thing that decides it is whether the host submits into a harness
+/// that might be busy. `submitVerifyTimeout` is calibrated against an idle
+/// harness acknowledging promptly; one that queues prompts of its own
+/// acknowledges when it dequeues, which is bounded by whatever it is already
+/// doing. A host that submits mid-turn will pass the bound routinely on
+/// prompts that land perfectly well, so it must not retype on that signal.
+public enum SubmitRetryPolicy {
+    /// Retype the whole gesture and resubmit, up to the harness's retry
+    /// ceiling. For bounded payloads sent into a harness expected to be idle.
+    case retype
+
+    /// Report that the bound passed without confirmation, and stop.
+    ///
+    /// For payloads where a spurious second copy would be worse than a missed
+    /// one, and for sends where an unconfirmed prompt is more likely to be
+    /// late than lost. Note the report says *unconfirmed*, not *lost* —
+    /// nothing here can tell those apart.
+    case reportOnly
+}
+
 extension TerminalBackend {
     /// Watch for confirmation that a just-submitted prompt was taken, and
     /// retype it if it was not.
@@ -228,39 +262,86 @@ extension TerminalBackend {
     /// keeps this safe, not a screen read.
     public func verifySubmission(
         text: String,
+        harness: AgentHarness,
         verification: SubmitVerification?,
-        retriesLeft: Int = SessionSubmit.maxSubmitRetries
+        retry: SubmitRetryPolicy = .retype,
+        retriesLeft: Int? = nil
     ) {
         guard let verification else { return }
+        let remaining = retriesLeft ?? harness.maxSubmitRetries
         awaitAcceptance(
-            deadline: Date() + SessionSubmit.submitVerifyTimeout,
+            deadline: Date() + harness.submitVerifyTimeout,
+            harness: harness,
             verification: verification
         ) { [weak self] accepted in
             guard let self, verification.isAlive() else { return }
 
             if accepted {
-                SessionSubmit.log("  accepted (\(retriesLeft) retries unused)")
+                switch retry {
+                case .retype:
+                    SessionSubmit.log("  accepted (\(remaining) retries unused)")
+                case .reportOnly:
+                    // No retries were available to go unused; saying otherwise
+                    // reads as a safety net that was standing by.
+                    SessionSubmit.log("  accepted")
+                }
                 return
             }
-            if retriesLeft <= 0 {
+
+            // Reported either way. A caller that declines the retype still
+            // wants to know the bound passed without confirmation — this
+            // channel is the only trace that leaves anywhere.
+            //
+            // Worded as unconfirmed rather than lost, and the distinction is
+            // real: a harness that queues prompts of its own acknowledges one
+            // when it picks it up, which can be long after a bound calibrated
+            // for an idle harness. Measured at 20s against Claude Code, for a
+            // prompt submitted while it was mid-turn — and that prompt did
+            // land. Calling that "NOT accepted" trains a reader to discount
+            // the one line that is supposed to mean something.
+            guard case .retype = retry else {
+                SessionSubmit.log(
+                    String(
+                        format:
+                            "  unconfirmed after %.1fs — not retyped "
+                            + "(may still be accepted later)",
+                        harness.submitVerifyTimeout)
+                )
+                return
+            }
+            if remaining <= 0 {
                 SessionSubmit.log("  NOT accepted — retries exhausted, giving up")
                 return
             }
 
-            SessionSubmit.log(
-                "  NOT accepted — retyping and resubmitting (\(retriesLeft) left)"
-            )
-            self.send(text: text, asPaste: false)
+            // Retyping is the expensive half, and only some harnesses need
+            // it. The reason Claude Code does is that its composer is usually
+            // empty by now and a bare submit against an empty composer
+            // repeats the previous command — so the second write is what
+            // stops a rescue from re-running unrelated work. A harness that
+            // does nothing on an empty submit is safe to resubmit directly.
+            if harness.retypeOnRetry {
+                SessionSubmit.log(
+                    "  NOT accepted — retyping and resubmitting (\(remaining) left)"
+                )
+                self.send(text: text, asPaste: false)
+            } else {
+                SessionSubmit.log(
+                    "  NOT accepted — resubmitting (\(remaining) left)"
+                )
+            }
 
             DispatchQueue.main.asyncAfter(
-                deadline: .now() + SessionSubmit.inputPacingDelay
+                deadline: .now() + harness.inputPacingDelay
             ) { [weak self] in
                 guard let self, verification.isAlive() else { return }
-                self.submitPrompt()
+                self.submitPrompt(harness: harness)
                 self.verifySubmission(
                     text: text,
+                    harness: harness,
                     verification: verification,
-                    retriesLeft: retriesLeft - 1
+                    retry: retry,
+                    retriesLeft: remaining - 1
                 )
             }
         }
@@ -269,6 +350,7 @@ extension TerminalBackend {
     /// Poll until the host reports the prompt taken, or the deadline passes.
     private func awaitAcceptance(
         deadline: Date,
+        harness: AgentHarness,
         verification: SubmitVerification,
         _ completion: @escaping (Bool) -> Void
     ) {
@@ -281,11 +363,12 @@ extension TerminalBackend {
             return
         }
         DispatchQueue.main.asyncAfter(
-            deadline: .now() + SessionSubmit.submitVerifyPollInterval
+            deadline: .now() + harness.submitVerifyPollInterval
         ) { [weak self] in
             guard let self, verification.isAlive() else { return }
             self.awaitAcceptance(
-                deadline: deadline, verification: verification, completion)
+                deadline: deadline, harness: harness,
+                verification: verification, completion)
         }
     }
 
@@ -293,9 +376,9 @@ extension TerminalBackend {
     ///
     /// Callers that pace their own write-then-submit must keep doing so; this
     /// changes what submitting sends, not when a caller asks for it.
-    public func submitPrompt() {
+    public func submitPrompt(harness: AgentHarness) {
         let t0 = Date()
-        let bytes = SessionSubmit.bytes
+        let bytes = harness.submitBytes
         SessionSubmit.log(
             "submitPrompt kittyActive=\(isKittyKeyboardActive) "
                 + "bytes=\(SessionSubmit.describe(bytes))"
@@ -321,7 +404,9 @@ extension TerminalBackend {
             return
         }
         SessionSubmit.log("  waiting for the kitty protocol…")
-        waitForKittyKeyboard(deadline: Date() + SessionSubmit.kittyReadyTimeout) {
+        waitForKittyKeyboard(
+            deadline: Date() + harness.inputReadinessTimeout, harness: harness
+        ) {
             [weak self] ready in
             self?.send(bytes: bytes)
             SessionSubmit.log(
@@ -350,9 +435,12 @@ extension TerminalBackend {
     /// `ready` is false when the deadline passed. Callers should write anyway:
     /// a late write beats no write, and the log line is what makes the
     /// difference visible after the fact.
-    public func whenAcceptingInput(_ body: @escaping (Bool) -> Void) {
+    public func whenAcceptingInput(
+        harness: AgentHarness, _ body: @escaping (Bool) -> Void
+    ) {
         waitForInputReady(
-            deadline: Date() + SessionSubmit.kittyReadyTimeout, body)
+            deadline: Date() + harness.inputReadinessTimeout,
+            harness: harness, body)
     }
 
     /// Poll until the child can decode a CSI-u chord, or the deadline passes.
@@ -364,7 +452,8 @@ extension TerminalBackend {
     /// the fuller gate so neither can be widened by accident into the other's
     /// job.
     private func waitForKittyKeyboard(
-        deadline: Date, _ completion: @escaping (Bool) -> Void
+        deadline: Date, harness: AgentHarness,
+        _ completion: @escaping (Bool) -> Void
     ) {
         if isKittyKeyboardActive {
             completion(true)
@@ -375,10 +464,11 @@ extension TerminalBackend {
             return
         }
         DispatchQueue.main.asyncAfter(
-            deadline: .now() + SessionSubmit.kittyPollInterval
+            deadline: .now() + harness.readinessPollInterval
         ) { [weak self] in
             guard let self else { return }
-            self.waitForKittyKeyboard(deadline: deadline, completion)
+            self.waitForKittyKeyboard(
+                deadline: deadline, harness: harness, completion)
         }
     }
 
@@ -415,7 +505,8 @@ extension TerminalBackend {
     /// Polling rather than observing because the engine exposes all three as
     /// state and publishes a change for none, and the wait is bounded.
     private func waitForInputReady(
-        deadline: Date, _ completion: @escaping (Bool) -> Void
+        deadline: Date, harness: AgentHarness,
+        _ completion: @escaping (Bool) -> Void
     ) {
         if isKittyKeyboardActive, hasReceivedOutput, hasVisibleContent {
             completion(true)
@@ -426,10 +517,11 @@ extension TerminalBackend {
             return
         }
         DispatchQueue.main.asyncAfter(
-            deadline: .now() + SessionSubmit.kittyPollInterval
+            deadline: .now() + harness.readinessPollInterval
         ) { [weak self] in
             guard let self else { return }
-            self.waitForInputReady(deadline: deadline, completion)
+            self.waitForInputReady(
+                deadline: deadline, harness: harness, completion)
         }
     }
 }

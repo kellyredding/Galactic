@@ -25,6 +25,9 @@ final class SubmitVerificationTests: XCTestCase {
         }
     }
 
+    /// Shipped timings unless a case says otherwise.
+    private let harness = StubHarness()
+
     /// Let the poll run for a while in real time. The bound under test is
     /// `submitVerifyTimeout`; these waits are in poll intervals.
     private func settle(_ turns: Int) {
@@ -37,13 +40,40 @@ final class SubmitVerificationTests: XCTestCase {
         }
     }
 
+    /// Run past a shortened verification bound and return the harness used.
+    private func pastTheBound(
+        _ configure: (StubHarness, StubBackend) -> Void
+    ) -> StubBackend {
+        let quick = StubHarness.quick()
+        // A bare carriage return, so the resubmit inside a retry takes the
+        // path that needs no keyboard protocol and the test is not timing
+        // against a kitty wait it does not care about.
+        quick.bytes = [0x0D]
+        // One retry, so the count of writes is decided by the policy rather
+        // than by how many shortened rounds happen to fit in the window. At
+        // the shipped ceiling of two, a second retype lands within a
+        // millisecond of the observation deadline and the assertion races.
+        quick.retries = 1
+        let backend = StubBackend()
+        configure(quick, backend)
+
+        let past = expectation(description: "past the bound")
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + quick.verifyTimeout + 0.3
+        ) { past.fulfill() }
+        wait(for: [past], timeout: quick.verifyTimeout + 2)
+        return backend
+    }
+
     // MARK: - Opting out
 
     /// The supported opt-out is a nil value, not a skipped call — so a host
     /// that has no acceptance signal still has the mechanism wired.
     func testNilVerificationNeverRetypes() {
         let backend = StubBackend()
-        backend.verifySubmission(text: "/resume ", verification: nil)
+        backend.verifySubmission(
+            text: "/resume ", harness: harness, verification: nil
+        )
         settle(4)
         XCTAssertTrue(
             backend.written.isEmpty,
@@ -59,7 +89,7 @@ final class SubmitVerificationTests: XCTestCase {
         agent.accepted = true
 
         backend.verifySubmission(
-            text: "/resume ", verification: agent.verification
+            text: "/resume ", harness: harness, verification: agent.verification
         )
         settle(4)
         XCTAssertTrue(
@@ -77,7 +107,7 @@ final class SubmitVerificationTests: XCTestCase {
         let agent = Agent()
 
         backend.verifySubmission(
-            text: "/resume ", verification: agent.verification
+            text: "/resume ", harness: harness, verification: agent.verification
         )
         settle(2)
         XCTAssertTrue(
@@ -99,22 +129,89 @@ final class SubmitVerificationTests: XCTestCase {
     /// "repeat the last command", so a retry that only re-submits would re-run
     /// whatever preceded it instead of rescuing what was lost.
     func testAnUnconfirmedPromptIsRetypedBeforeItIsResubmitted() {
-        let backend = StubBackend()
         let agent = Agent()
-
-        backend.verifySubmission(
-            text: "/resume ", verification: agent.verification
-        )
-
-        let past = expectation(description: "past the bound")
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + SessionSubmit.submitVerifyTimeout + 0.3
-        ) { past.fulfill() }
-        wait(for: [past], timeout: SessionSubmit.submitVerifyTimeout + 2)
-
+        let backend = pastTheBound { quick, backend in
+            backend.verifySubmission(
+                text: "/resume ", harness: quick,
+                verification: agent.verification
+            )
+        }
         XCTAssertEqual(
             backend.written, ["/resume "],
             "the retry must retype the prompt, not just press Enter again"
+        )
+    }
+
+    // MARK: - Detection is separate from retry
+
+    /// The split this policy exists for. A caller that declines the retype is
+    /// saying the payload is too large to risk a second copy of — not that it
+    /// would rather not know the prompt vanished.
+    func testReportOnlyNoticesTheLossWithoutRetyping() {
+        let agent = Agent()
+        let backend = pastTheBound { quick, backend in
+            backend.verifySubmission(
+                text: "a very large scrollback payload ",
+                harness: quick,
+                verification: agent.verification,
+                retry: .reportOnly
+            )
+        }
+        XCTAssertTrue(
+            backend.written.isEmpty,
+            "reportOnly must not put a second copy of the payload on the wire"
+        )
+        XCTAssertTrue(
+            backend.bytesWritten.isEmpty,
+            "and must not resubmit either — the whole gesture is declined"
+        )
+    }
+
+    /// Guards the regression that would make the split pointless: retype is
+    /// still the default, so an existing caller that says nothing about retry
+    /// behaves exactly as it did before the policy existed.
+    func testRetypeRemainsTheDefault() {
+        let agent = Agent()
+        let backend = pastTheBound { quick, backend in
+            backend.verifySubmission(
+                text: "/resume ", harness: quick,
+                verification: agent.verification
+            )
+        }
+        XCTAssertEqual(
+            backend.written, ["/resume "],
+            "omitting the policy must keep retyping, not silently stop"
+        )
+    }
+
+    /// A nil verification outranks the policy. There is nothing to detect
+    /// without a signal, so reportOnly has nothing to report.
+    func testNilVerificationIsInertUnderEitherPolicy() {
+        let backend = pastTheBound { quick, backend in
+            backend.verifySubmission(
+                text: "/resume ", harness: quick,
+                verification: nil, retry: .reportOnly
+            )
+        }
+        XCTAssertTrue(
+            backend.written.isEmpty, "no signal means no work of any kind"
+        )
+    }
+
+    /// The ceiling is the harness's answer, not a shared constant. Zero
+    /// retries means the first loss is final.
+    func testTheRetryCeilingComesFromTheHarness() {
+        let agent = Agent()
+        let backend = pastTheBound { quick, backend in
+            quick.retries = 0
+            backend.verifySubmission(
+                text: "/resume ", harness: quick,
+                verification: agent.verification
+            )
+        }
+        XCTAssertTrue(
+            backend.written.isEmpty,
+            "a harness that allows no retries must not get one anyway"
         )
     }
 
@@ -125,7 +222,7 @@ final class SubmitVerificationTests: XCTestCase {
         agent.alive = false
 
         backend.verifySubmission(
-            text: "/resume ", verification: agent.verification
+            text: "/resume ", harness: harness, verification: agent.verification
         )
         settle(4)
         XCTAssertTrue(

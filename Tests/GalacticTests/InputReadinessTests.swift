@@ -26,6 +26,10 @@ final class InputReadinessTests: XCTestCase {
         }
     }
 
+    /// Shipped timings unless a case says otherwise — these pin behaviour,
+    /// not bounds.
+    private let harness = StubHarness()
+
     private func readiness(
         kitty: Bool, output: Bool, drawn: Bool
     ) -> (backend: StubBackend, answered: () -> Bool?) {
@@ -34,7 +38,7 @@ final class InputReadinessTests: XCTestCase {
         backend.output = output
         backend.drawn = drawn
         var answer: Bool?
-        backend.whenAcceptingInput { answer = $0 }
+        backend.whenAcceptingInput(harness: harness) { answer = $0 }
         return (backend, { answer })
     }
 
@@ -103,7 +107,7 @@ final class InputReadinessTests: XCTestCase {
         backend.kitty = true
         backend.output = true
         var answer: Bool?
-        backend.whenAcceptingInput { answer = $0 }
+        backend.whenAcceptingInput(harness: harness) { answer = $0 }
         settle(1)
         XCTAssertNil(answer, "started but still blank, so still waiting")
 
@@ -120,19 +124,44 @@ final class InputReadinessTests: XCTestCase {
     /// child that is merely slow. Reporting not-ready is the signal; writing
     /// anyway is the behaviour, because a late write beats no write.
     func testGivingUpReportsNotReadyRatherThanNeverAnswering() {
+        // A shortened bound. The behaviour under test is that the wait answers
+        // at all when nothing ever becomes ready, and that is the same
+        // behaviour at 0.2s as at the shipped 5s — paid once per run instead
+        // of five seconds per run.
+        let quick = StubHarness.quick()
         let backend = StubBackend()
         var answer: Bool?
-        backend.whenAcceptingInput { answer = $0 }
+        backend.whenAcceptingInput(harness: quick) { answer = $0 }
 
         let deadline = expectation(description: "past the timeout")
         DispatchQueue.main.asyncAfter(
-            deadline: .now() + SessionSubmit.kittyReadyTimeout + 0.3
+            deadline: .now() + quick.readinessTimeout + 0.3
         ) { deadline.fulfill() }
-        wait(for: [deadline], timeout: SessionSubmit.kittyReadyTimeout + 2)
+        wait(for: [deadline], timeout: quick.readinessTimeout + 2)
 
         XCTAssertEqual(
             answer, false,
             "the gate must answer even when the child never becomes ready"
+        )
+    }
+
+    /// The bound is the harness's to state, not the seam's. A harness that
+    /// starts fast must not be waited on for another program's startup.
+    func testTheReadinessBoundComesFromTheHarness() {
+        let quick = StubHarness.quick()
+        let backend = StubBackend()
+        var answer: Bool?
+        backend.whenAcceptingInput(harness: quick) { answer = $0 }
+
+        let past = expectation(description: "past the short bound")
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + quick.readinessTimeout + 0.2
+        ) { past.fulfill() }
+        wait(for: [past], timeout: 2)
+
+        XCTAssertEqual(
+            answer, false,
+            "the wait must end on the harness's bound, not a shared constant"
         )
     }
 }

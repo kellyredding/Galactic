@@ -30,11 +30,12 @@ public enum KeystrokeConfigurationState: Equatable {
 /// capability for its vendor would not be, and would make a second harness a
 /// rewrite rather than an addition.
 ///
-/// **Not yet consumed.** The submit seam and the keybindings writer still reach
-/// their Claude Code implementations directly. This exists now so the contract
-/// is written down while the knowledge behind it is fresh, and so the vendor
-/// code has one place to live. Routing the seam through it is a refactor, and
-/// bundling a refactor with a large move would make any failure ambiguous.
+/// Every value here is calibrated against a specific program's behaviour, so
+/// each one is a question only a harness can answer. They are on the protocol
+/// rather than in the submit seam because a constant measured against Claude
+/// Code's render loop is not a fact about terminals — leaving them behind
+/// would produce a seam that routes the submit bytes correctly and then
+/// governs the send with another agent's timing.
 public protocol AgentHarness {
     /// Bytes that commit whatever is currently typed.
     ///
@@ -45,6 +46,51 @@ public protocol AgentHarness {
     /// How long to leave between writing text and committing it, so the
     /// harness processes them as separate events rather than one batch.
     var inputPacingDelay: TimeInterval { get }
+
+    /// How long to wait for the harness to become able to read typed input
+    /// before writing anyway.
+    ///
+    /// A program is not ready to be typed at the moment its process exists.
+    /// Text written into that window is lost in silence — no echo, no error —
+    /// so this bounds a wait rather than a retry.
+    var inputReadinessTimeout: TimeInterval { get }
+
+    /// How often to re-check readiness within that bound.
+    var readinessPollInterval: TimeInterval { get }
+
+    /// How long to wait for confirmation that a prompt was taken before
+    /// treating it as lost.
+    ///
+    /// Must exceed however long this harness's acceptance signal takes to
+    /// arrive. A window shorter than the signal it waits on reports every
+    /// send as lost, and — where the caller retypes — duplicates prompts that
+    /// worked.
+    var submitVerifyTimeout: TimeInterval { get }
+
+    /// How often to check for that confirmation within the bound above.
+    var submitVerifyPollInterval: TimeInterval { get }
+
+    /// Maximum resend attempts before a lost prompt is abandoned.
+    var maxSubmitRetries: Int { get }
+
+    /// Whether recovering a lost prompt requires retyping the whole gesture
+    /// rather than resending the submit alone.
+    ///
+    /// True for Claude Code: by the time a retry fires the composer is
+    /// usually empty, and Enter on an empty composer repeats the last
+    /// command — so a bare resubmit would re-run whatever ran before it
+    /// instead of rescuing what was lost. A harness that does nothing on an
+    /// empty submit answers false and saves the second write.
+    var retypeOnRetry: Bool { get }
+
+    /// Commands this harness intercepts before its prompt pipeline runs, so
+    /// no acceptance signal ever fires for them.
+    ///
+    /// A host whose acceptance signal comes from the harness's own hook must
+    /// not wait on one for these. The failure this prevents is quiet and
+    /// backwards: a host that compensates with optimism of its own would then
+    /// be verifying a prompt against its own guess that the prompt landed.
+    var acceptanceBypassingCommands: Set<String> { get }
 
     /// Adjust a command so any completion UI it opens is dismissed before it
     /// is committed.

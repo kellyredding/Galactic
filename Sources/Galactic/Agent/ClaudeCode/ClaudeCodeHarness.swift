@@ -13,6 +13,34 @@ public struct ClaudeCodeHarness: AgentHarness {
 
     public var inputPacingDelay: TimeInterval { SessionSubmit.inputPacingDelay }
 
+    public var inputReadinessTimeout: TimeInterval {
+        SessionSubmit.kittyReadyTimeout
+    }
+
+    public var readinessPollInterval: TimeInterval {
+        SessionSubmit.kittyPollInterval
+    }
+
+    public var submitVerifyTimeout: TimeInterval {
+        SessionSubmit.submitVerifyTimeout
+    }
+
+    public var submitVerifyPollInterval: TimeInterval {
+        SessionSubmit.submitVerifyPollInterval
+    }
+
+    public var maxSubmitRetries: Int { SessionSubmit.maxSubmitRetries }
+
+    /// Enter on an empty composer repeats the last command, so a bare
+    /// resubmit would re-run whatever preceded the lost prompt.
+    public var retypeOnRetry: Bool { true }
+
+    /// Both are intercepted at the TUI level before the prompt-submit
+    /// pipeline runs, so `UserPromptSubmit` never fires for them.
+    public var acceptanceBypassingCommands: Set<String> {
+        ["/clear", "/compact"]
+    }
+
     /// A trailing space closes the completion popup that any slash command
     /// opens: the popup filters on the token under the cursor, and a space ends
     /// that token so nothing matches.
