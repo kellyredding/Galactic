@@ -285,42 +285,35 @@ public let annotationCSS: String = """
 public func annotationCSSVars(isDark: Bool) -> String {
     let monoFontStack = "\"SF Mono\", \"Menlo\", "
         + "\"Monaco\", \"Courier New\", monospace"
-    if isDark {
-        return """
-            --bg: #0d1117;
-            --fg: #e6edf3;
-            --code-bg: #161b22;
-            --code-border: #30363d;
-            --blockquote-fg: #8b949e;
-            --table-header-bg: #21262d;
-            --card-active-bg: \
-        rgba(255, 255, 120, 0.12);
-            --card-active-border: \
-        rgba(255, 220, 50, 0.5);
-            --annotation-active-block-bg: \
-        rgba(255, 255, 120, 0.08);
-            --annotation-active-block-border: \
-        rgba(255, 220, 50, 0.35);
-            --delete-color: #ff5252;
-            --font-family-mono: \(monoFontStack);
-        """
-    } else {
-        return """
-            --bg: #ffffff;
-            --fg: #1f2328;
-            --code-bg: #f6f8fa;
-            --code-border: #d0d7de;
-            --blockquote-fg: #656d76;
-            --table-header-bg: #f0f0f0;
-            --card-active-bg: \
-        rgba(255, 248, 220, 0.8);
-            --card-active-border: #d4a017;
-            --annotation-active-block-bg: \
-        rgba(255, 248, 220, 0.5);
-            --annotation-active-block-border: \
-        rgba(212, 160, 23, 0.6);
-            --delete-color: #ff3b30;
-            --font-family-mono: \(monoFontStack);
-        """
-    }
+    let theme = ReaderTheme.standard(isDark: isDark)
+
+    // The card-active and delete colours stay literal: they are this
+    // component's own, not part of the palette a document is drawn in, and
+    // pulling them into `ReaderTheme` would put a highlight nobody outside
+    // annotations uses into a vocabulary every reader reads.
+    let cardActiveBg = isDark
+        ? "rgba(255, 255, 120, 0.12)" : "rgba(255, 248, 220, 0.8)"
+    let cardActiveBorder = isDark
+        ? "rgba(255, 220, 50, 0.5)" : "#d4a017"
+    let activeBlockBg = isDark
+        ? "rgba(255, 255, 120, 0.08)" : "rgba(255, 248, 220, 0.5)"
+    let activeBlockBorder = isDark
+        ? "rgba(255, 220, 50, 0.35)" : "rgba(212, 160, 23, 0.6)"
+    let tableHeaderBg = isDark ? "#21262d" : "#f0f0f0"
+    let deleteColor = isDark ? "#ff5252" : "#ff3b30"
+
+    return """
+        --bg: \(theme.background);
+        --fg: \(theme.foreground);
+        --code-bg: \(theme.raisedSurface);
+        --code-border: \(theme.border);
+        --blockquote-fg: \(theme.mutedForeground);
+        --table-header-bg: \(tableHeaderBg);
+        --card-active-bg: \(cardActiveBg);
+        --card-active-border: \(cardActiveBorder);
+        --annotation-active-block-bg: \(activeBlockBg);
+        --annotation-active-block-border: \(activeBlockBorder);
+        --delete-color: \(deleteColor);
+        --font-family-mono: \(monoFontStack);
+    """
 }
