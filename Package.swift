@@ -27,12 +27,17 @@ let package = Package(
                 .product(name: "SwiftTerm", package: "SwiftTerm")
             ],
             // Emoji autocomplete data and behaviour, injected into card
-            // composers. Copied rather than processed: these ship to a WebView
-            // verbatim, and processing would let the toolchain rewrite the
-            // exact bytes the page is meant to evaluate.
+            // composers, plus the vendored highlighting and diagram assets a
+            // reader document splices in. Copied rather than processed: these
+            // ship to a WebView verbatim, and processing would let the
+            // toolchain rewrite the exact bytes the page is meant to evaluate.
             resources: [
                 .copy("Resources/emoji-data.js"),
                 .copy("Resources/emoji-autocomplete.js"),
+                .copy("Resources/highlight.min.js"),
+                .copy("Resources/github.min.css"),
+                .copy("Resources/github-dark.min.css"),
+                .copy("Resources/mermaid.min.js"),
             ]
         ),
         .testTarget(
