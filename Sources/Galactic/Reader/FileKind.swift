@@ -102,24 +102,28 @@ public enum FileKind: Equatable, Sendable {
     }
 
     /// How a reader of this kind anchors annotations into its markup.
+    ///
+    /// Asked of the renderer rather than answered here. A renderer knows the
+    /// markup it emits, and stating it twice is how the anchoring and the
+    /// document it describes come apart — which is the drift this table was
+    /// written to end, arrived at from the other direction.
     public var anchoring: ReaderAnchoring {
         switch self {
         case .markdown:
+            // The markdown renderer has not moved in yet, so this is still
+            // the one place its markup is described. Delete in favour of the
+            // renderer's own the moment there is one to ask.
             return .lines(
                 selector: ".md-block",
                 lineAttr: "data-line-start",
                 endLineAttr: "data-line-end"
             )
-        case .source, .unhandled:
-            return .lines(selector: ".code-line")
-        case .table:
-            return .rows()
-        case .html:
-            return .blocks(selector: ".annotatable-block")
-        case .transcript:
-            return .blocks(selector: ".transcript-step")
-        case .image, .mermaid:
-            return .whole
+        case .source, .unhandled: return SourceRenderer.anchoring
+        case .table: return TableRenderer.anchoring
+        case .html: return HTMLRenderer.anchoring
+        case .transcript: return TranscriptRenderer.anchoring
+        case .image: return ImageRenderer.anchoring
+        case .mermaid: return MermaidRenderer.anchoring
         }
     }
 
