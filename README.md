@@ -10,10 +10,11 @@ directly to any specific implementation.
 
 v0.6.0. Began as an engine bridge and is now also the shared
 substrate for the applications built on it: pane composition, the
-scrollback surface, find, text-entry bindings, and automated
-prompt submission. The surface is correspondingly wider than it
-once was and still evolving — pin it exactly, and expect breaking
-changes in minor versions while the major version is zero.
+scrollback surface, find, text-entry bindings, automated prompt
+submission, and reading files. The surface is correspondingly
+wider than it once was and still evolving — pin it exactly, and
+expect breaking changes in minor versions while the major version
+is zero.
 
 ## Requirements
 
@@ -78,6 +79,13 @@ The boundary separates two concerns:
   protocol types and engine-agnostic value types. The concrete
   engine is selected via a factory at construction time, leaving
   room to swap in a different emulator without churning chrome.
+
+The same division governs everything that has arrived since. What
+a host keeps is its own data and the decisions only it can make:
+where content comes from, where annotations are stored, what a
+document is called, which policy values it prefers. What lives
+here is the mechanism — and enough of a seam that a host opting
+out supplies a value rather than going without the code.
 
 ## Usage
 
@@ -242,6 +250,75 @@ if let snapshot = backend.captureScrollbackSnapshot() {
   italic, underline, inverse, dim, invisible, crossed-out,
   blink).
 
+### Reading files
+
+Given a file, render it and let a reader mark it up. A host
+supplies content and a place to keep annotations; everything about
+building the page, anchoring into it, and preserving a composer
+across a rebuild happens here.
+
+- `FileKind` — what a file is, resolved from its name and (for
+  the one extension where the name is not enough) its first line.
+  Answers which renderer opens it, how that renderer anchors, its
+  highlight language, and a default size ceiling. A kind this
+  package has no renderer for resolves to `.unhandled` carrying
+  the extension, which is how a host adds a reader of its own
+  without this table learning about it.
+- `ReaderHostView` — hosts a reader's page. Takes what the page is
+  built from as a `reloadToken`, how to build it, and how to build
+  the script that annotates it. Rebuilds when the token changes,
+  rescuing anything half-written in a composer on the way.
+- `ReaderDocument` — assembles the page: shell, theme, the
+  reader's own rules, and the card scripts in the order they have
+  to load. `annotationStyleTag` and `cardScriptTags` are callable
+  on their own, for a document that arrived with its own markup
+  and gets the annotation layer spliced in rather than built
+  around it.
+- `ReaderTheme` — the eight colour roles a reader document is
+  drawn in. `ReaderFont` — its two font stacks.
+- `ReaderWebView` — the web view a reader is hosted in, with the
+  AppKit accommodations a document needs: key-view isolation,
+  function-key silence, zoom, and file drops.
+- `ReaderAssets` — the vendored highlighting and diagram bundles,
+  inlined into a page. The diagram bundle is large; ask a
+  `FileKind` whether the page needs it.
+- `HTMLEscape` — escaping for text spliced into a page, and the
+  same escape as JavaScript for a page that renders rows of its
+  own after load.
+
+Renderers, each declaring the anchoring for the markup it emits:
+`SourceRenderer`, `MarkdownRenderer`, `HTMLRenderer`,
+`TableRenderer`, `TranscriptRenderer`, `ImageRenderer`,
+`MermaidRenderer`.
+
+### Annotating a document
+
+- `ReaderAnnotation` — what a reader needs to see of an
+  annotation. A protocol rather than a type, because an annotation
+  is something a host already stores; everything anchor-shaped
+  defaults to nil, so a store that only produces line ranges
+  declares three members.
+- `ReaderAnchorType` — line, row, block, diff, or whole-document.
+  Complete rather than matched to what any one renderer emits.
+- `ReaderAnchoring` — how a renderer's markup is anchored, and
+  which anchor kinds that renderer will place. One value, because
+  the two disagreeing is how a rebuild comes to show a different
+  set of cards than the initial load.
+- `buildAnnotationInitJS` — hands a reader's annotation state to
+  the page, screening on the way through.
+
+### Markdown
+
+- `MarkdownDocument` — the one place markdown is parsed.
+- `MarkdownAttributedText` — markdown as styled text, for a
+  surface that is not a web view.
+
+Two emitters over one parse. The formats genuinely differ — a
+tooltip cannot host a web view — but the parse must not, because
+two parsers disagree quietly about nested lists and task items and
+the same document then reads differently depending on which
+surface shows it.
+
 ### Configuration
 
 - `GalacticConfiguration` — protocol the host's settings type
@@ -287,6 +364,18 @@ a fork of
 [`migueldeicaza/SwiftTerm`](https://github.com/migueldeicaza/SwiftTerm)
 with patches required for the engine bridge. SwiftTerm is
 MIT-licensed.
+
+It also depends on
+[`swiftlang/swift-markdown`](https://github.com/swiftlang/swift-markdown)
+for the markdown subsystem, which every consumer inherits. That
+is the point rather than a cost: a host that renders markdown
+anywhere should render it from this parse, not stand up a second
+one. Apache-2.0 with a Runtime Library Exception.
+
+The vendored highlighting and diagram bundles ship as package
+resources — [highlight.js](https://highlightjs.org) (BSD-3-Clause)
+and [Mermaid](https://mermaid.js.org) (MIT), each inlined into a
+reader's page rather than fetched.
 
 ## License
 
