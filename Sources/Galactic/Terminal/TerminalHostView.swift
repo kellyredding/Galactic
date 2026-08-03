@@ -606,9 +606,23 @@ public final class TerminalHostView: NSView {
                       window === self.window else { return }
                 self.pane.redraw()
                 guard self.isPreferredPane else { return }
-                if window.firstResponder !== self.pane.view {
-                    self.requestFocus()
-                }
+                // Only when nothing in this pane already holds the caret.
+                //
+                // Compared against the whole view tree rather than the live
+                // terminal alone, because a pane with a scrollback open holds
+                // focus through the overlay's web view — which is not
+                // `pane.view`, so testing that one view reads a focused pane as
+                // an unfocused one and re-asserts over it.
+                //
+                // Harmless while the pane was the only claimant, and not
+                // harmless once a sibling is being focused deliberately: this
+                // notification also fires when the find panel hands key back to
+                // its parent, which is exactly when a pane-directed command is
+                // in flight. The re-assert would then land a hop after that
+                // command and take the caret straight back to the pane the bar
+                // was over.
+                guard !self.holdsFirstResponder else { return }
+                self.requestFocus()
             }
             .store(in: &cancellables)
     }
@@ -714,6 +728,18 @@ public final class TerminalHostView: NSView {
         (paneRegistry?.lastFocusedPaneKind ?? .session) == paneKind
     }
 
+    /// Whether the caret is anywhere inside this pane.
+    ///
+    /// Descendants count, not just the live terminal: with a scrollback open the
+    /// overlay's web view is what holds first responder, and it is no less this
+    /// pane for being a different view. A test against `pane.view` alone reports
+    /// a pane the user is reading and searching as having no focus at all.
+    private var holdsFirstResponder: Bool {
+        guard let responder = window?.firstResponder as? NSView
+        else { return false }
+        return responder === self || responder.isDescendant(of: self)
+    }
+
     func requestFocus() {
         TerminalFocus.request(
             in: window,
@@ -786,13 +812,7 @@ public final class TerminalHostView: NSView {
     /// which covers the terminal surface, an open scrollback overlay, and
     /// anything nested nobody has thought of.
     private func refreshFocusState() {
-        let responder = window?.firstResponder
-        var isFocusInPane = false
-        if let responderView = responder as? NSView {
-            isFocusInPane =
-                responderView === self
-                || responderView.isDescendant(of: self)
-        }
+        var isFocusInPane = holdsFirstResponder
 
         // The find bar is this pane's own UI even though AppKit puts it in a
         // separate window, so searching a scrollback must not read as having
