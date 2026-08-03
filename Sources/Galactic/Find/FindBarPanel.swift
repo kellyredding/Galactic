@@ -285,6 +285,45 @@ public final class FindBarPanelController {
         reanchor(to: anchorView, in: parent)
     }
 
+    /// Close the bar because the user asked to type somewhere else.
+    ///
+    /// The bar holds key from its own panel, so a caller that sets first
+    /// responder in the parent window while it is up succeeds and still does
+    /// not get the caret: first responder only receives keys in the key
+    /// window. A command whose whole purpose is to move focus therefore has to
+    /// take the keyboard back before asking, and it cannot do that by setting
+    /// a responder — only by standing the panel down.
+    ///
+    /// Distinct from `dismiss()` in the one way that matters: no focus
+    /// restore. The caller is about to install its own responder, and
+    /// restoring first would briefly park focus in the pane the bar came from
+    /// — long enough for the focus observers to record it as where the user
+    /// was last, which is the memory the next pane-directed command reads.
+    /// Nilling `priorParentResponder` ahead of `dismiss` is the same move
+    /// `present` makes when handing the panel between surfaces, for the same
+    /// reason.
+    ///
+    /// Synchronous, and deliberately not routed through the owning
+    /// controller's visibility sink: that sink is `.receive(on: RunLoop.main)`,
+    /// so teardown would land a hop after the caller's focus request and
+    /// `dismiss`'s prior-responder restore would take the caret back.
+    /// `isVisible` is still set false to keep the controller honest — it
+    /// survives tab and session switches so find can restore on return, so a
+    /// stale `true` would re-present the bar the next time that surface became
+    /// active. The sink that write triggers finds `currentController` already
+    /// cleared and no-ops.
+    ///
+    /// Reports whether a bar was actually standing down, for a caller that
+    /// wants to know it changed anything.
+    @discardableResult
+    public func surrenderForFocusChange() -> Bool {
+        guard panel != nil else { return false }
+        priorParentResponder = nil
+        currentController?.isVisible = false
+        dismiss()
+        return true
+    }
+
     /// Hide the panel and return first responder to whoever
     /// held it before `present` was called.
     public func dismiss() {

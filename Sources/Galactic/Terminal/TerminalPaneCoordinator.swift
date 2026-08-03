@@ -72,6 +72,17 @@ public final class TerminalPaneCoordinator: TerminalPaneRegistry {
     /// the storage happens to yield. With two kinds an unordered read happens
     /// to give the same answer; it would stop doing so the moment a third
     /// exists, and the bug would look like a launch-to-launch flicker.
+    /// Deliberately does **not** surrender the find bar, where `restoreFocus`
+    /// does. This is the settling intent — putting the caret back where it was
+    /// after a tab or session change — not a user asking to type somewhere new.
+    /// Returning to a tab runs through here, and the bar's visibility survives
+    /// tab switches on purpose so find can restore on return; standing it down
+    /// here would consume the very state that restore depends on.
+    ///
+    /// Nothing is lost by the omission: a host that hides a pane on session
+    /// change already closes the bar through `TerminalFocus.resignIfHeld`, which
+    /// is the correct place for it — leaving a pane is what should take the bar,
+    /// not arriving at one.
     public func restorePreferredPaneFocus() {
         if restoreIfRegistered(kind: lastFocusedPaneKind) { return }
         // The session pane wins the fallback: it is the one that always exists.
@@ -79,9 +90,51 @@ public final class TerminalPaneCoordinator: TerminalPaneRegistry {
         _ = restoreIfRegistered(kind: .shell)
     }
 
-    /// Restore focus to the pane of exactly `kind`, ignoring the focus memory.
+    /// Restore focus to the pane of exactly `kind`, ignoring the focus memory —
+    /// and then update that memory to say so.
+    ///
+    /// The write is not bookkeeping; it closes a race that only exists because
+    /// this surrenders the find bar. Standing the panel down makes the parent
+    /// window key again, which wakes every host's became-key observer, and that
+    /// observer re-asserts focus for whichever pane the memory still names. Both
+    /// it and the restore below land through `DispatchQueue.main.async`, so with
+    /// a stale memory the sequence is: caret arrives in the pane the user asked
+    /// for, then the pane they were previously in takes it straight back. That is
+    /// invisible when the two are the same pane — which is why focusing the pane
+    /// the bar was already over looked correct while focusing the other one did
+    /// not.
+    ///
+    /// Ordered after the restore so a `kind` with no registered pane leaves the
+    /// memory alone: nothing moved, so nothing should claim to have. Still
+    /// synchronous, and therefore still ahead of either deferred hop.
+    @MainActor
     public func restoreFocus(kind: TerminalPaneKind) {
-        _ = restoreIfRegistered(kind: kind)
+        surrenderFindBar()
+        guard restoreIfRegistered(kind: kind) else { return }
+        lastFocusedPaneKind = kind
+    }
+
+    /// Take the keyboard back from the find bar before putting the caret in a
+    /// pane.
+    ///
+    /// Called from `restoreFocus` alone, because that is the entry point that
+    /// names a pane the user asked for: opening or focusing one, or landing
+    /// focus after one closes. That is the single intent for which evicting the
+    /// bar is right, which is why this sits here rather than in
+    /// `TerminalFocus.request` or a host's `requestFocus`. Those also serve the
+    /// unrelated intent of putting focus back once AppKit has settled — they
+    /// run on window-became-key, on a view entering a window, and on sheet
+    /// cancel, every one of which can happen while the user is typing in the
+    /// bar.
+    ///
+    /// Without this the request still succeeds and still fails: the pane draws
+    /// focused because it genuinely is first responder, while every keystroke
+    /// continues to reach the find field in the panel that holds key. That
+    /// half-state — a command that reports success and does nothing — is the
+    /// defect, and it is invisible from inside either restorer.
+    @MainActor
+    private func surrenderFindBar() {
+        FindBarPanelController.shared.surrenderForFocusChange()
     }
 
     /// Invoke the restorer for `kind`, reporting whether there was one.

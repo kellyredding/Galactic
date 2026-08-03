@@ -22,6 +22,11 @@ import XCTest
 /// with the protocol. Until there was one shared implementation there was
 /// nothing else to point them at; now that there is, a double passing these
 /// would have proved only that the double was right.
+/// Main-actor isolated because the focus-restoring members are: they surrender
+/// the find bar before restoring, and the panel that holds it is isolated. The
+/// unsaved-work cases here deliver their completions on main regardless, so the
+/// annotation costs them nothing.
+@MainActor
 final class TerminalPaneRegistryTests: XCTestCase {
 
     /// Let the main queue drain.
@@ -213,6 +218,73 @@ final class TerminalPaneRegistryTests: XCTestCase {
         registry.restorePreferredPaneFocus()
         registry.restoreFocus(kind: .shell)
 
+        XCTAssertEqual(harness.restored, [])
+    }
+
+    /// Restoring focus surrenders the find bar first, and with no bar up that
+    /// has to cost nothing.
+    ///
+    /// Whether the surrender actually moves the keyboard needs a key window and
+    /// so is manual, but every restoration in the app takes this path and almost
+    /// all of them take it with no bar presenting. The guard reporting false is
+    /// what makes that case a no-op rather than a teardown of state it does not
+    /// own — and it is why the restoration cases above still describe the
+    /// behaviour they did before the surrender existed.
+    func testSurrenderingWithNoFindBarUpIsInert() {
+        XCTAssertFalse(
+            FindBarPanelController.shared.surrenderForFocusChange(),
+            "surrender reported standing a bar down when none was presenting"
+        )
+
+        let registry = TerminalPaneCoordinator()
+        let harness = PaneHarness()
+        harness.registerPane(.session, on: registry)
+
+        registry.restoreFocus(kind: .session)
+
+        XCTAssertEqual(
+            harness.restored, [.session],
+            "the surrender interfered with an ordinary focus restore"
+        )
+    }
+
+    /// Naming a pane makes it the remembered one, immediately.
+    ///
+    /// Not bookkeeping: surrendering the find bar hands key back to the parent
+    /// window, which wakes each host's became-key observer, and that observer
+    /// re-asserts focus for whichever pane this memory names. Both it and the
+    /// restore itself land a runloop hop later, so a stale memory lets the
+    /// previous pane take the caret back after the requested one received it.
+    func testRestoringByKindBecomesTheRememberedPane() {
+        let registry = TerminalPaneCoordinator()
+        let harness = PaneHarness()
+        harness.registerPane(.session, on: registry)
+        harness.registerPane(.shell, on: registry)
+        registry.lastFocusedPaneKind = .session
+
+        registry.restoreFocus(kind: .shell)
+
+        XCTAssertEqual(
+            registry.lastFocusedPaneKind, .shell,
+            "the pane the caller asked for did not become the remembered one"
+        )
+    }
+
+    /// A kind with nothing registered moved no caret, so it may not claim the
+    /// memory either — otherwise a command naming a closed pane would redirect
+    /// the next window activation to a pane that is not there.
+    func testRestoringAnAbsentKindLeavesTheMemoryAlone() {
+        let registry = TerminalPaneCoordinator()
+        let harness = PaneHarness()
+        harness.registerPane(.session, on: registry)
+        registry.lastFocusedPaneKind = .session
+
+        registry.restoreFocus(kind: .shell)
+
+        XCTAssertEqual(
+            registry.lastFocusedPaneKind, .session,
+            "an unregistered kind overwrote the focus memory"
+        )
         XCTAssertEqual(harness.restored, [])
     }
 

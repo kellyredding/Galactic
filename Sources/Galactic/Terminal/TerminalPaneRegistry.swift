@@ -39,11 +39,19 @@ import Combine
 /// Main-thread only, by expectation rather than by annotation, and completions
 /// are delivered on main.
 ///
-/// Deliberately not `@MainActor`: no conformer synchronises its storage today
-/// and every caller is already on main, so the annotation would fix no defect
+/// Mostly not `@MainActor`: no conformer synchronises its storage today and
+/// every caller is already on main, so a blanket annotation would fix no defect
 /// while forcing `await` on every call site. Recorded here so a later reader can
 /// tell this was decided rather than overlooked — if a caller ever does arrive
 /// off main, the annotation is the fix, not a lock.
+///
+/// The two focus-restoring members are the exception and *are* annotated,
+/// because putting the caret in a pane means first taking the keyboard back
+/// from the find bar, whose panel is main-actor isolated. There the annotation
+/// carries a real requirement rather than restating a convention — the same
+/// distinction `TerminalFocus` draws between `request` and `resignIfHeld`. It
+/// cost no call site an `await`: everything that asks for pane focus is a menu
+/// action or a SwiftUI event handler, already isolated.
 public protocol TerminalPaneRegistry: AnyObject {
 
     // MARK: - Focus memory
@@ -92,6 +100,11 @@ public protocol TerminalPaneRegistry: AnyObject {
     /// receives focus becomes a function of hash order: stable enough to look
     /// correct while being developed, and free to differ per launch. Prefer the
     /// kind that always exists, then name the remainder explicitly.
+    ///
+    /// Unlike `restoreFocus`, this leaves the find bar alone — see the note
+    /// there. Putting the caret back where it already was is not a request to
+    /// type somewhere new, and a tab returning to the front runs through here,
+    /// where the bar is expected to restore rather than to be stood down.
     func restorePreferredPaneFocus()
 
     /// Put focus into the registered pane of exactly `kind`, if there is one.
@@ -100,6 +113,18 @@ public protocol TerminalPaneRegistry: AnyObject {
     /// site knows statically which pane it means, so the kind is an argument
     /// they already hold, and a third pane kind would otherwise mean a third
     /// method on this protocol and both conformers.
+    ///
+    /// Surrenders the find bar before restoring, because naming a pane is the
+    /// user asking to type in it. The bar holds the keyboard from its own panel,
+    /// so a responder set in the parent window while it is up succeeds and still
+    /// leaves the caret in the find field — a command that reports success and
+    /// does nothing.
+    ///
+    /// Main-actor isolated where the rest of this protocol is not, and for the
+    /// same reason `TerminalFocus.resignIfHeld` is: the panel it stands down is
+    /// itself main-actor isolated, so the requirement is the type system's
+    /// rather than a comment's.
+    @MainActor
     func restoreFocus(kind: TerminalPaneKind)
 
     // MARK: - Cross-pane scrollback state
