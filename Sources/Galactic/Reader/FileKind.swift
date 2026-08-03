@@ -109,15 +109,7 @@ public enum FileKind: Equatable, Sendable {
     /// written to end, arrived at from the other direction.
     public var anchoring: ReaderAnchoring {
         switch self {
-        case .markdown:
-            // The markdown renderer has not moved in yet, so this is still
-            // the one place its markup is described. Delete in favour of the
-            // renderer's own the moment there is one to ask.
-            return .lines(
-                selector: ".md-block",
-                lineAttr: "data-line-start",
-                endLineAttr: "data-line-end"
-            )
+        case .markdown: return MarkdownRenderer.anchoring
         case .source, .unhandled: return SourceRenderer.anchoring
         case .table: return TableRenderer.anchoring
         case .html: return HTMLRenderer.anchoring

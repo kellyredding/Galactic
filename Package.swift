@@ -18,13 +18,20 @@ let package = Package(
         .package(
             url: "https://github.com/kellyredding/SwiftTerm.git",
             exact: "1.13.0-galactic.11"
+        ),
+        // Markdown parsing for the reader subsystem. One parse feeds every
+        // emitter — see Sources/Galactic/Markdown.
+        .package(
+            url: "https://github.com/swiftlang/swift-markdown.git",
+            from: "0.5.0"
         )
     ],
     targets: [
         .target(
             name: "Galactic",
             dependencies: [
-                .product(name: "SwiftTerm", package: "SwiftTerm")
+                .product(name: "SwiftTerm", package: "SwiftTerm"),
+                .product(name: "Markdown", package: "swift-markdown")
             ],
             // Emoji autocomplete data and behaviour, injected into card
             // composers, plus the vendored highlighting and diagram assets a
