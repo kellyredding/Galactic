@@ -87,6 +87,7 @@ public enum ReaderDocument {
         </head>
         <body>
         \(body)
+        \(cardScripts == .none ? "" : sendBarHTML)
         \(scriptTag(scriptsBeforeCards))
         \(cardScriptTags(cardScripts))
         \(scriptTag(scriptsAfterCards))
@@ -116,7 +117,9 @@ public enum ReaderDocument {
         :root {
             \(annotationCSSVars(isDark: theme.isDark))
         }
+        \(sendBarTokens(isLight: !theme.isDark))
         \(annotationCSS)
+        \(sendBarCSS)
         </style>
         """
     }
@@ -138,6 +141,7 @@ public enum ReaderDocument {
         guard scripts != .none else { return "" }
         var parts = [
             cardTextJS, clipboardCopyJS, textEntryJS, suggestionInsertJS,
+            sendBarJS,
         ]
         if scripts == .full { parts.append(addNoteButtonJS) }
         parts.append(contentsOf: [

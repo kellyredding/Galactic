@@ -145,6 +145,10 @@ data.textEntry);
 'mouseup', function(e) {
                 if (e.target.closest(\
 '.annotation-form')) return;
+                // Pressing the bar must not be read as a click
+                // that dismisses the toolbar over the selection
+                // it is about to send.
+                if (e.target.closest('.send-bar')) return;
                 // A click on an existing card expands it, so a
                 // toolbar over some other range is no longer
                 // about anything the user is looking at.
@@ -229,14 +233,38 @@ endBlock);
             document.addEventListener(\
 'keydown', function(e) {
                 if (e.key !== 'Enter') return;
-                if (e.metaKey || e.ctrlKey || e.altKey) return;
                 var t = e.target;
                 if (t && (t.tagName === 'TEXTAREA'
                     || t.tagName === 'INPUT')) return;
+                // The send chord, matched against the shared
+                // predicate so this and the glyphs on the bar's
+                // button cannot drift apart. It has to be tested
+                // before the modifier guard below, which is there
+                // to stop a held chord promoting a toolbar and
+                // would otherwise swallow this too. Composing is
+                // still exempt: the textarea guard above returns
+                // first, matching the scrollback, where Send is
+                // unreachable while a note is being typed.
+                if (window.GalaxySendBar
+                    && window.GalaxySendBar.matchesChord(e)) {
+                    e.preventDefault();
+                    window.GalaxySendBar.fire();
+                    return;
+                }
+                if (e.metaKey || e.ctrlKey || e.altKey) return;
                 if (!self.selectionOnly
                     || !self.isFormVisible()) return;
                 e.preventDefault();
                 self.promoteToForm();
+            });
+        },
+
+        // Report that the send bar was pressed. Carries nothing:
+        // the app holds the annotations and composes its own
+        // message, so this is the gesture and not the payload.
+        requestReview() {
+            window.webkit.messageHandlers.annotation.postMessage({
+                action: 'reviewWithClaude'
             });
         },
 

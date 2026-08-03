@@ -254,7 +254,12 @@ public enum HTMLRenderer {
             \(ReaderDocument.annotationStyleTag(theme: theme))
             """
             // The same run, in the same order, that a rebuilt document gets.
+            // The bar's markup rides along because it is body content the
+            // annotation layer needs present — `render` emits it beside the
+            // body for documents it builds, and this branch is the one that
+            // has to remember what that one gets for free.
             let scriptBlock = """
+            \(sendBarHTML)
             <script>\(blockIndexDOMWalkJS)</script>
             \(ReaderDocument.cardScriptTags(.full))
             """

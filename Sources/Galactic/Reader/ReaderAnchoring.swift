@@ -151,7 +151,9 @@ public func buildAnnotationInitJS(
     artifactContent: String? = nil,
     referencePath: String? = nil,
     textEntry: [String: [[String: Any]]]? = nil,
-    restoringFormState: String? = nil
+    restoringFormState: String? = nil,
+    sendBarNoun: String? = nil,
+    sendBarCount: Int = 0
 ) -> String {
     let restore = restoringFormState.map {
         "; AnnotationManager.restoreFormState(\($0))"
@@ -168,6 +170,8 @@ public func buildAnnotationInitJS(
         htmlMap: htmlMap,
         artifactContent: artifactContent,
         referencePath: referencePath,
-        textEntry: textEntry
+        textEntry: textEntry,
+        sendBarNoun: sendBarNoun,
+        sendBarCount: sendBarCount
     ) + restore
 }

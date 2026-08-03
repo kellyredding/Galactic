@@ -19,6 +19,13 @@ import Foundation
 /// from a global here, for the same reason the scrollback renderer takes it as
 /// a parameter: this file is shared, and the two apps store their settings in
 /// different types. A host that omits it leaves the page on its own defaults.
+///
+/// `sendBarNoun` opts the document into the send bar and names what it counts
+/// — "pending annotation", not "annotation", wherever those are different
+/// numbers. Omitting it emits nothing about the bar, so a reader that has no
+/// review workflow behind it stays as it was. The count is passed rather than
+/// derived from `annotationDicts` because only the app knows which of them a
+/// review would actually carry.
 public func buildAnnotationInitJS(
     anchorType: String,
     blockSelector: String,
@@ -30,7 +37,9 @@ public func buildAnnotationInitJS(
     htmlMap: [Int32: String],
     artifactContent: String? = nil,
     referencePath: String? = nil,
-    textEntry: [String: [[String: Any]]]? = nil
+    textEntry: [String: [[String: Any]]]? = nil,
+    sendBarNoun: String? = nil,
+    sendBarCount: Int = 0
 ) -> String {
     let htmlMapDict: [String: String] = {
         var d: [String: String] = [:]
@@ -71,5 +80,25 @@ public func buildAnnotationInitJS(
           )
     else { return "" }
 
-    return "AnnotationManager.initialize(\(json))"
+    let initCall = "AnnotationManager.initialize(\(json))"
+
+    guard let sendBarNoun else { return initCall }
+
+    // Single-quoted, so a noun containing one would close the literal early.
+    // Nouns are host constants rather than user text, but the escape costs
+    // nothing and the failure it prevents is a syntax error in a page that
+    // otherwise looks fine until the bar is pressed.
+    let escapedNoun = sendBarNoun
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "'", with: "\\'")
+
+    return initCall + """
+        ;window.GalaxySendBar.configure({
+            noun: '\(escapedNoun)',
+            invoke: function() {
+                AnnotationManager.requestReview();
+            }
+        });
+        window.GalaxySendBar.update(\(sendBarCount));
+        """
 }

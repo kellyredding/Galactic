@@ -62,6 +62,15 @@ public enum AnnotationMessage {
     /// already exists between the reader DOM and the
     /// app.
     case setViewed(filePath: String, isViewed: Bool)
+    /// The send bar was pressed, by click or by chord.
+    ///
+    /// Carries nothing. The app already holds the
+    /// annotations and composes its own message — a
+    /// scrollback note ships inline, a persisted
+    /// annotation hands off to a review workflow — so
+    /// what crosses here is the gesture and not the
+    /// payload.
+    case reviewWithClaude
 }
 
 extension AnnotationMessage {
@@ -101,6 +110,8 @@ extension AnnotationMessage {
                   let isViewed = body["isViewed"] as? Bool
             else { return nil }
             return .setViewed(filePath: filePath, isViewed: isViewed)
+        case "reviewWithClaude":
+            return .reviewWithClaude
         default:
             return nil
         }
