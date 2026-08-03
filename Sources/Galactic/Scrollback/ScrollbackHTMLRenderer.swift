@@ -216,6 +216,7 @@ public enum ScrollbackHTMLRenderer {
             --card-active-bg: rgba(255, 255, 120, 0.12);
         }
         \(noteUXTokens(textSize: "var(--font-size)"))
+        \(sendBarTokens(isLight: isLight))
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             background: var(--bg);
@@ -228,7 +229,6 @@ public enum ScrollbackHTMLRenderer {
             -webkit-font-smoothing: antialiased;
             -webkit-user-select: text;
             cursor: text;
-            padding-bottom: 48px;
         }
         pre {
             margin: 0;
@@ -250,10 +250,7 @@ public enum ScrollbackHTMLRenderer {
         </head>
         <body\(isLight ? " class=\"light\"" : "")>
         <pre id="terminal-content">\(body)</pre>
-        <div class="send-bar" id="send-bar" style="display:none;">
-            <span class="send-bar-count" id="send-bar-count">0 notes</span>
-            <button class="send-bar-button" id="send-bar-button">Send to Claude ⌘⇧↩</button>
-        </div>
+        \(sendBarHTML)
         <script>\(emojiDataJS)</script>
         <script>\(emojiAutocompleteJS)</script>
         <script>\(cardTextJS)</script>
@@ -262,9 +259,16 @@ public enum ScrollbackHTMLRenderer {
         <script>\(textEntryConfigJS)</script>
         <script>\(suggestionInsertJS)</script>
         <script>\(addNoteButtonJS)</script>
+        <script>\(sendBarJS)</script>
         <script>
         \(scrollbackManagerJS)
         \(noteManagerJS)
+        window.GalaxySendBar.configure({
+            noun: 'note',
+            invoke: function() {
+                ScrollbackManager.notes.sendToClaude();
+            }
+        });
         </script>
         </body>
         </html>
@@ -364,8 +368,11 @@ public enum ScrollbackHTMLRenderer {
                     this.notes.promoteToForm();
                     break;
                 }
-                // Cmd+Shift+Enter — send notes to Claude
-                if (e.metaKey && e.shiftKey && this.notes.items.length > 0) {
+                // The send chord, matched against the shared
+                // predicate so this and the glyphs on the button
+                // cannot drift apart.
+                if (window.GalaxySendBar.matchesChord(e)
+                    && this.notes.items.length > 0) {
                     e.preventDefault();
                     this.notes.sendToClaude();
                 }
@@ -462,24 +469,6 @@ public enum ScrollbackHTMLRenderer {
         }
     };
 
-    // Native-side hook to push Send-to-Claude button state
-    // into the overlay live. Called from Swift whenever the
-    // underlying disabledReason() changes (session stops or
-    // resumes, session-pane scrollback opens or closes).
-    // Uses a data-attribute (not the native `title`) so the
-    // CSS tooltip in `.send-bar-button[data-disabled-reason]`
-    // shows instantly on hover, no OS-imposed delay.
-    ScrollbackManager.setSendButtonState = function(enabled, tooltip) {
-        const btn = document.getElementById('send-bar-button');
-        if (!btn) return;
-        btn.disabled = !enabled;
-        if (tooltip) {
-            btn.setAttribute('data-disabled-reason', tooltip);
-        } else {
-            btn.removeAttribute('data-disabled-reason');
-        }
-    };
-
     document.addEventListener('DOMContentLoaded', () => {
         ScrollbackManager.initialize();
     });
@@ -527,18 +516,6 @@ public enum ScrollbackHTMLRenderer {
         let expandHighlightBorder = isLight
             ? "rgba(255, 200, 30, 0.6)"
             : "rgba(255, 220, 50, 0.7)"
-        let sendBarBg = isLight
-            ? "rgba(34, 139, 34, 0.92)"
-            : "rgba(40, 170, 80, 0.95)"
-        let sendBarBorderTop = isLight
-            ? "rgba(0, 0, 0, 0.1)"
-            : "rgba(255, 255, 255, 0.15)"
-        let sendBtnBg = isLight
-            ? "rgba(255, 255, 255, 0.25)"
-            : "rgba(255, 255, 255, 0.2)"
-        let sendBtnBorder = isLight
-            ? "rgba(255, 255, 255, 0.35)"
-            : "rgba(255, 255, 255, 0.3)"
 
         return """
         /* Note line highlights. The left marker is an absolutely
@@ -800,81 +777,7 @@ public enum ScrollbackHTMLRenderer {
 
         \(deleteConfirmCSS(prefix: "note"))
 
-        /* Send bar */
-        .send-bar {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            height: 40px;
-            background: \(sendBarBg);
-            backdrop-filter: blur(8px);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 16px;
-            color: white;
-            font-family: -apple-system, system-ui, sans-serif;
-            font-size: 13px;
-            font-weight: 500;
-            z-index: 1000;
-            border-top: 1px solid \(sendBarBorderTop);
-        }
-        .send-bar-button {
-            background: \(sendBtnBg);
-            border: 1px solid \(sendBtnBorder);
-            color: white;
-            padding: 4px 12px;
-            border-radius: 4px;
-            cursor: pointer;
-            /* The body sets `-webkit-user-select: text` + `cursor: text`,
-               which inherit here. WebKit then renders the text I-beam on
-               hover and lets it win over `cursor: pointer` whenever the
-               button's text is selectable — the pointer only shows mid
-               mouse-press. Opting the button out of selection keeps the
-               pointer consistent, drag or no drag. */
-            user-select: none;
-            -webkit-user-select: none;
-            font-weight: 600;
-            font-size: 13px;
-            position: relative; /* anchor for tooltip ::after */
-        }
-        .send-bar-button:not(:disabled):hover {
-            background: rgba(255, 255, 255, 0.35);
-        }
-        /* Disabled look WITHOUT `opacity` — opacity would
-           cascade to the ::after tooltip, washing out its
-           pill background and text. Dim via color/border
-           changes instead so the tooltip renders at full
-           opacity. */
-        .send-bar-button:disabled {
-            cursor: not-allowed;
-            color: rgba(255, 255, 255, 0.45);
-            border-color: rgba(255, 255, 255, 0.2);
-        }
-        /* Instant CSS tooltip for the disabled state — the
-           native `title` attribute has a multi-second OS
-           delay before showing, which feels broken for a
-           user actively trying to figure out why the button
-           is disabled. The data-attribute is set by
-           ScrollbackManager.setSendButtonState. */
-        .send-bar-button[data-disabled-reason]:hover::after {
-            content: attr(data-disabled-reason);
-            position: absolute;
-            bottom: calc(100% + 6px);
-            right: 0;
-            background: #2b2b2b;
-            color: #fff;
-            padding: 4px 8px;
-            border-radius: 4px;
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
-            font-size: 11px;
-            font-weight: 500;
-            white-space: nowrap;
-            pointer-events: none;
-            z-index: 1001;
-        }
+        \(sendBarCSS)
 
         /* Edit textarea in card */
         .note-edit-textarea {
@@ -1012,10 +915,6 @@ public enum ScrollbackHTMLRenderer {
                 self.showSelectionToolbar(lo, hi);
             });
 
-            // Send bar click
-            document.getElementById('send-bar-button').addEventListener('click', () => {
-                self.sendToClaude();
-            });
         },
 
         findLineElement(node) {
@@ -1734,15 +1633,7 @@ public enum ScrollbackHTMLRenderer {
         // --- Send Bar ---
 
         updateSendBar() {
-            const bar = document.getElementById('send-bar');
-            const count = document.getElementById('send-bar-count');
-            if (this.items.length > 0) {
-                bar.style.display = 'flex';
-                const n = this.items.length;
-                count.textContent = n + ' note' + (n === 1 ? '' : 's');
-            } else {
-                bar.style.display = 'none';
-            }
+            window.GalaxySendBar.update(this.items.length);
         },
 
         sendToClaude(force) {

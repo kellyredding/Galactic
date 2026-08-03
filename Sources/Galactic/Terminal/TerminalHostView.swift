@@ -1367,7 +1367,7 @@ public final class TerminalHostView: NSView {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "'", with: "\\'")
         overlay.scrollbackView.webView.evaluateJavaScript(
-            "ScrollbackManager.setSendButtonState(\(enabled), '\(escaped)')"
+            "window.GalaxySendBar.setState(\(enabled), '\(escaped)')"
         )
     }
 
