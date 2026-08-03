@@ -72,9 +72,6 @@ public enum ReaderDocument {
               content="width=device-width, initial-scale=1">
         <title>\(title)</title>
         <style>
-        :root {
-            \(annotationCSSVars(isDark: theme.isDark))
-        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
             background: \(theme.background);
@@ -85,8 +82,8 @@ public enum ReaderDocument {
             -webkit-font-smoothing: antialiased;
         }
         \(css)
-        \(annotationCSS)
         </style>
+        \(annotationStyleTag(theme: theme))
         </head>
         <body>
         \(body)
@@ -95,6 +92,32 @@ public enum ReaderDocument {
         \(scriptTag(scriptsAfterCards))
         </body>
         </html>
+        """
+    }
+
+    /// Everything the annotation layer needs to look like itself, as one
+    /// complete `<style>` element.
+    ///
+    /// The two halves travel together on purpose. The rules read a dozen
+    /// custom properties, and the properties are useless without the rules,
+    /// so a caller that takes one and forgets the other gets a page where
+    /// annotations *work* and are simply invisible — the cards land in the
+    /// right place, carry the right text, and render as unstyled white boxes.
+    /// Nothing errors and nothing logs.
+    ///
+    /// That is not hypothetical. Splitting them across two call sites is
+    /// exactly how it happened once already, in the reader that splices this
+    /// into a document arriving with its own markup — the counterpart case to
+    /// `cardScriptTags`, and the reason both exist as callable pieces rather
+    /// than only as parts of `render`.
+    public static func annotationStyleTag(theme: ReaderTheme) -> String {
+        """
+        <style>
+        :root {
+            \(annotationCSSVars(isDark: theme.isDark))
+        }
+        \(annotationCSS)
+        </style>
         """
     }
 
