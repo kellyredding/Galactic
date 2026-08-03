@@ -40,6 +40,10 @@ final class ShippedJavaScriptTests: XCTestCase {
                 "HTMLEscape.javaScriptFunction",
                 HTMLEscape.javaScriptFunction
             ),
+            (
+                "HTMLRenderer.blockIndexDOMWalkJS",
+                HTMLRenderer.blockIndexDOMWalkJS
+            ),
         ]
     }
 
@@ -86,7 +90,7 @@ final class ShippedJavaScriptTests: XCTestCase {
     /// leave an app without someone being told, and this is where it has to
     /// arrive.
     func testCoverageHasNotShrunk() {
-        XCTAssertGreaterThanOrEqual(embeddedLiterals.count, 10)
+        XCTAssertGreaterThanOrEqual(embeddedLiterals.count, 11)
         XCTAssertGreaterThanOrEqual(bundledResources.count, 2)
     }
 }
