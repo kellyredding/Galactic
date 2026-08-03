@@ -137,6 +137,12 @@ public struct ReaderAnchoring {
 /// page-facing values as one declared thing and screens the annotations on the
 /// way through, so a caller cannot describe its markup one way and filter for
 /// another.
+///
+/// `restoringFormState` is whatever a previous page was carrying in its
+/// composer, as handed over by `ReaderHostView`. Appended to the same script
+/// rather than evaluated separately, so the page never exists in a state where
+/// annotations have initialised and the rescued text has not yet arrived —
+/// a gap the reader would see as their note vanishing and coming back.
 public func buildAnnotationInitJS(
     anchoring: ReaderAnchoring,
     itemLabel: String,
@@ -144,9 +150,13 @@ public func buildAnnotationInitJS(
     htmlMap: [Int32: String],
     artifactContent: String? = nil,
     referencePath: String? = nil,
-    textEntry: [String: [[String: Any]]]? = nil
+    textEntry: [String: [[String: Any]]]? = nil,
+    restoringFormState: String? = nil
 ) -> String {
-    buildAnnotationInitJS(
+    let restore = restoringFormState.map {
+        "; AnnotationManager.restoreFormState(\($0))"
+    } ?? ""
+    return buildAnnotationInitJS(
         anchorType: anchoring.anchorType,
         blockSelector: anchoring.blockSelector,
         lineAttr: anchoring.lineAttr,
@@ -159,5 +169,5 @@ public func buildAnnotationInitJS(
         artifactContent: artifactContent,
         referencePath: referencePath,
         textEntry: textEntry
-    )
+    ) + restore
 }
