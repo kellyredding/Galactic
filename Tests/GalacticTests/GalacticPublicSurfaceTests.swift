@@ -261,4 +261,108 @@ final class GalacticPublicSurfaceTests: XCTestCase {
         XCTAssertNotEqual(view(), view(isVisibleSurface: false))
         XCTAssertNotEqual(view(), view(shouldResignFocus: true))
     }
+
+    // MARK: - Search
+
+    func testFuzzyMatchIsReachableWithBothScopes() {
+        XCTAssertNotNil(FuzzyMatch.result("Clear session", query: "clear"))
+        XCTAssertNotNil(
+            FuzzyMatch.score("Clear session", query: "cle", scope: .terms)
+        )
+        XCTAssertTrue(
+            FuzzyMatch.matches("Clear session", query: ""),
+            "an empty query is a match, which is what an unfiltered list is"
+        )
+    }
+
+    // MARK: - The cheat sheet
+
+    /// A public struct's memberwise init is internal, so these explicit ones
+    /// are the entire seam — a host that cannot build a row cannot use the
+    /// sheet at all.
+    func testACheatSheetSectionIsBuiltFromValuesAHostSupplies() {
+        let section = CheatSheetSection(
+            id: "terminal",
+            title: "Terminal & Agent",
+            rows: [
+                CheatSheetRow(
+                    id: "terminal.0",
+                    keys: "⇧⌘⌫",
+                    label: "Clear session",
+                    condition: "while a terminal pane is focused",
+                    isActive: false
+                )
+            ]
+        )
+
+        XCTAssertEqual(section.id, "terminal")
+        XCTAssertEqual(section.rows.first?.label, "Clear session")
+        XCTAssertFalse(
+            section.rows.first?.isActive ?? true,
+            "the host resolved availability; nothing here re-decides it"
+        )
+        // Aliases are optional at the seam: a host with no synonyms of its own
+        // says nothing and still gets its glyphs spelled by the view.
+        XCTAssertEqual(section.rows.first?.aliases, "")
+    }
+
+    /// Identity is the host's to supply and has to be unique across the whole
+    /// sheet, not per section: one container holds every row, and a repeated id
+    /// is what puts rows under the wrong header.
+    func testCheatSheetRowsAreIdentifiableAndComparable() {
+        let a = CheatSheetRow(
+            id: "terminal.0", keys: "⌘K", label: "Clear",
+            condition: "", isActive: true
+        )
+        let b = CheatSheetRow(
+            id: "lists.0", keys: "⌘K", label: "Clear",
+            condition: "", isActive: true
+        )
+
+        XCTAssertEqual(a, a)
+        XCTAssertNotEqual(
+            a, b, "two rows that render alike still differ by id"
+        )
+    }
+
+    func testCheatSheetSearchIsCallableFromOutsideItsView() {
+        let hits = CheatSheetSearch.hits(
+            [
+                CheatSheetSearch.Candidate(
+                    label: "Clear session", keys: "⇧⌘⌫",
+                    section: "Terminal", condition: "",
+                    aliases: CheatSheetGlyphs.spelled("⇧⌘⌫")
+                )
+            ],
+            query: "shift")
+
+        XCTAssertNotNil(hits.first ?? nil)
+    }
+
+    /// The three members a host reaches: the shared presenter, the static gate
+    /// its key monitors read, and the view it mounts.
+    @MainActor
+    func testTheCheatSheetIsReachedThroughItsSharedPresenter() {
+        let presenter = CheatSheetPresenter.shared
+        // Restored to the default rather than left set — it is the same
+        // closure, but the next test in this target should not inherit one.
+        defer {
+            presenter.dismiss()
+            presenter.sectionsProvider = { [] }
+        }
+        presenter.sectionsProvider = { [] }
+
+        presenter.toggle()
+
+        XCTAssertTrue(presenter.isPresented)
+        XCTAssertTrue(CheatSheetPresenter.isClaimingKeyboard)
+        XCTAssertNotNil(CheatSheetView())
+    }
+
+    @MainActor
+    func testTextEntryBindingsSpellTheirConfiguredKeystrokes() {
+        XCTAssertEqual(
+            TextEntryBindings.default.displayLabels(for: .submit), ["Enter"]
+        )
+    }
 }

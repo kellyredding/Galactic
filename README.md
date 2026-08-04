@@ -209,10 +209,17 @@ if let snapshot = backend.captureScrollbackSnapshot() {
 
 - `TextEntryBindings` — which keystrokes submit and which insert a
   newline, shared by the host's settings and the scrollback
-  surface's composer.
+  surface's composer. `displayLabels(for:)` spells a configured
+  action's keystrokes for a reader, and returns nothing when
+  nothing is bound — a composer hint drops the clause, a reference
+  sheet draws a dash, and only the caller knows which it is.
 - `Keystroke` — a key plus modifiers, with the codec for Claude
   Code's binding spellings and the reserved chord used for
   automated submission.
+- `KeystrokeListEditor` — the settings control that binds them: a
+  wrapping row of keystroke pills and a click-to-record capture
+  field, with the rules governing what may be bound and what keeps
+  a list from emptying.
 
 ### Scrollback surface
 
@@ -236,6 +243,48 @@ if let snapshot = backend.captureScrollbackSnapshot() {
   its panel lifecycle.
 - `WebViewFindController` — find over the scrollback surface.
 - `ModalState` — whether a modal is up, so key handling defers.
+
+### Search
+
+- `FuzzyMatch` — subsequence or ordered-terms matching over short
+  candidates, returning a relevance score and the character
+  offsets that matched. Two readings of one query, because a rule
+  that suits a label ruins a paragraph: a gap-anywhere
+  subsequence finds "Move to Icebox" from "mti" and finds almost
+  everything in a page of prose. The offsets are what a caller
+  highlights from, so the highlight cannot disagree with the
+  filter about what matched.
+
+### Cheat sheet
+
+A ⌘/ reference the host mounts over its own window: a search
+field, rows grouped under headings, and dimming for the rows that
+are not usable right now. The host resolves what its keystrokes
+are and whether each is live; nothing here knows what a binding or
+a surface is.
+
+- `CheatSheetRow` / `CheatSheetSection` — the seam. Pre-resolved
+  values: the keystroke text, the condition in words, and whether
+  that condition holds. Row ids are the host's to supply and must
+  be unique across the whole sheet, since one container holds
+  every row.
+- `CheatSheetPresenter` — whether the sheet is up, and the
+  sections it opened with. Asks the host for them once, as it
+  opens, so availability is a snapshot rather than a live read —
+  the sheet's own search field takes focus as it appears, and a
+  host reading focus afterwards would dim every row. Also carries
+  the stand-down gate a host's other key monitors read.
+- `CheatSheetView` — the sheet itself, mounted by the host in its
+  own view tree. An overlay rather than a panel: a second
+  key-window-stealing panel buys nothing here and costs the
+  key/main-window questions the existing panels already cost.
+- `CheatSheetSearch` — what a query keeps and where it landed, per
+  rendered field. The section title and a row's aliases are
+  searched but never highlighted, because neither is drawn on the
+  row.
+- `CheatSheetGlyphs` — modifier glyphs spelled out in words, so a
+  query can reach a chord none of whose characters a keyboard can
+  type into a field.
 
 ### Scrollback capture
 

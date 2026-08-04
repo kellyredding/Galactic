@@ -77,6 +77,29 @@ extension TextEntryBindings {
         )
     }
 
+    /// How the keystrokes bound to `action` are spelled for a reader, in the
+    /// order the user configured them.
+    ///
+    /// All of them, which is where this parts company with the composer hints
+    /// derived from the same lists. Those name only the first, and rightly — a
+    /// placeholder listing three chords has stopped being a hint. A reference
+    /// that names one of three is a different thing: the other two work, and
+    /// saying so is the whole point of a reference.
+    ///
+    /// **Empty when nothing is bound, and saying what that means is the
+    /// caller's business.** The two right answers disagree, so this cannot
+    /// pick either. A composer hint drops the clause entirely — advertising a
+    /// keystroke that does nothing is worse than not mentioning one, which is
+    /// the rule `placeholderHint` follows. A reference sheet draws a dash,
+    /// because an empty cell in a table of keystrokes reads as a rendering
+    /// bug, not as "unbound". Returning `[]` lets each caller be right;
+    /// returning `["—"]` would make the composer strip a glyph back out, and
+    /// returning `[""]` would give the sheet a blank pill.
+    public func displayLabels(for action: Action) -> [String] {
+        let keystrokes = action == .submit ? submit : newline
+        return keystrokes.map(\.displayLabel)
+    }
+
     /// The shape the text-entry module's `configure` expects: keystrokes keyed
     /// by DOM `code`, since a WebView never sees a virtual key code.
     ///
