@@ -5,8 +5,8 @@ import Foundation
 /// A row's keys render as "⇧⌘⌫" or "⌥⌘H", and none of those characters can be
 /// typed into a search field — so before this, no query could reach a modifier
 /// at all. The names are derived from the glyphs rather than written per row:
-/// there are a hundred rows and eleven glyphs, and a derived spelling cannot
-/// fall out of step with what the row displays.
+/// a host has a hundred rows and this table has twenty entries, and a derived
+/// spelling cannot fall out of step with what the row displays.
 public enum CheatSheetGlyphs {
 
     /// Every glyph a host can put on a row, and the words a reader would type
@@ -30,12 +30,26 @@ public enum CheatSheetGlyphs {
         // wrong, and wants `CheatSheetRow.aliases` rather than a change here,
         // since one row's synonyms are not the table's business.
         "⌫": "backspace",
+        // Two glyphs for one key, and both are here rather than one being
+        // declared correct. Hosts disagree — a menu-derived row tends to
+        // carry ⏎ while a row quoting a chord the app prints on itself
+        // carries ↩ — and a reader typing "return" cannot be expected to
+        // know which. Spelling both is a smaller thing than making every
+        // host normalise its authored rows to a house glyph.
         "⏎": "return enter",
+        "↩": "return enter",
         "␣": "space spacebar",
         "←": "left arrow",
         "→": "right arrow",
         "↑": "up arrow",
         "↓": "down arrow",
+        // The navigation cluster. Reachable only from a surface that scrolls
+        // a page rather than moving a selection, which is why the first host
+        // to need them was the one with a scrollback.
+        "⇞": "page up",
+        "⇟": "page down",
+        "↖": "home",
+        "↘": "end",
         "/": "slash",
         ",": "comma",
         "=": "equals plus",

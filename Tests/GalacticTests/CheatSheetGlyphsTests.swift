@@ -53,4 +53,28 @@ final class CheatSheetGlyphsTests: XCTestCase {
         XCTAssertEqual(CheatSheetGlyphs.spelled("a d"), "")
         XCTAssertEqual(CheatSheetGlyphs.spelled(""), "")
     }
+
+    /// Both return glyphs answer to the same words.
+    ///
+    /// The bug this prevents: a host authored seventeen rows carrying ↩ while
+    /// the table held only ⏎, so every one of them was invisible to "return"
+    /// and "enter" — the two words a reader is most likely to type for the key
+    /// they press most often. Nothing failed; the rows simply never appeared.
+    func testEitherReturnGlyphSpellsTheSameWords() {
+        XCTAssertEqual(CheatSheetGlyphs.spelled("⏎"), "return enter")
+        XCTAssertEqual(CheatSheetGlyphs.spelled("↩"), "return enter")
+        XCTAssertEqual(
+            CheatSheetGlyphs.spelled("⇧⌘↩"),
+            "shift command cmd return enter",
+            "a chord mixing modifiers with ↩ spells every part")
+    }
+
+    /// The page-navigation cluster, which a scrolling surface needs and a
+    /// selection-moving one never mentions.
+    func testTheNavigationClusterIsSpelled() {
+        XCTAssertEqual(CheatSheetGlyphs.spelled("⇞"), "page up")
+        XCTAssertEqual(CheatSheetGlyphs.spelled("⇟"), "page down")
+        XCTAssertEqual(CheatSheetGlyphs.spelled("↖"), "home")
+        XCTAssertEqual(CheatSheetGlyphs.spelled("↘"), "end")
+    }
 }
