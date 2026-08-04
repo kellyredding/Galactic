@@ -13,6 +13,21 @@ import Foundation
 /// highlights, and `clear()` only removes elements with the
 /// galaxy-prefixed class.
 ///
+/// Searching is done a block at a time rather than a text node at
+/// a time. A node boundary is not something the reader can see:
+/// scrollback emits one span per style run, so a colour change
+/// mid-sentence splits a phrase into separate nodes, and matching
+/// each node alone silently found less than the page contained.
+/// A block is flattened, searched, and the hit split back over
+/// whichever nodes it covered — so one match can become several
+/// `<mark>` elements, which is why navigation counts groups of
+/// marks rather than marks.
+///
+/// Blocks stop at anything not inline, `<br>` included, so no
+/// match spans a line break. Terminal lines are padded to the
+/// window width, so joining them would mostly manufacture hits
+/// inside blank space.
+///
 /// Reverse mode (used by the scrollback overlay) flips the
 /// initial cursor position and the next/prev step direction so
 /// the first match presented is the most-recent occurrence
@@ -43,23 +58,59 @@ enum GalaxyFindJS {
         (document.head || document.documentElement).appendChild(s);
       }
 
-      // Walk all text nodes under root, skipping script/style and
-      // our own <mark> wrappers. Re-applied on every setQuery so
-      // existing wrappers are removed by clear() before walking.
-      function* textNodes(root) {
+      // Elements that do not interrupt a phrase. Everything else
+      // ends the run of text being searched — including BR, which
+      // draws a line break without being a block itself.
+      const INLINE_TAGS = new Set([
+        'SPAN', 'EM', 'STRONG', 'B', 'I', 'U', 'S', 'CODE', 'A',
+        'MARK', 'SMALL', 'SUB', 'SUP', 'ABBR', 'CITE', 'Q', 'KBD',
+        'SAMP', 'VAR', 'TIME', 'DFN', 'INS', 'DEL', 'FONT', 'TT',
+        'BIG', 'STRIKE', 'NOBR'
+      ]);
+
+      // Case-fold for comparison, without ever changing length.
+      //
+      // Offsets found in the folded text are used to slice the
+      // original, so a fold that grew would point every later
+      // offset at the wrong character — and 'İ'.toLowerCase() is
+      // two code units. The whole-string path is the fast one and
+      // handles all ordinary text; the loop only runs when that
+      // path would have shifted something, and folds one code
+      // unit at a time so the length cannot move.
+      //
+      // Non-breaking spaces fold to ordinary ones: the renderer
+      // spells a blank line with one, and a typed space should
+      // find it.
+      function fold(s) {
+        const flat = s.replace(/\\u00a0/g, ' ');
+        const lower = flat.toLowerCase();
+        if (lower.length === flat.length) return lower;
+        let out = '';
+        for (let i = 0; i < flat.length; i++) {
+          const one = flat[i].toLowerCase();
+          out += one.length === 1 ? one : flat[i];
+        }
+        return out;
+      }
+
+      // Walk the document yielding runs of text nodes that share a
+      // block, in document order. Script, style and our own marks
+      // are rejected whole.
+      function* blocks(root) {
         const walker = document.createTreeWalker(
-          root, NodeFilter.SHOW_TEXT,
+          root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
           {
             acceptNode(n) {
-              const p = n.parentElement;
-              if (!p) return NodeFilter.FILTER_REJECT;
-              const tag = p.tagName;
-              if (tag === 'SCRIPT' || tag === 'STYLE') {
-                return NodeFilter.FILTER_REJECT;
-              }
-              if (p.classList &&
-                  p.classList.contains('galaxy-find-match')) {
-                return NodeFilter.FILTER_REJECT;
+              if (n.nodeType === Node.ELEMENT_NODE) {
+                const tag = n.tagName;
+                if (tag === 'SCRIPT' || tag === 'STYLE') {
+                  return NodeFilter.FILTER_REJECT;
+                }
+                if (n.classList &&
+                    n.classList.contains('galaxy-find-match')) {
+                  return NodeFilter.FILTER_REJECT;
+                }
+                return NodeFilter.FILTER_ACCEPT;
               }
               return n.nodeValue
                 ? NodeFilter.FILTER_ACCEPT
@@ -67,11 +118,27 @@ enum GalaxyFindJS {
             }
           }
         );
+        let run = [];
         let n;
-        while ((n = walker.nextNode())) yield n;
+        while ((n = walker.nextNode())) {
+          if (n.nodeType === Node.ELEMENT_NODE) {
+            if (!INLINE_TAGS.has(n.tagName) && run.length) {
+              yield run;
+              run = [];
+            }
+            continue;
+          }
+          run.push(n);
+        }
+        if (run.length) yield run;
       }
 
-      let matches = []; // array of <mark> elements
+      // One entry per match, each holding the <mark> elements it
+      // was drawn with — several when the match crossed a node.
+      let groups = [];
+      // Total matches, known from the collect pass, so the bar can
+      // say "1 of 200" before the marks finish going in.
+      let totalGroups = 0;
       let currentIdx = -1;
       let currentQuery = '';
       let reverseMode = false;
@@ -100,39 +167,78 @@ enum GalaxyFindJS {
           m.parentNode.replaceChild(t, m);
           if (t.parentNode) t.parentNode.normalize();
         });
-        matches = [];
+        groups = [];
+        totalGroups = 0;
         currentIdx = -1;
       }
 
-      // Phase 1 of the find: synchronous DOM walk that
-      // collects what to mutate without actually mutating
-      // anything. Cheap (~tens of ms even on long docs) and
-      // tells us the total match count up front so the bar
-      // can show "1 of 200" before chunking finishes.
+      // Phase 1 of the find: synchronous walk that collects what
+      // to mutate without mutating anything. Cheap (~tens of ms
+      // even on long docs) and tells us the total match count up
+      // front.
+      //
+      // Flattening is per block, so the largest string built is
+      // one block long — a terminal line. Flattening the whole
+      // document instead would allocate the entire scrollback
+      // buffer twice over on every keystroke, which at the
+      // 100,000-line ceiling is tens of megabytes of garbage per
+      // search.
       function collectWork(query) {
         const work = [];
         if (!query || !document.body) return work;
-        const lower = query.toLowerCase();
-        const len = query.length;
-        for (const node of textNodes(document.body)) {
-          const text = node.nodeValue;
-          const lc = text.toLowerCase();
-          const ranges = [];
-          let i = 0;
-          while ((i = lc.indexOf(lower, i)) !== -1) {
-            ranges.push([i, i + len]);
-            i += len;
+        const needle = fold(query);
+        const len = needle.length;
+        if (!len) return work;
+
+        // Ranges are collected per node so each node is still
+        // replaced exactly once, however many matches touch it.
+        const byNode = new Map();
+        function addRange(node, a, b, g) {
+          let item = byNode.get(node);
+          if (!item) {
+            item = { node: node, text: node.nodeValue, ranges: [] };
+            byNode.set(node, item);
+            work.push(item);
           }
-          if (ranges.length > 0) {
-            work.push({ node, ranges, text });
+          item.ranges.push([a, b, g]);
+        }
+
+        let found = 0;
+        for (const nodes of blocks(document.body)) {
+          let flat = '';
+          const starts = [];
+          for (const node of nodes) {
+            starts.push(flat.length);
+            flat += fold(node.nodeValue);
+          }
+
+          let at = 0;
+          let i;
+          while ((i = flat.indexOf(needle, at)) !== -1) {
+            const end = i + len;
+            const g = found++;
+            for (let k = 0; k < nodes.length; k++) {
+              const nodeStart = starts[k];
+              const nodeEnd =
+                nodeStart + nodes[k].nodeValue.length;
+              if (nodeEnd <= i || nodeStart >= end) continue;
+              addRange(
+                nodes[k],
+                Math.max(i, nodeStart) - nodeStart,
+                Math.min(end, nodeEnd) - nodeStart,
+                g
+              );
+            }
+            at = end;
           }
         }
+        totalGroups = found;
         return work;
       }
 
       // Phase 2 step: take one work item and wrap its matches
       // in <mark> elements, splitting the original text node.
-      // Pushes the new marks onto `matches` in document order.
+      // Each mark joins the group of the match it belongs to.
       function applyOne(item) {
         const node = item.node;
         const ranges = item.ranges;
@@ -140,7 +246,8 @@ enum GalaxyFindJS {
         if (!node.parentNode) return;
         const frag = document.createDocumentFragment();
         let cursor = 0;
-        for (const [a, b] of ranges) {
+        for (const r of ranges) {
+          const a = r[0], b = r[1], g = r[2];
           if (a > cursor) {
             frag.appendChild(
               document.createTextNode(text.slice(cursor, a))
@@ -150,7 +257,8 @@ enum GalaxyFindJS {
           m.className = 'galaxy-find-match';
           m.textContent = text.slice(a, b);
           frag.appendChild(m);
-          matches.push(m);
+          if (!groups[g]) groups[g] = [];
+          groups[g].push(m);
           cursor = b;
         }
         if (cursor < text.length) {
@@ -173,7 +281,7 @@ enum GalaxyFindJS {
         const myGen = chunkGen;
         let i = 0;
 
-        function step() {
+        function pump() {
           if (myGen !== chunkGen) return;
           const end = Math.min(i + CHUNK_SIZE, work.length);
           for (; i < end; i++) {
@@ -181,16 +289,20 @@ enum GalaxyFindJS {
           }
           if (!reverseMode
               && currentIdx === -1
-              && matches.length > 0) {
+              && groups.length > 0) {
             currentIdx = 0;
-            applyCurrent();
           }
+          // Re-applied every chunk, not just on promotion: the
+          // current match may span nodes this chunk has only
+          // now reached, and its later marks would otherwise
+          // never be told they are current.
+          if (currentIdx >= 0) applyCurrent();
           emit();
           if (i < work.length) {
-            window.requestAnimationFrame(step);
+            window.requestAnimationFrame(pump);
           } else {
-            if (reverseMode && matches.length > 0) {
-              currentIdx = matches.length - 1;
+            if (reverseMode && groups.length > 0) {
+              currentIdx = groups.length - 1;
               applyCurrent();
             }
             emit();
@@ -201,7 +313,7 @@ enum GalaxyFindJS {
         // the user sees marks light up the same paint cycle
         // they pressed Enter / stopped typing in. Subsequent
         // chunks yield via rAF.
-        step();
+        pump();
       }
 
       function highlight(query) {
@@ -213,21 +325,22 @@ enum GalaxyFindJS {
       }
 
       function applyCurrent() {
-        matches.forEach(m =>
-          m.classList.remove('galaxy-find-current')
-        );
-        if (currentIdx < 0 || currentIdx >= matches.length) return;
-        const cur = matches[currentIdx];
-        cur.classList.add('galaxy-find-current');
-        cur.scrollIntoView({
+        // Cleared by selector rather than by walking the groups:
+        // correct even while a group is still being built.
+        document.querySelectorAll('mark.galaxy-find-current')
+          .forEach(m => m.classList.remove('galaxy-find-current'));
+        const group = groups[currentIdx];
+        if (!group || group.length === 0) return;
+        group.forEach(m => m.classList.add('galaxy-find-current'));
+        group[0].scrollIntoView({
           behavior: 'instant', block: 'center'
         });
       }
 
       function step(delta) {
-        if (matches.length === 0) return;
-        currentIdx =
-          (currentIdx + delta + matches.length) % matches.length;
+        const n = groups.length;
+        if (n === 0) return;
+        currentIdx = (currentIdx + delta + n) % n;
         applyCurrent();
       }
 
@@ -236,7 +349,7 @@ enum GalaxyFindJS {
             && window.webkit.messageHandlers.galaxyFind) {
           window.webkit.messageHandlers.galaxyFind.postMessage({
             event: 'matches',
-            count: matches.length,
+            count: totalGroups,
             index: currentIdx
           });
         }
@@ -253,9 +366,11 @@ enum GalaxyFindJS {
       function prewarm() {
         try {
           if (!document.body) return;
-          for (const n of textNodes(document.body)) {
-            void n.nodeValue.toLowerCase()
-              .indexOf('__galaxy_find_warmup__');
+          for (const nodes of blocks(document.body)) {
+            for (const n of nodes) {
+              void fold(n.nodeValue)
+                .indexOf('__galaxy_find_warmup__');
+            }
           }
           const dummy = document.createElement('mark');
           dummy.className = 'galaxy-find-match';
