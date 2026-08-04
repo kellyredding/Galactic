@@ -60,6 +60,11 @@ public final class WebViewFindController: NSObject, ObservableObject {
 
     private func attachQueryPipeline() {
         queryCancellable = $query
+            // Normalize before the dedupe, not after. Typing a trailing space
+            // changes the field but not the search, and comparing the searches
+            // is what lets that keystroke cost nothing instead of another walk
+            // over every text node in the document.
+            .map { FindQuery.normalized($0) }
             .debounce(
                 for: .seconds(Self.queryDebounce),
                 scheduler: DispatchQueue.main
@@ -97,9 +102,15 @@ public final class WebViewFindController: NSObject, ObservableObject {
         // literal early, which makes the whole injected call a syntax error
         // rather than a search for the wrong thing. Nothing runs, and the only
         // trace is a console message inside the page.
+        //
+        // The field's text is what someone typed; what the page searches for is
+        // derived from it. Keeping those separate is what lets the field hold a
+        // space the user is typing through — on the way to a second word —
+        // without that space becoming a character the document must contain.
         let opts = reverse ? "{reverse:true}" : "{}"
+        let search = FindQuery.normalized(query)
         webView?.evaluateJavaScript(
-            "GalaxyFind.setQuery(\(JavaScriptLiteral.string(query)), \(opts))"
+            "GalaxyFind.setQuery(\(JavaScriptLiteral.string(search)), \(opts))"
         )
     }
 

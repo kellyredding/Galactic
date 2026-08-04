@@ -134,7 +134,11 @@ public struct FindBarView: View {
     }
 
     private var matchLabel: String {
-        if controller.query.isEmpty { return "" }
+        // The normalized query, not the field's text: a query of only
+        // whitespace searches for nothing, so it should read as a bar nobody
+        // has typed into yet rather than announce "No matches" for a search
+        // that was never run.
+        if FindQuery.normalized(controller.query).isEmpty { return "" }
         if controller.matchCount == 0 { return "No matches" }
         return "\(controller.matchIndex + 1) "
             + "of \(controller.matchCount)"
