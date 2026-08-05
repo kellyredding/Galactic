@@ -259,12 +259,15 @@ endBlock);
             });
         },
 
-        // Report that the send bar was pressed. Carries nothing:
-        // the app holds the annotations and composes its own
-        // message, so this is the gesture and not the payload.
-        requestReview() {
+        // Report that the send bar was pressed, with whatever overall
+        // comment was typed into it. The app holds the annotations
+        // and composes its own message, so what crosses is the
+        // gesture and the words that came with it — never the
+        // annotations themselves.
+        requestReview(comment) {
             window.webkit.messageHandlers.annotation.postMessage({
-                action: 'reviewWithClaude'
+                action: 'reviewWithClaude',
+                comment: comment || ''
             });
         },
 
@@ -2580,6 +2583,17 @@ function(a) {
 .isActive(editTa))
                         return 'emojiPopup';
                 }
+            }
+            // The send bar's overall comment, if it is open. Answered here
+            // rather than on its own textarea because the host's Escape
+            // monitor runs ahead of the web view and asks this first, so a
+            // handler on the composer alone would never see the key. It
+            // collapses and keeps what was typed, which is all Escape means
+            // there, so the host is told the page dealt with it.
+            if (window.GalaxySendBar
+                && window.GalaxySendBar.expanded) {
+                window.GalaxySendBar.collapse();
+                return '__consumed__';
             }
             if (this.editingNumber !== null) {
                 var card = document.querySelector(

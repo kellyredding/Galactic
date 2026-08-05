@@ -147,7 +147,9 @@ final class SendBarTests: XCTestCase {
 
     // MARK: - Opting in
 
-    private func initJS(noun: String?, count: Int) -> String {
+    private func initJS(
+        noun: String?, count: Int, comment: Bool = false
+    ) -> String {
         buildAnnotationInitJS(
             anchorType: "line_range",
             blockSelector: ".line",
@@ -157,7 +159,8 @@ final class SendBarTests: XCTestCase {
             annotationDicts: [],
             htmlMap: [:],
             sendBarNoun: noun,
-            sendBarCount: count
+            sendBarCount: count,
+            sendBarComment: comment
         )
     }
 
@@ -183,8 +186,34 @@ final class SendBarTests: XCTestCase {
             "the host's count did not reach the page"
         )
         XCTAssertTrue(
-            js.contains("AnnotationManager.requestReview()"),
+            js.contains("AnnotationManager.requestReview(comment)"),
             "pressing the bar would not report anything"
+        )
+    }
+
+    /// The overall comment is opt-in for the same reason the noun is: the two
+    /// surfaces showing this bar are not both in a position to want it, and one
+    /// of them is in another app.
+    func testTheCommentStepIsOptIn() {
+        XCTAssertTrue(
+            initJS(noun: "pending annotation", count: 1, comment: true)
+                .contains("comment: true"),
+            "a host that asked for the comment did not get it"
+        )
+        XCTAssertTrue(
+            initJS(noun: "pending annotation", count: 1)
+                .contains("comment: false"),
+            "a host that said nothing was opted in anyway"
+        )
+    }
+
+    /// Escape on a reader is answered by the host asking the page what it was
+    /// about, so a composer the host has never heard of has to be reported —
+    /// otherwise the key closes the reader out from under it.
+    func testAnOpenCommentClaimsEscapeFromTheReader() {
+        XCTAssertTrue(
+            annotationManagerJS.contains("GalaxySendBar.expanded"),
+            "the escape context does not consider the overall comment"
         )
     }
 

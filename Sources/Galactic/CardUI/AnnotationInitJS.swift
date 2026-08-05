@@ -39,7 +39,8 @@ public func buildAnnotationInitJS(
     referencePath: String? = nil,
     textEntry: [String: [[String: Any]]]? = nil,
     sendBarNoun: String? = nil,
-    sendBarCount: Int = 0
+    sendBarCount: Int = 0,
+    sendBarComment: Bool = false
 ) -> String {
     let htmlMapDict: [String: String] = {
         var d: [String: String] = [:]
@@ -95,8 +96,9 @@ public func buildAnnotationInitJS(
     return initCall + """
         ;window.GalaxySendBar.configure({
             noun: '\(escapedNoun)',
-            invoke: function() {
-                AnnotationManager.requestReview();
+            comment: \(sendBarComment),
+            invoke: function(comment) {
+                AnnotationManager.requestReview(comment);
             }
         });
         window.GalaxySendBar.update(\(sendBarCount));

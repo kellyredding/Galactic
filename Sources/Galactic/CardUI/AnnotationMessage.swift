@@ -62,15 +62,19 @@ public enum AnnotationMessage {
     /// already exists between the reader DOM and the
     /// app.
     case setViewed(filePath: String, isViewed: Bool)
-    /// The send bar was pressed, by click or by chord.
+    /// The send bar was pressed, by click or by chord,
+    /// carrying whatever overall comment was typed into
+    /// it — empty when the host did not ask for one, or
+    /// when the reader left it blank.
     ///
-    /// Carries nothing. The app already holds the
+    /// Still not the payload. The app already holds the
     /// annotations and composes its own message — a
     /// scrollback note ships inline, a persisted
-    /// annotation hands off to a review workflow — so
-    /// what crosses here is the gesture and not the
-    /// payload.
-    case reviewWithClaude
+    /// annotation hands off to a review workflow — and
+    /// that has not changed. What is new is one string
+    /// that belongs to the press rather than to the
+    /// document: the reader's own summary of it.
+    case reviewWithClaude(comment: String)
 }
 
 extension AnnotationMessage {
@@ -111,7 +115,11 @@ extension AnnotationMessage {
             else { return nil }
             return .setViewed(filePath: filePath, isViewed: isViewed)
         case "reviewWithClaude":
-            return .reviewWithClaude
+            // Absent rather than empty for a page built before the comment
+            // existed, which a reader left open across an upgrade still is.
+            return .reviewWithClaude(
+                comment: body["comment"] as? String ?? ""
+            )
         default:
             return nil
         }
