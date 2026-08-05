@@ -209,8 +209,48 @@ struct MarkdownAttributedVisitor: MarkupVisitor {
 
     // MARK: - Inlines
 
+    /// Plain text, with any bare URL in it linked.
+    ///
+    /// The autolink lands here rather than in `MarkdownDocument`, which would
+    /// reach the HTML emitter too and so change what a reader shows — a
+    /// separate surface, with its own annotation and text-selection behaviour
+    /// to answer for. `MarkdownAutolink` is deliberately emitter-agnostic so
+    /// that decision stays reversible; the asymmetry is scope, not principle.
     mutating func visitText(_ text: Markdown.Text) -> NSAttributedString {
-        inline(text.string, font: bodyFont)
+        let plain = inline(text.string, font: bodyFont)
+        // A link's own label is already inside a link, so autolinking it would
+        // nest one address in another. Usually invisible here, because
+        // `visitLink` overwrites the whole label with the authored
+        // destination — but not when there is no authored destination to
+        // overwrite it with. `[https://shown.example]()` says explicitly that
+        // this text goes nowhere, and without this guard it would go to
+        // itself.
+        guard !isInsideLink(text) else { return plain }
+
+        let spans = MarkdownAutolink.spans(in: text.string)
+        guard !spans.isEmpty else { return plain }
+
+        let out = NSMutableAttributedString(attributedString: plain)
+        for span in spans {
+            out.addAttribute(
+                .link,
+                value: span.url,
+                range: NSRange(span.range, in: text.string)
+            )
+        }
+        return out
+    }
+
+    /// Walked rather than tracked, because emphasis and strong nest in between:
+    /// the text of `[**https://example.com**](…)` has a `Strong` for a parent,
+    /// not the `Link`.
+    private func isInsideLink(_ markup: any Markup) -> Bool {
+        var ancestor = markup.parent
+        while let node = ancestor {
+            if node is Link { return true }
+            ancestor = node.parent
+        }
+        return false
     }
 
     mutating func visitStrong(_ strong: Strong) -> NSAttributedString {
