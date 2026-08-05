@@ -2556,10 +2556,13 @@ entry.card);
         // Committed annotations are excluded, since a re-render
         // rebuilds those from data.
         //
-        // Free of side effects, unlike getEscapeContext below, which
-        // cancels an unchanged edit as it reports. That makes this
-        // safe to probe from anywhere — the refresh action asks it
-        // before rebuilding the card DOM.
+        // Free of side effects, as every probe here now is — the one that
+        // was not is `escapeContext`'s history, below. The refresh action
+        // asks this before rebuilding the card DOM.
+        //
+        // Deliberately narrower than `unsavedTextKind`: this one omits the
+        // overall comment, because a refresh carries that across and only
+        // the card DOM is rebuilt.
         hasOpenUnsavedComment() {
             if (this.isFormVisible()) {
                 var formTa = this.formElement\
@@ -2567,28 +2570,26 @@ entry.card);
                 if (formTa && formTa.value.trim())
                     return true;
             }
-            if (this.editingNumber !== null) {
-                var card = document.querySelector(
-                    '.annotation-card[data-number="'
-                    + this.editingNumber + '"]'
-                );
-                if (card) {
-                    var ta = card.querySelector(\
-'.annotation-edit-textarea');
-                    var editing = this.editingNumber;
-                    var ann = this.annotations.find(\
-function(a) {
-                        return a.number === editing;
-                    });
-                    if (ta && ann
-                        && ta.value !== ann.content)
-                        return true;
-                }
-            }
-            return false;
+            return this.editHasChanges();
         },
 
-        getEscapeContext() {
+        // What Escape would act on, outermost layer first — and nothing
+        // else. Asking must not change anything.
+        //
+        // This used to do the acting as well, which read as a convenience
+        // and behaved as a trap: two callers wanted the same answer for
+        // different reasons, and only one of them wanted the page altered
+        // on the way. Merely asking collapsed an open comment and cancelled
+        // an unchanged edit, so the Back button — which asks in order to
+        // decide whether to warn — was mutating the page it was about to
+        // throw away, and could never warn about a comment because the act
+        // of asking had already put it away.
+        //
+        // A caller now names its own action from the list below. The two
+        // that answer this differ on purpose: Escape unwinds one layer,
+        // Back leaves and only wants to know what would be lost, which is
+        // `unsavedTextKind` rather than this.
+        escapeContext() {
             if (typeof EmojiAutocomplete \
 !== 'undefined') {
                 var formTa = this.formElement
@@ -2608,37 +2609,17 @@ function(a) {
                         return 'emojiPopup';
                 }
             }
-            // The send bar's overall comment, if it is open. Answered here
-            // rather than on its own textarea because the host's Escape
-            // monitor runs ahead of the web view and asks this first, so a
-            // handler on the composer alone would never see the key. It
-            // collapses and keeps what was typed, which is all Escape means
-            // there, so the host is told the page dealt with it.
+            // The send bar's overall comment, reported rather than closed.
+            // Escape there means collapse and keep the text, which is now
+            // the caller's call to make.
             if (window.GalaxySendBar
-                && window.GalaxySendBar.expanded) {
-                window.GalaxySendBar.collapse();
-                return '__consumed__';
-            }
+                && window.GalaxySendBar.expanded)
+                return 'overallComment';
             if (this.editingNumber !== null) {
-                var card = document.querySelector(
-                    '.annotation-card[data-number="'
-                    + this.editingNumber + '"]'
-                );
-                if (card) {
-                    var ta = card.querySelector(\
-'.annotation-edit-textarea');
-                    var ann = this.annotations.find(\
-function(a) {
-                        return a.number
-                            === AnnotationManager\
-.editingNumber;
-                    });
-                    if (ta && ann
-                        && ta.value !== ann.content)
-                        return 'editing';
-                }
-                this.cancelEdit();
-                return '__consumed__';
+                // Two answers, because an edit holding changes has to be
+                // confirmed away and an untouched one does not.
+                return this.editHasChanges()
+                    ? 'editingDirty' : 'editingClean';
             }
             if (this.expandedNumber !== null)
                 return 'expanded';
@@ -2650,6 +2631,70 @@ function(a) {
                 return 'formVisible';
             }
             return 'close';
+        },
+
+        // Whether the open edit's textarea has diverged from what is
+        // stored. Shared by the two probes, which used to answer it with
+        // two copies of the same eight lines.
+        editHasChanges() {
+            if (this.editingNumber === null) return false;
+            var card = document.querySelector(
+                '.annotation-card[data-number="'
+                + this.editingNumber + '"]'
+            );
+            if (!card) return false;
+            var ta = card.querySelector(\
+'.annotation-edit-textarea');
+            var editing = this.editingNumber;
+            var ann = this.annotations.find(function(a) {
+                return a.number === editing;
+            });
+            return !!(ta && ann && ta.value !== ann.content);
+        },
+
+        // What typed text would be lost if this page went away right now,
+        // regardless of which layer is on top.
+        //
+        // A different question from `escapeContext`, and the reason it is
+        // separate: Escape unwinds whatever is outermost, while Back is
+        // leaving and cares only about text it would take with it. Asked
+        // in that order — comment, edit, form — so the answer names
+        // something the sheet can be specific about.
+        //
+        // Pure, like `escapeContext`, and for the sharper reason: the
+        // caller asks this precisely when it has not yet decided to close.
+        unsavedTextKind() {
+            if (window.GalaxySendBar
+                && window.GalaxySendBar.commentText())
+                return 'comment';
+            if (this.editHasChanges()) return 'edit';
+            if (this.isFormVisible()) {
+                var ta = this.formElement.querySelector(\
+'textarea');
+                if (ta && ta.value.trim()) return 'form';
+            }
+            return 'none';
+        },
+
+        // MARK: - The actions a caller names for itself
+
+        // Put away an open emoji popup, wherever the caret is. Both hosts
+        // used to inline this as a query for a focused textarea and a call
+        // into the popup, twice each, in a string.
+        dismissEmojiPopup() {
+            if (typeof EmojiAutocomplete === 'undefined')\
+ return;
+            var ta = document.querySelector(
+                '.annotation-textarea:focus')
+                || document.querySelector(
+                    '.annotation-edit-textarea:focus');
+            if (ta) EmojiAutocomplete.dismiss(ta);
+        },
+
+        // Collapse the overall comment, keeping what was typed.
+        collapseOverallComment() {
+            if (window.GalaxySendBar)
+                window.GalaxySendBar.collapse();
         },
 
         dismissForm() {
