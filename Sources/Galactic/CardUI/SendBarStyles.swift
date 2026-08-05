@@ -62,6 +62,23 @@ public func sendBarTokens(isLight: Bool) -> String {
         --send-bar-btn-border: \(isLight
             ? "rgba(255, 255, 255, 0.35)"
             : "rgba(255, 255, 255, 0.3)");
+        /* The comment field, as a shade of the bar rather than a colour of
+           its own. A veil in light and a scrim in dark keeps the hue, so
+           there is no edge where two unrelated colours meet — which is what
+           went wrong with a white field and again with the page's own
+           background, one too bright and one a hole.
+
+           Not a symmetric pair, because the bars are not: light is a forest
+           green darker than dark's, so lifting a field off it takes more than
+           sinking one into the brighter one. Text lands at about 10.8:1 in
+           light and 5.6:1 in dark, both clear of AA for the prose that gets
+           typed here. */
+        --send-bar-input-bg: \(isLight
+            ? "rgba(255, 255, 255, 0.72)"
+            : "rgba(0, 0, 0, 0.35)");
+        --send-bar-input-fg: \(isLight
+            ? "#1f2a1f"
+            : "rgba(255, 255, 255, 0.95)");
     }
     """
 }
@@ -117,19 +134,14 @@ public let sendBarCSS: String = """
         box-sizing: border-box;
         padding: 5px 8px;
         border-radius: 4px;
-        /* Themed exactly as `.note-textarea` and `.annotation-textarea` are,
-           off the same two properties, because this is one more composer and
-           a reader typing prose into it should not be able to tell which one
-           they are in. Both hosts declare these in the stylesheet this is
-           emitted into — the readers in `annotationCSSVars`, the scrollback
-           from its terminal theme — so following the theme costs nothing here.
-
-           The border stays the bar's, not the page's: it is what separates a
-           dark field from dark green, and it is the one part of the field that
-           belongs to the bar rather than to the document. */
+        /* Coloured against the bar rather than against the page. The other
+           composers read `--bg`/`--fg` because they sit *in* the document;
+           this one sits on a green strip laid over it, and borrowing the
+           page's background there reads as a hole punched through the bar
+           rather than as a field on it. */
         border: 1px solid var(--send-bar-btn-border);
-        background: var(--bg);
-        color: var(--fg);
+        background: var(--send-bar-input-bg);
+        color: var(--send-bar-input-fg);
         font-family: -apple-system, system-ui, sans-serif;
         font-size: 13px;
         font-weight: 400;
@@ -143,11 +155,10 @@ public let sendBarCSS: String = """
         border-color: rgba(255, 255, 255, 0.7);
     }
     .send-bar-comment-input::placeholder {
-        /* Follows the field it sits in, for the same reason the field
-           follows the page. A fixed dark placeholder was readable only
-           while the field was light. */
-        color: var(--fg);
-        opacity: 0.45;
+        /* Follows the field's own text colour, so it stays legible whichever
+           way the theme took the field. */
+        color: var(--send-bar-input-fg);
+        opacity: 0.5;
     }
     .send-bar-button {
         background: var(--send-bar-btn-bg);
