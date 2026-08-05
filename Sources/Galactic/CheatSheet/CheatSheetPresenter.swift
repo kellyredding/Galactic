@@ -82,6 +82,19 @@ public final class CheatSheetPresenter: ObservableObject {
     /// otherwise unassertable.
     var escapeMonitor: Any?
 
+    /// Who held the keyboard when the sheet opened, and where. See
+    /// `captureFocus`.
+    ///
+    /// Weak, both of them: the sheet must never be the reason a window or a
+    /// view outlives its host's intention to be rid of it. A responder that
+    /// goes away while the sheet is up simply is not restored.
+    ///
+    /// Internal rather than private so a test can assert they are released on
+    /// dismiss — a saved responder surviving a close is a retain cycle waiting
+    /// for the next open.
+    weak var priorWindow: NSWindow?
+    weak var priorResponder: NSResponder?
+
     /// Internal, so this package's own tests can exercise an instance without
     /// mutating the singleton every other test shares. Hosts use `shared`.
     init() {}
@@ -111,6 +124,7 @@ public final class CheatSheetPresenter: ObservableObject {
     public func present() {
         guard !isPresented else { return }
         sections = sectionsProvider()
+        captureFocus()
         isPresented = true
         installEscapeMonitor()
     }
@@ -118,6 +132,55 @@ public final class CheatSheetPresenter: ObservableObject {
     public func dismiss() {
         isPresented = false
         removeEscapeMonitor()
+        restoreFocus()
+    }
+
+    /// Remember who holds the keyboard, so closing can hand it back.
+    ///
+    /// Taken here for the same reason the sections are: by the time the overlay
+    /// has mounted, the sheet's own search field holds first responder, and
+    /// asking then would record the sheet as the thing to restore to.
+    ///
+    /// The window is recorded alongside the responder rather than resolved
+    /// again at dismiss. A host can have a panel holding key when the sheet is
+    /// summoned — a find bar is the usual one — and the caret then belongs to
+    /// that panel, not to the main window. Reading `keyWindow` a second time,
+    /// after the overlay has taken it, would answer a different window and
+    /// restore into the wrong one.
+    private func captureFocus() {
+        priorWindow = NSApp.keyWindow
+        priorResponder = priorWindow?.firstResponder
+    }
+
+    /// Give the keyboard back to whoever had it when the sheet opened.
+    ///
+    /// Every step is conditional, because each thing being restored may be
+    /// gone: a host is free to close a reader, switch a tab, or end a session
+    /// while the sheet is up, and a view that has left the window must not be
+    /// dragged back into focus. Restoring nothing is the right answer then —
+    /// the window keeps whatever responder it settled on.
+    ///
+    /// Unlike the find bar's `dismiss`, this always restores when it can. That
+    /// method has a sibling which deliberately clears the saved responder
+    /// first, because restoring on the way out of a *pane handoff* parks focus
+    /// in the outgoing pane long enough for the focus observers to record it as
+    /// where the user was last. Nothing is being handed off here: the sheet is
+    /// an overlay in one window and closing it is a return, not a move.
+    private func restoreFocus() {
+        let window = priorWindow
+        let responder = priorResponder
+        priorWindow = nil
+        priorResponder = nil
+
+        guard let window, let responder else { return }
+        // A view that has left the window it was saved from must not be
+        // dragged back into focus: the host is free to close a reader, switch
+        // a tab, or end a session while the sheet is up, and the caret belongs
+        // to whatever replaced it. A responder that is not a view carries no
+        // window reference to contradict, so it is trusted.
+        if let view = responder as? NSView, view.window !== window { return }
+        if !window.isKeyWindow { window.makeKey() }
+        _ = window.makeFirstResponder(responder)
     }
 
     /// Escape closes the sheet.

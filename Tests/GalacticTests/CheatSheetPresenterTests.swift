@@ -206,6 +206,63 @@ final class CheatSheetPresenterTests: XCTestCase {
         XCTAssertEqual(presenter.sections.first(where: \.isOpening)?.id, "a")
     }
 
+    // MARK: - Handing the keyboard back
+
+    /// Closing releases the note, whether or not it could be acted on.
+    ///
+    /// The bug the note exists to fix: closing the sheet left the keyboard
+    /// nowhere, so a terminal session that had focus before ⌘/ did not get it
+    /// back and the next thing typed went wherever the window settled.
+    ///
+    /// Asserted through the bookkeeping, not the caret. Moving first responder
+    /// for real needs a running app and an event loop, and a window built in
+    /// this target crashes the process outright — the same wall
+    /// `SheetAlertFocusTests` names when it leaves activation to manual
+    /// verification. A plain responder is enough to prove the note is kept and
+    /// dropped at the right times, which is the part that can regress silently.
+    ///
+    /// Releasing matters beyond the reference: the next open would otherwise
+    /// find a stale note and hand the keyboard to whatever used to hold it.
+    func testClosingReleasesTheNote() {
+        let presenter = CheatSheetPresenter()
+        presenter.present()
+
+        // Held strongly here on purpose. The note is weak, so an inline
+        // `NSResponder()` would be gone before the assertion ran and the test
+        // would pass whether or not `dismiss` cleared anything.
+        let responder = NSResponder()
+        presenter.priorResponder = responder
+        XCTAssertNotNil(
+            presenter.priorResponder,
+            "precondition: something is noted, so nil below means released")
+
+        presenter.dismiss()
+
+        XCTAssertNil(presenter.priorResponder, "the note is released")
+        XCTAssertNil(presenter.priorWindow, "and so is the window it was in")
+    }
+
+    /// A second open while already up must not overwrite the note.
+    ///
+    /// Same hazard the sections have, one step further on: by the time the
+    /// sheet is up its own search field holds first responder, so re-noting
+    /// would record the sheet as the thing to hand the keyboard back to — and
+    /// closing would then restore focus to a field that no longer exists.
+    func testASecondOpenDoesNotRenoteTheKeyboard() {
+        let presenter = CheatSheetPresenter()
+        presenter.present()
+
+        let planted = NSResponder()
+        presenter.priorResponder = planted
+
+        presenter.present()   // already up — must be a no-op
+
+        XCTAssertTrue(
+            presenter.priorResponder === planted,
+            "the note survives a redundant open, so the caret still goes back "
+                + "to where the user actually was")
+    }
+
     // MARK: - The fourth presentation mechanism
 
     /// `ModalState` is where a drag target asks whether something is being
