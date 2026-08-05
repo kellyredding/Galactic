@@ -117,13 +117,19 @@ public let sendBarCSS: String = """
         box-sizing: border-box;
         padding: 5px 8px;
         border-radius: 4px;
+        /* Themed exactly as `.note-textarea` and `.annotation-textarea` are,
+           off the same two properties, because this is one more composer and
+           a reader typing prose into it should not be able to tell which one
+           they are in. Both hosts declare these in the stylesheet this is
+           emitted into — the readers in `annotationCSSVars`, the scrollback
+           from its terminal theme — so following the theme costs nothing here.
+
+           The border stays the bar's, not the page's: it is what separates a
+           dark field from dark green, and it is the one part of the field that
+           belongs to the bar rather than to the document. */
         border: 1px solid var(--send-bar-btn-border);
-        /* Deliberately not themed, unlike the four tokens above. Those
-           resolve against the host's own background; this one sits on the
-           bar, which is green under both themes — so a light field is the
-           same answer twice rather than two answers. */
-        background: rgba(255, 255, 255, 0.95);
-        color: #1a1a1a;
+        background: var(--bg);
+        color: var(--fg);
         font-family: -apple-system, system-ui, sans-serif;
         font-size: 13px;
         font-weight: 400;
@@ -137,7 +143,11 @@ public let sendBarCSS: String = """
         border-color: rgba(255, 255, 255, 0.7);
     }
     .send-bar-comment-input::placeholder {
-        color: rgba(0, 0, 0, 0.4);
+        /* Follows the field it sits in, for the same reason the field
+           follows the page. A fixed dark placeholder was readable only
+           while the field was light. */
+        color: var(--fg);
+        opacity: 0.45;
     }
     .send-bar-button {
         background: var(--send-bar-btn-bg);
