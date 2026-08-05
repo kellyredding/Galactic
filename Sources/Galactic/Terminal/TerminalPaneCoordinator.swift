@@ -146,26 +146,55 @@ public final class TerminalPaneCoordinator: TerminalPaneRegistry {
         return true
     }
 
-    // MARK: - Cross-pane scrollback state
+    // MARK: - Scrollback state
 
-    /// True while the session pane's scrollback overlay is open.
+    /// Which panes currently have a scrollback overlay open.
+    ///
+    /// Held here rather than on either pane so neither has to know the other
+    /// exists, and so it survives a pane being torn down and rebuilt.
+    ///
+    /// A set rather than the single session-pane flag this began as. That flag
+    /// answered one question — may a shell send into the agent — and answered
+    /// it correctly, so nothing needed the shell's own state and nothing wrote
+    /// it. Then a second caller arrived wanting "is the surface the user is
+    /// reading a scrollback", read the flag that was there, and was wrong for
+    /// exactly one pane. Two questions, one of them per-pane, so the stored
+    /// thing is per-pane and each question derives from it.
+    @Published public private(set) var scrollbackOpenKinds: Set<
+        TerminalPaneKind
+    > = []
+
+    /// True while the *session* pane's scrollback is open.
     ///
     /// The shell pane's Send to Claude reads it: sending into the agent while
     /// its buffer is frozen open would land text the user cannot see arriving.
-    /// Held here rather than on either pane so neither has to know the other
-    /// exists, and so it survives a pane being torn down and rebuilt.
-    @Published public private(set) var sessionPaneScrollbackActive = false
-
-    public var sessionPaneScrollbackActivePublisher: AnyPublisher<Bool, Never> {
-        $sessionPaneScrollbackActive.eraseToAnyPublisher()
+    /// Derived rather than stored, so it cannot disagree with the set.
+    public var sessionPaneScrollbackActive: Bool {
+        scrollbackOpenKinds.contains(.session)
     }
 
-    /// Guarded on inequality: this is written on every overlay open and close
+    /// Emits only when the session pane's answer actually changes — a shell
+    /// scrollback opening moves the set without moving this, and the consumer
+    /// re-evaluates a button's enablement on every emission.
+    public var sessionPaneScrollbackActivePublisher: AnyPublisher<Bool, Never> {
+        $scrollbackOpenKinds
+            .map { $0.contains(.session) }
+            .removeDuplicates()
+            .eraseToAnyPublisher()
+    }
+
+    /// Guarded on membership: this is written on every overlay open and close
     /// from more than one site, and an unguarded assignment publishes a no-op
     /// change to every observer each time.
-    public func setSessionPaneScrollbackActive(_ active: Bool) {
-        guard sessionPaneScrollbackActive != active else { return }
-        sessionPaneScrollbackActive = active
+    public func setScrollbackOpen(
+        _ open: Bool, kind: TerminalPaneKind
+    ) {
+        guard scrollbackOpenKinds.contains(kind) != open else { return }
+        if open {
+            scrollbackOpenKinds.insert(kind)
+        } else {
+            scrollbackOpenKinds.remove(kind)
+        }
     }
 
     // MARK: - Unsaved work

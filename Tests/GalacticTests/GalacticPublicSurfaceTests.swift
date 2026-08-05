@@ -73,10 +73,11 @@ final class GalacticPublicSurfaceTests: XCTestCase {
         let registry: any TerminalPaneRegistry = StubPaneRegistry()
 
         registry.lastFocusedPaneKind = .shell
-        registry.setSessionPaneScrollbackActive(true)
+        registry.setScrollbackOpen(true, kind: .session)
 
         XCTAssertEqual(registry.lastFocusedPaneKind, .shell)
         XCTAssertTrue(registry.sessionPaneScrollbackActive)
+        XCTAssertEqual(registry.scrollbackOpenKinds, [.session])
         XCTAssertNotNil(registry.sessionPaneScrollbackActivePublisher)
     }
 

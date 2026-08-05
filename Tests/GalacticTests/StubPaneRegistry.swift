@@ -71,17 +71,30 @@ final class StubPaneRegistry: TerminalPaneRegistry {
         return true
     }
 
-    // MARK: - Cross-pane scrollback state
+    // MARK: - Scrollback state
 
-    @Published private(set) var sessionPaneScrollbackActive = false
+    @Published private(set) var scrollbackOpenKinds: Set<TerminalPaneKind> = []
 
-    var sessionPaneScrollbackActivePublisher: AnyPublisher<Bool, Never> {
-        $sessionPaneScrollbackActive.eraseToAnyPublisher()
+    /// Derived, exactly as the real coordinator derives it — a stub that stored
+    /// it separately could pass while the two disagreed.
+    var sessionPaneScrollbackActive: Bool {
+        scrollbackOpenKinds.contains(.session)
     }
 
-    func setSessionPaneScrollbackActive(_ active: Bool) {
-        guard sessionPaneScrollbackActive != active else { return }
-        sessionPaneScrollbackActive = active
+    var sessionPaneScrollbackActivePublisher: AnyPublisher<Bool, Never> {
+        $scrollbackOpenKinds
+            .map { $0.contains(.session) }
+            .removeDuplicates()
+            .eraseToAnyPublisher()
+    }
+
+    func setScrollbackOpen(_ open: Bool, kind: TerminalPaneKind) {
+        guard scrollbackOpenKinds.contains(kind) != open else { return }
+        if open {
+            scrollbackOpenKinds.insert(kind)
+        } else {
+            scrollbackOpenKinds.remove(kind)
+        }
     }
 
     // MARK: - Unsaved work

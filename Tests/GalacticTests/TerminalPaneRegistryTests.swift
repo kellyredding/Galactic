@@ -139,9 +139,9 @@ final class TerminalPaneRegistryTests: XCTestCase {
             .sink { seen.append($0) }
         defer { subscription.cancel() }
 
-        registry.setSessionPaneScrollbackActive(true)
-        registry.setSessionPaneScrollbackActive(true)
-        registry.setSessionPaneScrollbackActive(false)
+        registry.setScrollbackOpen(true, kind: .session)
+        registry.setScrollbackOpen(true, kind: .session)
+        registry.setScrollbackOpen(false, kind: .session)
 
         XCTAssertEqual(
             seen, [false, true, false],
@@ -153,9 +153,60 @@ final class TerminalPaneRegistryTests: XCTestCase {
     func testTheScrollbackFlagReadsBackWhatWasSet() {
         let registry = TerminalPaneCoordinator()
 
-        registry.setSessionPaneScrollbackActive(true)
+        registry.setScrollbackOpen(true, kind: .session)
 
         XCTAssertTrue(registry.sessionPaneScrollbackActive)
+    }
+
+    /// The bug the set replaced a flag for: a shell scrollback is recorded, and
+    /// is not mistaken for the agent's.
+    ///
+    /// A reference sheet asks which surface the user is reading; the cross-pane
+    /// Send gate asks only about the agent. One stored flag answered the second
+    /// and was silently wrong for the first, for exactly one pane.
+    func testAShellScrollbackIsTrackedWithoutClaimingTheSessionPane() {
+        let registry = TerminalPaneCoordinator()
+
+        registry.setScrollbackOpen(true, kind: .shell)
+
+        XCTAssertEqual(registry.scrollbackOpenKinds, [.shell])
+        XCTAssertFalse(
+            registry.sessionPaneScrollbackActive,
+            "a shell reading its own buffer does not gate sending to the agent"
+        )
+    }
+
+    /// Both at once, and each closing independently.
+    func testEachPaneOpensAndClosesOnItsOwn() {
+        let registry = TerminalPaneCoordinator()
+
+        registry.setScrollbackOpen(true, kind: .session)
+        registry.setScrollbackOpen(true, kind: .shell)
+        XCTAssertEqual(registry.scrollbackOpenKinds, [.session, .shell])
+
+        registry.setScrollbackOpen(false, kind: .session)
+
+        XCTAssertEqual(registry.scrollbackOpenKinds, [.shell])
+        XCTAssertFalse(registry.sessionPaneScrollbackActive)
+    }
+
+    /// A shell opening and closing must not wake the cross-pane consumer, which
+    /// re-evaluates a button's enablement on every emission.
+    func testShellTrafficDoesNotEmitToTheSessionPaneConsumer() {
+        let registry = TerminalPaneCoordinator()
+        var seen: [Bool] = []
+        let subscription = registry.sessionPaneScrollbackActivePublisher
+            .sink { seen.append($0) }
+        defer { subscription.cancel() }
+
+        registry.setScrollbackOpen(true, kind: .shell)
+        registry.setScrollbackOpen(false, kind: .shell)
+
+        XCTAssertEqual(
+            seen, [false],
+            "the initial value and nothing more — the session pane's answer "
+                + "never changed"
+        )
     }
 
     // MARK: - Focus restoration
@@ -347,10 +398,11 @@ final class TerminalPaneRegistryTests: XCTestCase {
         let harness = PaneHarness()
         harness.registerPane(.shell, on: first)
         first.lastFocusedPaneKind = .shell
-        first.setSessionPaneScrollbackActive(true)
+        first.setScrollbackOpen(true, kind: .session)
 
         XCTAssertEqual(second.lastFocusedPaneKind, .session)
         XCTAssertFalse(second.sessionPaneScrollbackActive)
+        XCTAssertTrue(second.scrollbackOpenKinds.isEmpty)
 
         second.restoreFocus(kind: .shell)
         XCTAssertEqual(

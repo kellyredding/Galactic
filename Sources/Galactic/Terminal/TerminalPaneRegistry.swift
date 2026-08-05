@@ -127,14 +127,28 @@ public protocol TerminalPaneRegistry: AnyObject {
     @MainActor
     func restoreFocus(kind: TerminalPaneKind)
 
-    // MARK: - Cross-pane scrollback state
+    // MARK: - Scrollback state
+
+    /// Which panes currently have a scrollback overlay open.
+    ///
+    /// Here rather than on either pane because the pane that answers is often
+    /// not the pane that asks, and because it has to survive a pane being torn
+    /// down and rebuilt.
+    ///
+    /// Per-kind because two different questions are asked of it. One is
+    /// cross-pane — may a shell send into the agent — and cares only about the
+    /// session pane. The other is about the surface the user is reading, and
+    /// cares about whichever pane that is. A single session-pane flag answered
+    /// the first and was quietly wrong for the second.
+    var scrollbackOpenKinds: Set<TerminalPaneKind> { get }
 
     /// Whether the session pane currently has a scrollback overlay open.
     ///
-    /// Cross-pane state rather than pane state: the shell pane reads it to
-    /// explain why sending to the agent is unavailable while the agent's own
-    /// scrollback is being read. The pane that answers is not the pane that
-    /// asks, which is why it sits here rather than on either one.
+    /// The narrow cross-pane question, kept as its own member because that is
+    /// what the consumer actually asks and a caller should not have to know
+    /// which kind stands for "the agent". Derivable from
+    /// `scrollbackOpenKinds`, and a conformer should derive it rather than
+    /// store it twice.
     var sessionPaneScrollbackActive: Bool { get }
 
     /// Emits when `sessionPaneScrollbackActive` changes.
@@ -145,17 +159,22 @@ public protocol TerminalPaneRegistry: AnyObject {
     /// satisfy this by erasing its projected value.
     var sessionPaneScrollbackActivePublisher: AnyPublisher<Bool, Never> { get }
 
-    /// Set whether the session pane's scrollback is open.
+    /// Set whether the scrollback of a pane of `kind` is open.
     ///
     /// **Assign only on an actual change.** Conformers publish this, and it is
     /// written on every overlay open and close from more than one site, so an
     /// unguarded assignment sends a no-op change to every observer of the
     /// conforming object — which, for a conformer that is also the app's
-    /// session model, is considerably more than the one subscriber this flag
-    /// has.
+    /// session model, is considerably more than the subscribers this has.
     ///
     /// A method rather than a settable property so the guard lives in one place
-    /// and the stored flag can stay read-only to the outside.
+    /// and the stored state can stay read-only to the outside.
+    ///
+    /// Every pane reports, not only the agent's. The gate that used to sit at
+    /// the call sites — write this only from the session pane — was correct for
+    /// the one consumer that existed and became a silent wrong answer for the
+    /// second. A pane saying what it is doing is not the place to encode which
+    /// callers care.
     ///
     /// **Where it is reset on teardown is deliberately unspecified.** A registry
     /// that outlives its host has to clear the flag when the process exits,
@@ -163,7 +182,7 @@ public protocol TerminalPaneRegistry: AnyObject {
     /// either double-resets the first or strands the second — and a stranded
     /// flag leaves the other pane's action disabled permanently, with nothing
     /// on screen explaining why.
-    func setSessionPaneScrollbackActive(_ active: Bool)
+    func setScrollbackOpen(_ open: Bool, kind: TerminalPaneKind)
 
     // MARK: - Unsaved work
 

@@ -383,10 +383,10 @@ public final class TerminalHostView: NSView {
         let key = ObjectIdentifier(self)
         paneRegistry?.unregisterUnsavedWorkChecker(key)
         paneRegistry?.unregisterFocusRestorer(key)
-        // Going away with a scrollback still open would strand the flag, and
+        // Going away with a scrollback still open would strand the state, and
         // with it leave a sibling shell's Send disabled for good.
-        if paneKind == .session, scrollbackOverlay != nil {
-            paneRegistry?.setSessionPaneScrollbackActive(false)
+        if scrollbackOverlay != nil {
+            paneRegistry?.setScrollbackOpen(false, kind: paneKind)
         }
     }
 
@@ -1226,13 +1226,12 @@ public final class TerminalHostView: NSView {
         addSubview(overlay, positioned: .above, relativeTo: dragHighlightView)
         scrollbackOverlay = overlay
 
-        // Tell a sibling shell that its target just froze. Only the agent
-        // pane writes this — a shell's own scrollback does not gate the
-        // cross-pane button. Asked of the pane rather than by testing its
-        // class, which is the same question with one fewer name in it.
-        if paneKind == .session {
-            paneRegistry?.setSessionPaneScrollbackActive(true)
-        }
+        // Say which pane just froze. Every pane reports: the cross-pane Send
+        // gate reads only the agent's answer, but a reference sheet asks about
+        // whichever surface the user is reading, and a shell that stayed silent
+        // was the one pane it got wrong. Asked of the pane rather than by
+        // testing its class, which is the same question with one fewer name.
+        paneRegistry?.setScrollbackOpen(true, kind: paneKind)
 
         let durationId = "scrollback--\(UUID().uuidString)"
         scrollbackDurationId = durationId
@@ -1337,10 +1336,8 @@ public final class TerminalHostView: NSView {
         scrollbackDurationId = nil
         currentSnapshot = nil
 
-        // Mirror the open path: clear the flag so a sibling shell sees it.
-        if paneKind == .session {
-            paneRegistry?.setSessionPaneScrollbackActive(false)
-        }
+        // Mirror the open path.
+        paneRegistry?.setScrollbackOpen(false, kind: paneKind)
 
         // Ignore the tail of the gesture that dismissed this, or it re-opens
         // what the user just closed.
