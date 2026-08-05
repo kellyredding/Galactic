@@ -265,6 +265,11 @@ public enum ScrollbackHTMLRenderer {
         \(noteManagerJS)
         window.GalaxySendBar.configure({
             noun: 'note',
+            comment: true,
+            // The comment is not passed along here. `sendToClaude` reads it
+            // off the bar instead, because the unsaved-note confirmation
+            // bounces out to a sheet and comes back in through a second call
+            // that has no argument to carry it.
             invoke: function() {
                 ScrollbackManager.notes.sendToClaude();
             }
@@ -371,10 +376,15 @@ public enum ScrollbackHTMLRenderer {
                 // The send chord, matched against the shared
                 // predicate so this and the glyphs on the button
                 // cannot drift apart.
-                if (window.GalaxySendBar.matchesChord(e)
-                    && this.notes.items.length > 0) {
+                //
+                // Through `fire` rather than straight at the payload,
+                // because the first press now opens the overall
+                // comment and only the second sends. The note count
+                // that used to be tested here is tested there, in the
+                // one place both surfaces share.
+                if (window.GalaxySendBar.matchesChord(e)) {
                     e.preventDefault();
-                    this.notes.sendToClaude();
+                    window.GalaxySendBar.fire();
                 }
                 break;
             case 'ArrowUp':
@@ -1653,12 +1663,19 @@ public enum ScrollbackHTMLRenderer {
 
             const sorted = [...this.items].sort((a, b) =>
                 a.endLine - b.endLine || a.startLine - b.startLine);
-            const message = sorted.map((note, i) => {
+            const blocks = sorted.map((note, i) => {
                 const n = i + 1;
                 return '[' + n + ']\\n'
                     + '```\\n' + note.lineContent + '\\n```\\n'
                     + note.content;
             }).join('\\n\\n\\n');
+
+            // The overall comment leads, the way it does on a code review:
+            // what the whole thing is about, before the line-by-line.
+            const overall = window.GalaxySendBar.commentText();
+            const message = overall
+                ? overall + '\\n\\n\\n' + blocks
+                : blocks;
 
             window.webkit.messageHandlers.scrollback.postMessage({
                 action: 'sendToClaude',

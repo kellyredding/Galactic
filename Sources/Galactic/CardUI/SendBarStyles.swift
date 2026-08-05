@@ -25,10 +25,18 @@ import Foundation
 /// retrofit avoided renaming either. Nothing here was retrofitted, so one
 /// class name serves both. The two documents are separate web views; there is
 /// nothing for it to collide with.
+/// The container for the overall comment is empty on purpose: the textarea
+/// inside it is built by `GalaxyCardText.createComposerTextarea` on first
+/// expand, so the attributes every composer switches off — spellcheck,
+/// autocorrect, autocapitalize, autocomplete — stay declared in exactly one
+/// place rather than being restated here in markup.
 public let sendBarHTML: String = """
     <div class="send-bar" id="send-bar" style="display:none;">
-        <span class="send-bar-count" id="send-bar-count"></span>
-        <button class="send-bar-button" id="send-bar-button">Send to Claude ⌘⇧↩</button>
+        <div class="send-bar-comment" id="send-bar-comment" style="display:none;"></div>
+        <div class="send-bar-row">
+            <span class="send-bar-count" id="send-bar-count"></span>
+            <button class="send-bar-button" id="send-bar-button">Send to Claude ⌘⇧↩</button>
+        </div>
     </div>
     """
 
@@ -76,12 +84,17 @@ public let sendBarCSS: String = """
         bottom: 0;
         left: 0;
         right: 0;
-        height: 40px;
         background: var(--send-bar-bg);
         backdrop-filter: blur(8px);
+        /* A column rather than the 40px row this used to be, so the overall
+           comment can open above the count and the button. The bar is
+           anchored to the bottom, so growing upward leaves the button
+           exactly where the pointer left it. Collapsed, the row's own
+           min-height makes this the same 40px strip it always was. */
         display: flex;
-        align-items: center;
-        justify-content: space-between;
+        flex-direction: column;
+        align-items: stretch;
+        min-height: 40px;
         padding: 0 16px;
         color: white;
         font-family: -apple-system, system-ui, sans-serif;
@@ -89,6 +102,42 @@ public let sendBarCSS: String = """
         font-weight: 500;
         z-index: 1000;
         border-top: 1px solid var(--send-bar-border-top);
+    }
+    .send-bar-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 40px;
+    }
+    .send-bar-comment {
+        padding: 8px 0 2px;
+    }
+    .send-bar-comment-input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 5px 8px;
+        border-radius: 4px;
+        border: 1px solid var(--send-bar-btn-border);
+        /* Deliberately not themed, unlike the four tokens above. Those
+           resolve against the host's own background; this one sits on the
+           bar, which is green under both themes — so a light field is the
+           same answer twice rather than two answers. */
+        background: rgba(255, 255, 255, 0.95);
+        color: #1a1a1a;
+        font-family: -apple-system, system-ui, sans-serif;
+        font-size: 13px;
+        font-weight: 400;
+        line-height: 1.4;
+        /* The height is the autosize's to set, and only its. */
+        resize: none;
+        overflow: hidden;
+    }
+    .send-bar-comment-input:focus {
+        outline: none;
+        border-color: rgba(255, 255, 255, 0.7);
+    }
+    .send-bar-comment-input::placeholder {
+        color: rgba(0, 0, 0, 0.4);
     }
     .send-bar-button {
         background: var(--send-bar-btn-bg);

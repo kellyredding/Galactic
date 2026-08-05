@@ -12,6 +12,12 @@ import Foundation
 // belongs to a bar. A host wires `invoke` to whatever sending means
 // there.
 //
+// A host may also ask for an overall comment, which opens on the first
+// press and sends on the second. That text does arrive on `invoke`, and it
+// is not an exception to the paragraph above: what the surface holds is
+// still the surface's, and what the person pressing the bar said about it
+// is part of the press.
+//
 // Inject before any module that calls into `GalaxySendBar` (the
 // scrollback note manager, the annotation manager). Idempotent — calls
 // through `if (window.GalaxySendBar) return;` so a second injection is a
@@ -32,12 +38,29 @@ public let sendBarJS: String = """
         noun: 'note',
         invoke: null,
 
+        // What `update` was last told.
+        //
+        // Held here so one place can refuse a send with nothing to send. The
+        // scrollback tested its note count at its own keydown and the reader
+        // branch tested nothing at all, which is how the chord came to fire
+        // into a reader with no pending annotations — closing it, and then
+        // being refused by the CLI with the reader already gone.
+        count: 0,
+
+        // Whether this host wants an overall comment ahead of the send. Off
+        // unless asked for, so a host that has not opted in keeps sending on
+        // the first press exactly as it did.
+        commentEnabled: false,
+        expanded: false,
+
         // A host supplies the noun it counts in and what to do when the
-        // bar is pressed. Nothing about the payload arrives here.
+        // bar is pressed. Nothing about the surface's payload arrives here —
+        // what does now arrive, on `invoke`, is the presser's own words.
         configure: function(config) {
             if (!config) return;
             if (config.noun) this.noun = config.noun;
             if (config.invoke) this.invoke = config.invoke;
+            if (config.comment) this.commentEnabled = true;
 
             var btn = document.getElementById('send-bar-button');
             // Re-configuring is normal — a reader re-runs its init
@@ -62,11 +85,115 @@ public let sendBarJS: String = """
             return e.key === 'Enter' && e.metaKey && e.shiftKey;
         },
 
+        // First press opens the overall comment, second one sends. A host
+        // that never asked for the comment sends on the first, which is the
+        // whole of what this used to do.
         fire: function() {
-            if (this.invoke) this.invoke();
+            if (!this.invoke) return;
+            if (this.count <= 0) return;
+            if (!this.commentEnabled) {
+                this.invoke('');
+                return;
+            }
+            if (!this.expanded) {
+                this.expand();
+                return;
+            }
+            this.submit();
+        },
+
+        submit: function() {
+            // Deliberately not cleared. A host may bounce the send through a
+            // confirmation sheet and re-enter afterwards, and it has to still
+            // find what was typed.
+            this.invoke(this.commentText());
+        },
+
+        commentText: function() {
+            var ta = document.getElementById('send-bar-comment-input');
+            return ta ? ta.value.trim() : '';
+        },
+
+        expand: function() {
+            var box = document.getElementById('send-bar-comment');
+            if (!box) return;
+            var ta = this.buildComment(box);
+            if (!ta) return;
+            box.style.display = '';
+            this.expanded = true;
+            this.syncGutter();
+            ta.focus();
+        },
+
+        // Keeps the text.
+        //
+        // Escape here means "not yet", and of the two failures available —
+        // holding text nobody asked to keep, or making someone retype an
+        // overall review because a key went astray — the second is worse.
+        collapse: function() {
+            var box = document.getElementById('send-bar-comment');
+            if (!box) return;
+            box.style.display = 'none';
+            this.expanded = false;
+            this.syncGutter();
+        },
+
+        // The bar declares the body gutter that keeps it off the last line,
+        // so a bar that changed height owes the body a new one.
+        syncGutter: function() {
+            var bar = document.getElementById('send-bar');
+            if (!bar) return;
+            if (bar.style.display === 'none') {
+                // Back to the stylesheet's value: a hidden bar covers nothing,
+                // and its offsetHeight would read zero anyway.
+                document.body.style.paddingBottom = '';
+                return;
+            }
+            document.body.style.paddingBottom
+                = (bar.offsetHeight + 8) + 'px';
+        },
+
+        // Built on first expand rather than shipped in the markup, so the
+        // attributes every composer switches off are declared once, next to
+        // the four other composers that switch them off.
+        buildComment: function(box) {
+            var existing
+                = document.getElementById('send-bar-comment-input');
+            if (existing) return existing;
+            if (!window.GalaxyCardText) return null;
+
+            var self = this;
+            var ta = window.GalaxyCardText.createComposerTextarea(
+                'send-bar-comment-input', '', 1);
+            ta.id = 'send-bar-comment-input';
+            ta.placeholder = 'Overall comment'
+                + (window.GalaxyTextEntry
+                    ? window.GalaxyTextEntry.placeholderHint('send')
+                    : '');
+            box.appendChild(ta);
+
+            // Growing the box moves the bar's top edge, which is the gutter's
+            // problem and nothing else's — the cards on either surface are
+            // laid out against the document, not against this.
+            window.GalaxyCardText.installAutosize(ta, function() {
+                self.syncGutter();
+            });
+
+            window.GalaxyCardText.bindCardComposer(ta, {
+                guard: function(e) {
+                    if (!self.matchesChord(e)) return false;
+                    e.preventDefault();
+                    self.submit();
+                    return true;
+                },
+                onSubmit: function() { self.submit(); },
+                onEscape: function() { self.collapse(); }
+            });
+            return ta;
         },
 
         update: function(count) {
+            this.count = count;
             var bar = document.getElementById('send-bar');
             var label = document.getElementById('send-bar-count');
             if (!bar || !label) return;
@@ -76,7 +203,13 @@ public let sendBarJS: String = """
                     + (count === 1 ? '' : 's');
             } else {
                 bar.style.display = 'none';
+                // Nothing left for a comment to lead. Hidden rather than
+                // discarded, for the reason `collapse` keeps it.
+                var box = document.getElementById('send-bar-comment');
+                if (box) box.style.display = 'none';
+                this.expanded = false;
             }
+            this.syncGutter();
         },
 
         // Uses a data attribute rather than the native `title` so the

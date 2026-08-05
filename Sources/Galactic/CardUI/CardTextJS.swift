@@ -215,8 +215,18 @@ public let cardTextJS: String = """
         var opts = handlers || {};
         window.GalaxyTextEntry.bind(ta, {
             guard: function(e) {
-                return typeof EmojiAutocomplete !== 'undefined'
-                    && EmojiAutocomplete.handleKeyDown(ta, e);
+                if (typeof EmojiAutocomplete !== 'undefined'
+                    && EmojiAutocomplete.handleKeyDown(ta, e)) {
+                    return true;
+                }
+                // A composer with a key of its own gets it after the popup
+                // and before the matcher. The send bar's comment is the one
+                // that needs this: the document-level handler that answers
+                // the send chord stands aside for textareas on purpose, so
+                // the composer has to answer it or nothing will. Passing the
+                // guard through rather than letting that caller call `bind`
+                // directly is what keeps the popup's first claim stated once.
+                return opts.guard ? opts.guard(e) : false;
             },
             submit: opts.onSubmit,
             escape: opts.onEscape
