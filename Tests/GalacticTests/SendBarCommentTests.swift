@@ -51,6 +51,9 @@ final class SendBarCommentTests: XCTestCase {
                     selectionStart: 0,
                     selectionEnd: 0,
                     offsetHeight: 40,
+                    // Zero while a parent is hidden, which is the whole
+                    // reason `expand` is what fits the field.
+                    scrollHeight: 0,
                     dataset: {},
                     style: {},
                     children: [],
@@ -356,6 +359,53 @@ final class SendBarCommentTests: XCTestCase {
                 "focus:send-bar-comment-input",
                 "focus:send-bar-comment-input",
             ]
+        )
+        assertNoThrow()
+    }
+
+    // MARK: - Fitting the field
+
+    /// The bug this guards: a rescued comment was filled in while its box was
+    /// still hidden, where `scrollHeight` reads zero — so the field was pinned
+    /// to a zero height and came back squashed, correcting itself only on the
+    /// next keystroke. Whoever fills the field cannot size it; the moment it
+    /// becomes visible is the only moment it can be measured.
+    func testExpandFitsTheFieldToItsContent() {
+        configureWithComment()
+        context.evaluateScript(
+            """
+            window.GalaxySendBar.update(1);
+            var box = els['send-bar-comment'];
+            var ta = window.GalaxySendBar.buildComment(box);
+            ta.value = 'three\\nlines\\nof it';
+            // Hidden: nothing may set a height off a zero measurement.
+            var noHeightWhileHidden = !ta.style.height;
+            ta.scrollHeight = 64;
+            window.GalaxySendBar.expand();
+            """
+        )
+        XCTAssertTrue(
+            bool("noHeightWhileHidden"),
+            "the field was sized while its box was hidden"
+        )
+        XCTAssertEqual(
+            string("els['send-bar-comment-input'].style.height"), "64px"
+        )
+        assertNoThrow()
+    }
+
+    func testFittingPaysTheGutterWhatItCosts() {
+        configureWithComment()
+        context.evaluateScript(
+            """
+            window.GalaxySendBar.update(1);
+            window.GalaxySendBar.fire();
+            els['send-bar'].offsetHeight = 120;
+            window.GalaxySendBar.fitComment();
+            """
+        )
+        XCTAssertEqual(
+            string("document.body.style.paddingBottom"), "128px"
         )
         assertNoThrow()
     }

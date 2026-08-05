@@ -559,11 +559,10 @@ public enum ScrollbackHTMLRenderer {
                 // and a bar that came back collapsed would be holding the
                 // caret somewhere nobody can see.
                 const cta = box ? bar.buildComment(box) : null;
-                if (cta) {
-                    cta.value = state.overallComment;
-                    cta.style.height = 'auto';
-                    cta.style.height = cta.scrollHeight + 'px';
-                }
+                // The value only. Sizing it here would measure a field
+                // inside a hidden box, whose scrollHeight is zero —
+                // `expand` fits it at the moment it can be measured.
+                if (cta) cta.value = state.overallComment;
                 if (state.overallExpanded) bar.expand();
             }
         }

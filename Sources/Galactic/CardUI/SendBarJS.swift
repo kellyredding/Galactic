@@ -121,8 +121,22 @@ public let sendBarJS: String = """
             if (!ta) return;
             box.style.display = '';
             this.expanded = true;
-            this.syncGutter();
+            // Fitted here rather than wherever the text arrived from. A
+            // hidden element has a scrollHeight of zero, so anything that
+            // fills this field while the box is closed — a rescue from a
+            // page being rebuilt — cannot measure it and must not try.
+            // This is the first moment it has a height at all.
+            this.fitComment();
             ta.focus();
+        },
+
+        // Grow the field to its content, and pay the gutter what that costs.
+        fitComment: function() {
+            var ta = document.getElementById('send-bar-comment-input');
+            if (!ta) return;
+            ta.style.height = 'auto';
+            ta.style.height = ta.scrollHeight + 'px';
+            this.syncGutter();
         },
 
         // Keeps the text.
