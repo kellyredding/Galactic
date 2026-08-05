@@ -217,6 +217,61 @@ final class SendBarTests: XCTestCase {
         )
     }
 
+    // MARK: - Surviving a rebuild
+    //
+    // Both surfaces throw their whole document away and build a new one on a
+    // theme or font change. Nothing about the comment has a source of truth
+    // outside the page, so each surface's rescue has to name it or the text is
+    // gone on a gesture that had nothing to do with it. These are drift
+    // detectors: they fail if a rescue stops carrying it.
+
+    func testTheReaderRescueCarriesTheComment() {
+        XCTAssertTrue(
+            annotationManagerJS.contains("overallComment"),
+            "a reader rebuild would drop the overall comment"
+        )
+        XCTAssertTrue(
+            annotationManagerJS.contains("buildComment"),
+            "the rescued comment is never put back on the page"
+        )
+    }
+
+    func testTheScrollbackRescueCarriesTheComment() {
+        let manager = ScrollbackHTMLRenderer.scrollbackManagerJS
+        XCTAssertTrue(
+            manager.contains("getFormState"),
+            "the scrollback has nothing to rescue a composer with"
+        )
+        XCTAssertTrue(
+            manager.contains("GalaxySendBar.commentText()"),
+            "a scrollback rebuild would drop the overall comment"
+        )
+    }
+
+    /// The same rebuild used to take a half-written *note* too, silently,
+    /// while every other way of losing that text asks first.
+    func testTheScrollbackRescueCarriesAHalfWrittenNote() {
+        let manager = ScrollbackHTMLRenderer.scrollbackManagerJS
+        XCTAssertTrue(
+            manager.contains("showSelectionToolbar"),
+            "a rescued note form has no way back to its line range"
+        )
+        XCTAssertTrue(
+            manager.contains("startEdit"),
+            "an edit in progress is not re-entered after a rebuild"
+        )
+    }
+
+    /// A comment can outlive the notes it was meant to lead, and the exit that
+    /// follows must not take it without asking.
+    func testAWrittenCommentCountsAsUnsavedWork() {
+        XCTAssertTrue(
+            ScrollbackHTMLRenderer.noteManagerJS
+                .contains("GalaxySendBar.commentText()"),
+            "exiting the scrollback would discard a written comment silently"
+        )
+    }
+
     /// Nouns are host constants rather than user text, but the bar's label is
     /// built by interpolating one into a single-quoted literal, and an
     /// unescaped quote there is a syntax error in a page that looks fine until

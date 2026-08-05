@@ -476,6 +476,96 @@ public enum ScrollbackHTMLRenderer {
                 }
             }
             return 0;
+        },
+
+        // Everything half-typed that a re-render would otherwise take.
+        //
+        // A theme or font change rebuilds this whole document. The committed
+        // notes come back because their source of truth is a Swift array, but
+        // anything still being composed lived only in the DOM — and every
+        // other way of losing that text asks first, which made this the one
+        // path that simply took it.
+        getFormState() {
+            const n = this.notes;
+            const ta = n.formElement
+                ? n.formElement.querySelector('textarea') : null;
+            let editValue = null;
+            if (n.editingId) {
+                const card = document.querySelector(
+                    '[data-note-id=\"' + n.editingId + '\"]');
+                const eta = card
+                    ? card.querySelector('.note-edit-textarea') : null;
+                if (eta) editValue = eta.value;
+            }
+            return {
+                formVisible: !!(n.formElement
+                    && n.formElement.style.display !== 'none'),
+                selectionOnly: n.selectionOnly,
+                startLine: n.formStartLine,
+                endLine: n.formEndLine,
+                textareaValue: ta ? ta.value : '',
+                editingId: n.editingId,
+                editValue: editValue,
+                overallComment: window.GalaxySendBar
+                    ? window.GalaxySendBar.commentText() : '',
+                overallExpanded: window.GalaxySendBar
+                    ? window.GalaxySendBar.expanded : false
+            };
+        },
+
+        // Replayed after the note cards are back, because the form is
+        // positioned against a line range and an edit needs its card to
+        // exist before it can be re-entered.
+        restoreFormState(state) {
+            if (!state) return;
+            const n = this.notes;
+
+            if (state.formVisible
+                && state.startLine != null
+                && state.endLine != null) {
+                // Through the toolbar, which is what puts a form at a range
+                // at all — then promoted only if it was past that stage, so
+                // a toolbar comes back a toolbar.
+                n.showSelectionToolbar(state.startLine, state.endLine);
+                if (!state.selectionOnly) n.promoteToForm();
+                const ta = n.formElement
+                    ? n.formElement.querySelector('textarea') : null;
+                if (ta && state.textareaValue) {
+                    ta.value = state.textareaValue;
+                    ta.style.height = 'auto';
+                    ta.style.height = ta.scrollHeight + 'px';
+                }
+            }
+
+            if (state.editingId) {
+                n.startEdit(state.editingId);
+                if (state.editValue != null) {
+                    const card = document.querySelector(
+                        '[data-note-id=\"' + state.editingId + '\"]');
+                    const eta = card
+                        ? card.querySelector('.note-edit-textarea') : null;
+                    if (eta) {
+                        eta.value = state.editValue;
+                        eta.style.height = 'auto';
+                        eta.style.height = eta.scrollHeight + 'px';
+                    }
+                }
+            }
+
+            if (state.overallComment && window.GalaxySendBar) {
+                const bar = window.GalaxySendBar;
+                const box = document.getElementById('send-bar-comment');
+                // Built rather than expanded, because expanding takes focus
+                // and a bar that came back collapsed would be holding the
+                // caret somewhere nobody can see.
+                const cta = box ? bar.buildComment(box) : null;
+                if (cta) {
+                    cta.value = state.overallComment;
+                    cta.style.height = 'auto';
+                    cta.style.height = cta.scrollHeight + 'px';
+                }
+                if (state.overallExpanded) bar.expand();
+            }
         }
     };
 
@@ -1686,6 +1776,16 @@ public enum ScrollbackHTMLRenderer {
         hasUnsavedWork() {
             // Submitted notes that haven't been sent to Claude
             if (this.items.length > 0) return true;
+            // A written overall comment, which can outlive the notes it was
+            // meant to lead: deleting the last one hides the field and keeps
+            // the text, and without this the exit that follows took it with
+            // no prompt at all.
+            //
+            // Deliberately not added to hasOpenUnsavedComment below — that
+            // one answers "would Send drop this", and Send is precisely what
+            // does not drop the overall comment.
+            if (window.GalaxySendBar
+                && window.GalaxySendBar.commentText()) return true;
             return this.hasOpenUnsavedComment();
         },
 

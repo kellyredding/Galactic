@@ -30,7 +30,10 @@ public extension ScrollbackOverlayView {
     ///
     /// The visible line is read out of the page first and handed back after,
     /// so the reader stays where they were rather than being returned to the
-    /// top of several thousand lines.
+    /// top of several thousand lines. Whatever was still being composed — a
+    /// half-written note, an edit in progress, an overall comment — is
+    /// rescued the same way, since none of it has a source of truth outside
+    /// the page.
     func reRender(
         snapshot: ScrollbackSnapshot,
         theme: TerminalColorTheme,
@@ -49,16 +52,29 @@ public extension ScrollbackOverlayView {
             // thousand lines. Holding position is the whole point of this
             // method, so decline rather than guess.
             guard let scrollLine = result as? Int else { return }
-            let font = resolveTerminalFont(family: fontFamily, size: fontSize)
-            let html = ScrollbackHTMLRenderer.render(
-                snapshot: snapshot,
-                theme: theme,
-                fontFamily: font.fontName,
-                fontSize: fontSize,
-                cellHeight: terminalCellHeight(for: font),
-                textEntry: textEntry
-            )
-            self.scrollbackView.reload(html: html, scrollToLine: scrollLine)
+            // Ask the outgoing page for anything it was still composing,
+            // before the load that destroys it. The notes themselves come
+            // back from Swift, but a half-written one only exists here.
+            self.scrollbackView.webView.evaluateJavaScript(
+                "JSON.stringify(ScrollbackManager.getFormState())"
+            ) { formResult, _ in
+                let font = resolveTerminalFont(
+                    family: fontFamily, size: fontSize
+                )
+                let html = ScrollbackHTMLRenderer.render(
+                    snapshot: snapshot,
+                    theme: theme,
+                    fontFamily: font.fontName,
+                    fontSize: fontSize,
+                    cellHeight: terminalCellHeight(for: font),
+                    textEntry: textEntry
+                )
+                self.scrollbackView.reload(
+                    html: html,
+                    scrollToLine: scrollLine,
+                    formState: formResult as? String
+                )
+            }
         }
     }
 }

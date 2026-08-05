@@ -66,6 +66,10 @@ public class ScrollbackWebView: NSView {
     /// on delete, so each note gets a unique number.
     private var nextNoteNumber: Int = 1
 
+    /// Composer state rescued from a page being replaced, waiting for its
+    /// replacement to signal ready. Nil on a first load and after replay.
+    private var pendingFormState: String?
+
     /// True when there's at least one note.
     public var hasNotes: Bool { !notes.isEmpty }
 
@@ -300,8 +304,15 @@ public class ScrollbackWebView: NSView {
 
     /// Reload the entire HTML document (used for full theme rebuilds).
     /// Preserves note state across the reload by round-tripping through Swift.
-    public func reload(html: String, scrollToLine line: Int) {
+    ///
+    /// `formState` is whatever the outgoing page was still composing, as JSON
+    /// it produced itself. Held here rather than replayed immediately because
+    /// the page that will receive it does not exist yet.
+    public func reload(
+        html: String, scrollToLine line: Int, formState: String? = nil
+    ) {
         initialScrollLine = line
+        pendingFormState = formState
         let baseURL = Bundle.main.resourceURL
         webView.loadHTMLString(html, baseURL: baseURL)
     }
@@ -309,12 +320,23 @@ public class ScrollbackWebView: NSView {
     /// After a reload, restore note cards and form state into the new HTML.
     /// Called from the onReady callback after the page signals readiness.
     public func restoreNoteState() {
-        guard !notes.isEmpty else { return }
         // Re-insert all note cards
         for note in notes {
             let json = noteToJSON(note)
             webView.evaluateJavaScript(
                 "ScrollbackManager.notes.noteCreated(\(json))"
+            )
+        }
+        // Then the composers, which have to come second: the note form is
+        // positioned against a line range, and re-entering an edit needs the
+        // card it edits to be back on the page first.
+        //
+        // Consumed rather than kept, so a later reload that rescues nothing
+        // cannot replay what this one was carrying.
+        if let formState = pendingFormState {
+            pendingFormState = nil
+            webView.evaluateJavaScript(
+                "ScrollbackManager.restoreFormState(\(formState))"
             )
         }
     }
