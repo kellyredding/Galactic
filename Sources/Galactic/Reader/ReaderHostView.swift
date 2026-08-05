@@ -55,6 +55,25 @@ public struct ReaderHostView: NSViewRepresentable {
 
     public var isInspectable: Bool
 
+    /// Whether this reader is the surface in front of the user.
+    ///
+    /// Not the same question as "is this reader open". A host is free to keep
+    /// every tab mounted and switch between them with opacity — the way to
+    /// keep each tab's state and switch instantly — and a reader left open on
+    /// a tab the user has moved away from is still in the window. It would go
+    /// on answering the zoom chords from there, because
+    /// `performKeyEquivalent` reaches the whole hierarchy before the menu bar.
+    ///
+    /// Required rather than defaulted, and that is the point: `true` would be
+    /// the wrong default for every host that forgot it, silently reproducing
+    /// the bug this exists to close, and `false` would hide the omission
+    /// behind a reader whose zoom quietly stopped working. Asking makes the
+    /// answer a decision.
+    ///
+    /// `TerminalHostView` takes the same value for the same reason; see its
+    /// declaration.
+    public var isVisibleSurface: Bool
+
     public init(
         isDark: Bool,
         reloadToken: AnyHashable,
@@ -62,6 +81,7 @@ public struct ReaderHostView: NSViewRepresentable {
         annotationInitJS: @escaping (String?) -> String,
         baseURL: URL?,
         webView: Binding<WKWebView?>,
+        isVisibleSurface: Bool,
         onAnnotationMessage: ((AnnotationMessage) -> Void)? = nil,
         isInspectable: Bool = false
     ) {
@@ -71,6 +91,7 @@ public struct ReaderHostView: NSViewRepresentable {
         self.annotationInitJS = annotationInitJS
         self.baseURL = baseURL
         self._webView = webView
+        self.isVisibleSurface = isVisibleSurface
         self.onAnnotationMessage = onAnnotationMessage
         self.isInspectable = isInspectable
     }
@@ -87,6 +108,7 @@ public struct ReaderHostView: NSViewRepresentable {
         // its default white first and a dark reader flashes on every load.
         view.setValue(false, forKey: "drawsBackground")
         view.isInspectable = isInspectable
+        view.isVisibleSurface = isVisibleSurface
         view.navigationDelegate = context.coordinator
         view.wantsLayer = true
         view.layer?.backgroundColor = backdrop
@@ -108,6 +130,14 @@ public struct ReaderHostView: NSViewRepresentable {
         // Always refresh: the closure captures state the host may have
         // replaced since the last pass.
         context.coordinator.onAnnotationMessage = onAnnotationMessage
+
+        // Above the token guard, and that placement is the whole fix. Moving
+        // between tabs changes which surface is in front of the user without
+        // changing anything the page is built from, so the reload token is
+        // identical and everything below this line is skipped. Set after the
+        // guard, the flag would be right only on the passes that happened to
+        // rebuild the page — which is never the pass that matters.
+        view.isVisibleSurface = isVisibleSurface
 
         guard context.coordinator.lastToken != reloadToken else { return }
         context.coordinator.lastToken = reloadToken

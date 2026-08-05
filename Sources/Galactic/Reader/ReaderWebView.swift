@@ -43,6 +43,24 @@ public class ReaderWebView: WKWebView {
     /// Current zoom level (1.0 = 100%)
     private var zoomLevel: CGFloat = 1.0
 
+    /// Whether this reader is the surface in front of the user.
+    ///
+    /// Supplied by the host, because nothing here can work it out. A tabbed
+    /// host may keep every tab mounted and switch between them with opacity
+    /// rather than tearing them down — which is a deliberate way to preserve
+    /// each tab's state and make switching instant — and a hidden view is
+    /// still in the window's view hierarchy. `performKeyEquivalent` is offered
+    /// to that whole hierarchy before the menu bar sees the event, and a zero
+    /// alpha is not hidden, so a reader nobody can see was answering the zoom
+    /// chords and scaling a page nobody was looking at while the menu item
+    /// that should have had them sat unreached.
+    ///
+    /// Defaults to false: a host that forgets to say gets a reader that
+    /// declines keys rather than one that steals them, and the missing wiring
+    /// shows up as a chord that does nothing instead of a chord that does
+    /// something invisible.
+    var isVisibleSurface: Bool = false
+
     override public init(
         frame: CGRect,
         configuration: WKWebViewConfiguration
@@ -62,6 +80,15 @@ public class ReaderWebView: WKWebView {
     override public func performKeyEquivalent(
         with event: NSEvent
     ) -> Bool {
+        // Answer nothing at all while another surface is in front of the user.
+        //
+        // Deliberately not `super`: the framework's own handling is exactly
+        // what the overrides below exist to get in front of, and a reader that
+        // is not on screen has no more business consuming a chord through
+        // `WKWebView` than through this method. Declining outright lets the
+        // event carry on to whatever the user can actually see.
+        guard isVisibleSurface else { return false }
+
         // F1 (0xF704) through F20 (0xF717) —
         // consume silently
         if event.modifierFlags.contains(.function),
