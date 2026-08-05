@@ -49,6 +49,15 @@ public struct CheatSheetView: View {
             card
         }
         .onAppear { searchFocused = true }
+        .onDisappear {
+            // Drop this sheet's own claim before handing the keyboard on.
+            // While the binding reads true SwiftUI believes focus belongs to
+            // the field it is tearing down, and clears first responder to be
+            // rid of it — which is what undid an earlier restore that ran
+            // inside `dismiss`, a pass too soon.
+            searchFocused = false
+            presenter.restoreFocus()
+        }
     }
 
     /// Click-anywhere-to-dismiss backdrop.

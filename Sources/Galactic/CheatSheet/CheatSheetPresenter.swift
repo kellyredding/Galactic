@@ -129,10 +129,11 @@ public final class CheatSheetPresenter: ObservableObject {
         installEscapeMonitor()
     }
 
+    /// Close the sheet. The keyboard goes back once the overlay is actually
+    /// gone — see `restoreFocus`, which `CheatSheetView` calls on its way out.
     public func dismiss() {
         isPresented = false
         removeEscapeMonitor()
-        restoreFocus()
     }
 
     /// Remember who holds the keyboard, so closing can hand it back.
@@ -154,11 +155,30 @@ public final class CheatSheetPresenter: ObservableObject {
 
     /// Give the keyboard back to whoever had it when the sheet opened.
     ///
+    /// **Called by `CheatSheetView` as it disappears, not by `dismiss`.** That
+    /// is the whole correctness argument, and it was learned the hard way:
+    /// restoring inside `dismiss` put the caret back and then lost it again,
+    /// because the search field is still bound to a focus binding that reads
+    /// true, so SwiftUI clears first responder when it tears that field down —
+    /// a pass or an animation later, after the restore had already happened.
+    /// The window was then left with no first responder at all, which looks
+    /// like neither surface being focused because that is exactly what it is.
+    ///
+    /// The find bar has no such problem and so is no guide here: it owns an
+    /// `NSPanel` it removes synchronously, and can restore immediately after.
+    /// An overlay in the host's own view tree goes away when SwiftUI says so,
+    /// so the only safe moment is once it has gone. Restoring last is worth a
+    /// frame of no focus; restoring early is worth nothing at all.
+    ///
     /// Every step is conditional, because each thing being restored may be
     /// gone: a host is free to close a reader, switch a tab, or end a session
     /// while the sheet is up, and a view that has left the window must not be
     /// dragged back into focus. Restoring nothing is the right answer then —
     /// the window keeps whatever responder it settled on.
+    ///
+    /// Idempotent: the note is consumed, so a second call does nothing. A host
+    /// that dismisses a sheet whose view never mounted simply leaves the note
+    /// for the next open to overwrite, and both references are weak.
     ///
     /// Unlike the find bar's `dismiss`, this always restores when it can. That
     /// method has a sibling which deliberately clears the saved responder
@@ -166,7 +186,7 @@ public final class CheatSheetPresenter: ObservableObject {
     /// in the outgoing pane long enough for the focus observers to record it as
     /// where the user was last. Nothing is being handed off here: the sheet is
     /// an overlay in one window and closing it is a return, not a move.
-    private func restoreFocus() {
+    func restoreFocus() {
         let window = priorWindow
         let responder = priorResponder
         priorWindow = nil

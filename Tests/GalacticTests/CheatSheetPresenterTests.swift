@@ -223,23 +223,60 @@ final class CheatSheetPresenterTests: XCTestCase {
     ///
     /// Releasing matters beyond the reference: the next open would otherwise
     /// find a stale note and hand the keyboard to whatever used to hold it.
-    func testClosingReleasesTheNote() {
+    func testRestoringReleasesTheNote() {
         let presenter = CheatSheetPresenter()
         presenter.present()
 
         // Held strongly here on purpose. The note is weak, so an inline
         // `NSResponder()` would be gone before the assertion ran and the test
-        // would pass whether or not `dismiss` cleared anything.
+        // would pass whether or not anything cleared it.
         let responder = NSResponder()
         presenter.priorResponder = responder
         XCTAssertNotNil(
             presenter.priorResponder,
             "precondition: something is noted, so nil below means released")
 
-        presenter.dismiss()
+        presenter.restoreFocus()
 
         XCTAssertNil(presenter.priorResponder, "the note is released")
         XCTAssertNil(presenter.priorWindow, "and so is the window it was in")
+    }
+
+    /// Dismissing does *not* restore, and that is the fix rather than an
+    /// oversight.
+    ///
+    /// The bug: restoring inside `dismiss` put the caret back and then lost it,
+    /// because SwiftUI clears first responder when it tears down a field whose
+    /// focus binding still reads true — which happens a pass or an animation
+    /// after `dismiss` returns. The view now restores as it disappears, so the
+    /// note has to survive the dismiss that precedes it.
+    func testDismissLeavesTheNoteForTheViewToActOn() {
+        let presenter = CheatSheetPresenter()
+        presenter.present()
+
+        let responder = NSResponder()
+        presenter.priorResponder = responder
+
+        presenter.dismiss()
+
+        XCTAssertTrue(
+            presenter.priorResponder === responder,
+            "the note outlives dismiss, because the only safe moment to act "
+                + "on it is once the overlay has actually gone")
+    }
+
+    /// Restoring twice is harmless, so a host that dismisses a sheet whose view
+    /// never mounted cannot strand anything.
+    func testRestoringIsIdempotent() {
+        let presenter = CheatSheetPresenter()
+        presenter.present()
+        let responder = NSResponder()
+        presenter.priorResponder = responder
+
+        presenter.restoreFocus()
+        presenter.restoreFocus()
+
+        XCTAssertNil(presenter.priorResponder)
     }
 
     /// A second open while already up must not overwrite the note.
