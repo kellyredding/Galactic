@@ -77,4 +77,34 @@ final class CheatSheetGlyphsTests: XCTestCase {
         XCTAssertEqual(CheatSheetGlyphs.spelled("↖"), "home")
         XCTAssertEqual(CheatSheetGlyphs.spelled("↘"), "end")
     }
+
+    /// Punctuation keys a host binds navigation and help to.
+    ///
+    /// The bug this prevents: a host's back / forward pair and its help row
+    /// carried ⌘[ ⌘] ⌘?, and none of those three characters had a name — so
+    /// the only route to them was whatever their authored aliases happened to
+    /// say, and a reader typing "bracket" found nothing.
+    func testPunctuationKeysAHostBindsNavigationToAreSpelled() {
+        XCTAssertEqual(
+            CheatSheetGlyphs.spelled("⌘["),
+            "command cmd left bracket open bracket")
+        XCTAssertEqual(
+            CheatSheetGlyphs.spelled("⌘]"),
+            "command cmd right bracket close bracket")
+        XCTAssertEqual(
+            CheatSheetGlyphs.spelled("⌘?"), "command cmd question mark")
+    }
+
+    /// A bracket is named for the character, never for what a host binds to
+    /// it.
+    ///
+    /// Same rule the ⌫ entry states: this table answers "what is that
+    /// character called", and the concept a row belongs to is the row's own
+    /// business. Spelling ⌘[ as "back" would drag every host's bracket row
+    /// into a search for a word only one host's binding justifies.
+    func testABracketIsNotNamedForWhatItDoes() {
+        let bracket = CheatSheetGlyphs.spelled("[")
+        XCTAssertFalse(bracket.contains("back"))
+        XCTAssertFalse(CheatSheetGlyphs.spelled("]").contains("forward"))
+    }
 }

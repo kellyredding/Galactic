@@ -5,8 +5,9 @@ import Foundation
 /// A row's keys render as "⇧⌘⌫" or "⌥⌘H", and none of those characters can be
 /// typed into a search field — so before this, no query could reach a modifier
 /// at all. The names are derived from the glyphs rather than written per row:
-/// a host has a hundred rows and this table has twenty entries, and a derived
-/// spelling cannot fall out of step with what the row displays.
+/// there are far fewer glyphs than rows, and a derived spelling cannot fall
+/// out of step with what the row displays. No count here on purpose — the one
+/// that used to be has now drifted twice.
 public enum CheatSheetGlyphs {
 
     /// Every glyph a host can put on a row, and the words a reader would type
@@ -54,6 +55,15 @@ public enum CheatSheetGlyphs {
         ",": "comma",
         "=": "equals plus",
         "-": "minus dash hyphen",
+        // Punctuation keys, named for the key rather than for what a host
+        // binds to it. The temptation with brackets is to spell them "back"
+        // and "forward", because that is what one host's pair does — and it
+        // is the same category error the ⌫ note above resists. A reader
+        // hunting the concept wants the row's own aliases; this table only
+        // answers "what is that character called".
+        "[": "left bracket open bracket",
+        "]": "right bracket close bracket",
+        "?": "question mark",
     ]
 
     /// The words for whatever glyphs `keys` contains, joined — empty when it
