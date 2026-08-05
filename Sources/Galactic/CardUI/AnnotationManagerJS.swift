@@ -580,6 +580,30 @@ state.highlightEnd || 0, maxIdx);
                 this.expandAnnotation(\
 state.expandedNumber);
             }
+            // The overall comment, which lives on the send bar
+            // rather than in the document — so it is restored
+            // outside the form block above, and survives a
+            // rebuild that had no form open at all.
+            //
+            // Reopened rather than silently refilled: a hidden
+            // field holding text is a worse state to hand back
+            // than the one the reader left.
+            if (state.overallComment
+                && window.GalaxySendBar) {
+                var bar = window.GalaxySendBar;
+                var box = document.getElementById(
+                    'send-bar-comment');
+                // Built rather than expanded, because expanding
+                // takes focus — and a page that came back
+                // collapsed would then be holding the caret in
+                // a field nobody can see.
+                var cta = box ? bar.buildComment(box) : null;
+                if (cta) {
+                    cta.value = state.overallComment;
+                    autoGrow(cta);
+                }
+                if (state.overallExpanded) bar.expand();
+            }
         },
 
         focusTextarea() {
@@ -2677,7 +2701,16 @@ this.currentBlockIndex,
                 formVisible: this.isFormVisible(),
                 selectionOnly: this.selectionOnly,
                 textareaValue: ta ? ta.value : '',
-                expandedNumber: this.expandedNumber
+                expandedNumber: this.expandedNumber,
+                // The send bar's overall comment. Rescued here
+                // because this is the one thing asked of an
+                // outgoing page, and a theme change is exactly
+                // as likely to be pressed with a summary half
+                // written as with an annotation half written.
+                overallComment: window.GalaxySendBar
+                    ? window.GalaxySendBar.commentText() : '',
+                overallExpanded: window.GalaxySendBar
+                    ? window.GalaxySendBar.expanded : false
             };
         }
     };
