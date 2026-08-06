@@ -23,6 +23,16 @@ public final class TerminalTabCommands {
     /// Move focus to the addressed split's session pane.
     public let focusSession = PassthroughSubject<UUID?, Never>()
 
+    /// Move focus to the addressed split's shell pane, without opening
+    /// one.
+    ///
+    /// Distinct from `openShell`, which opens or focuses depending on
+    /// what is there. Both meanings lived on one command while one
+    /// keystroke carried them; a directional key means the pane that
+    /// exists, not the one that could, so with no shell open this is a
+    /// no-op rather than a surprise split.
+    public let focusShell = PassthroughSubject<UUID?, Never>()
+
     /// Close the addressed split's shell pane, confirming first if it holds
     /// unsaved work.
     public let closeFocusedShell = PassthroughSubject<UUID?, Never>()

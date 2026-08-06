@@ -383,6 +383,7 @@ public final class TerminalHostView: NSView {
         let key = ObjectIdentifier(self)
         paneRegistry?.unregisterUnsavedWorkChecker(key)
         paneRegistry?.unregisterFocusRestorer(key)
+        paneRegistry?.unregisterFocusResigner(key)
         // Going away with a scrollback still open would strand the state, and
         // with it leave a sibling shell's Send disabled for good.
         if scrollbackOverlay != nil {
@@ -505,6 +506,14 @@ public final class TerminalHostView: NSView {
         // scrollback overlay keep focus instead of the live terminal under it.
         registry.registerFocusRestorer(key, kind: kind) { [weak self] in
             self?.requestFocus()
+        }
+
+        // And the way back out. Without it the caret stays in this pane
+        // after the app switches to a surface that has nothing to do with
+        // it, and every modifier-less key equivalent loses to a terminal
+        // the user cannot see.
+        registry.registerFocusResigner(key) { [weak self] in
+            self?.resignFocusIfHeld()
         }
     }
 

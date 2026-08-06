@@ -64,6 +64,29 @@ public final class TerminalPaneCoordinator: TerminalPaneRegistry {
         focusRestorers.removeValue(forKey: key)
     }
 
+    /// Per-host resign closures, the counterpart to `focusRestorers`.
+    ///
+    /// Untagged by kind where the restorers are tagged, because nothing
+    /// asks a particular pane to let go — the question is only whether any
+    /// pane is still holding the caret, and each host answers for itself.
+    private var focusResigners: [ObjectIdentifier: () -> Void] = [:]
+
+    public func registerFocusResigner(
+        _ key: ObjectIdentifier,
+        resign: @escaping () -> Void
+    ) {
+        focusResigners[key] = resign
+    }
+
+    public func unregisterFocusResigner(_ key: ObjectIdentifier) {
+        focusResigners.removeValue(forKey: key)
+    }
+
+    @MainActor
+    public func resignPaneFocus() {
+        for resign in focusResigners.values { resign() }
+    }
+
     /// Restore focus to the pane matching `lastFocusedPaneKind`, falling back
     /// when that pane is not registered — the user may remember being in a
     /// shell that has since closed.

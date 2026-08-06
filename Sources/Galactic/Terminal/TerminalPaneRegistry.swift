@@ -89,6 +89,38 @@ public protocol TerminalPaneRegistry: AnyObject {
     /// `deinit`; a stale entry restores focus into a pane that is gone.
     func unregisterFocusRestorer(_ key: ObjectIdentifier)
 
+    /// Register `resign` as the way this host gives up first responder.
+    ///
+    /// The counterpart to `registerFocusRestorer`, keyed the same way, and
+    /// here because a host that can be asked to take focus has to be
+    /// askable to let it go. A tab switched away from leaves its panes
+    /// mounted and nothing about leaving takes the caret with it, so the
+    /// terminal goes on holding first responder behind whatever the user
+    /// switched to — where it quietly wins every key equivalent that
+    /// carries no modifier.
+    func registerFocusResigner(
+        _ key: ObjectIdentifier,
+        resign: @escaping () -> Void
+    )
+
+    /// Withdraw a previously registered resigner. Call from the
+    /// registrant's `deinit`, for the same reason as the restorer.
+    func unregisterFocusResigner(_ key: ObjectIdentifier)
+
+    /// Ask every registered pane to give up first responder if it holds it.
+    ///
+    /// Asked of all of them rather than of the preferred one: the caret may
+    /// be in either pane of a split, and the point is that no pane is left
+    /// holding it, not that a particular one lets go. Each registrant
+    /// decides whether it actually holds focus — see
+    /// `TerminalFocus.resignIfHeld` — so this is safe to call when the
+    /// answer is already no.
+    ///
+    /// When that happens is the application's to decide, which is why this
+    /// exists rather than the engine watching for it.
+    @MainActor
+    func resignPaneFocus()
+
     /// Put focus into whichever pane the user was last in.
     ///
     /// Falls back when that pane is not registered — the preferred kind may

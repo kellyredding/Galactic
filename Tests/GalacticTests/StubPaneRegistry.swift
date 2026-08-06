@@ -23,6 +23,11 @@ final class StubPaneRegistry: TerminalPaneRegistry {
     /// Kinds whose restorer was invoked, in order.
     var restored: [TerminalPaneKind] = []
 
+    /// How many registrants were asked to resign, per `resignPaneFocus`
+    /// call. Counted rather than named because the contract is that *no*
+    /// pane is left holding the caret, not that a particular one let go.
+    var resignedCounts: [Int] = []
+
     /// `kinds` arguments received by `checkUnsavedWork`, in order.
     var asked: [Set<TerminalPaneKind>] = []
 
@@ -46,6 +51,24 @@ final class StubPaneRegistry: TerminalPaneRegistry {
 
     func unregisterFocusRestorer(_ key: ObjectIdentifier) {
         focusRestorers.removeValue(forKey: key)
+    }
+
+    private var focusResigners: [ObjectIdentifier: () -> Void] = [:]
+
+    func registerFocusResigner(
+        _ key: ObjectIdentifier,
+        resign: @escaping () -> Void
+    ) {
+        focusResigners[key] = resign
+    }
+
+    func unregisterFocusResigner(_ key: ObjectIdentifier) {
+        focusResigners.removeValue(forKey: key)
+    }
+
+    func resignPaneFocus() {
+        resignedCounts.append(focusResigners.count)
+        for resign in focusResigners.values { resign() }
     }
 
     func restorePreferredPaneFocus() {
@@ -166,5 +189,6 @@ final class StubPaneRegistry: TerminalPaneRegistry {
             completion(self?.kindsWithWork.contains(kind) ?? false)
         }
         registerFocusRestorer(ObjectIdentifier(owner), kind: kind) {}
+        registerFocusResigner(ObjectIdentifier(owner)) {}
     }
 }
