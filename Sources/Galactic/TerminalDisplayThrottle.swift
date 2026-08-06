@@ -26,10 +26,17 @@ import Combine
 /// transaction commit. Both run on main; SwiftUI's commit
 /// waits for a free runloop pass; the terminal's
 /// invalidations keep that runloop occupied. Pausing
-/// invalidation for ~250ms starting at the toggle (slightly
-/// longer than the `easeOut(0.15)` slide duration) lets the
+/// invalidation for ~250ms starting at the toggle lets the
 /// commit land in its normal slot, and a single catch-up
 /// redraw fires when the pause ends.
+///
+/// The duration was chosen to outlast a slide the toggle no
+/// longer has — animation was deliberately dropped, since
+/// SwiftUI's cadence caps at 30Hz on a non-ProMotion display
+/// and a clean snap reads better than a stuttered slide. The
+/// pause still earns its keep covering the opacity swap and
+/// the column's width change; the number is now a ceiling
+/// rather than a measurement of anything.
 ///
 /// Output isn't *lost* — the underlying terminal buffer
 /// keeps accumulating PTY data; only the display
