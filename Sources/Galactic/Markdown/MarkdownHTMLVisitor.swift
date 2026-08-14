@@ -219,8 +219,67 @@ struct MarkdownHTMLVisitor: MarkupVisitor {
 
     // MARK: - Inline Elements
 
+    /// Plain text, with any bare URL in it linked.
+    ///
+    /// The sibling emitter has done this since autolinking arrived; this side
+    /// deliberately did not, because a reader has annotation and text
+    /// selection to answer for where a tooltip does not. Both are answered
+    /// now — annotations anchor to source lines rather than DOM positions, so
+    /// an added element cannot strand one, and the stylesheet suppresses the
+    /// link drag that would otherwise swallow a selection.
+    ///
+    /// Escaping runs over each piece separately rather than over the whole
+    /// string once: the anchor's markup must survive, and the text on either
+    /// side of it must not.
     func visitText(_ text: Markdown.Text) -> String {
-        return HTMLEscape.text(text.string)
+        let source = text.string
+
+        // A link's own label is already inside a link, so autolinking it
+        // would nest one address in another. Mostly invisible, because
+        // `visitLink` supplies the authored destination — but not when there
+        // is none to supply: `[https://shown.example]()` says explicitly that
+        // this text goes nowhere, and without this guard it would go to
+        // itself.
+        guard !isInsideLink(text) else {
+            return HTMLEscape.text(source)
+        }
+
+        let spans = MarkdownAutolink.spans(in: source)
+        guard !spans.isEmpty else {
+            return HTMLEscape.text(source)
+        }
+
+        var html = ""
+        var cursor = source.startIndex
+        for span in spans {
+            html += HTMLEscape.text(
+                String(source[cursor..<span.range.lowerBound])
+            )
+            let shown = String(source[span.range])
+            html += "<a href=\"\(HTMLEscape.text(span.url.absoluteString))\">"
+                + HTMLEscape.text(shown)
+                + "</a>"
+            cursor = span.range.upperBound
+        }
+        html += HTMLEscape.text(String(source[cursor...]))
+        return html
+    }
+
+    /// Walked rather than tracked, because emphasis and strong nest in
+    /// between: the text of `[**https://example.com**](…)` has a `Strong` for
+    /// a parent, not the `Link`.
+    ///
+    /// Stateless on purpose. `visitChildren` copies the visitor per call
+    /// (`var visitor = self`) and `visitLink` is non-mutating, so a flag set
+    /// on descent is subtle to get right here; an ancestor walk cannot be
+    /// wrong about it. Mirrors `MarkdownAttributedVisitor.isInsideLink`.
+    private func isInsideLink(_ markup: any Markup) -> Bool {
+        var ancestor = markup.parent
+        while let node = ancestor {
+            if node is Link { return true }
+            ancestor = node.parent
+        }
+        return false
     }
 
     func visitEmphasis(_ emphasis: Emphasis) -> String {

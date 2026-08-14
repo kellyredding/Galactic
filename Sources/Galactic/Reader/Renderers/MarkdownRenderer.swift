@@ -87,7 +87,17 @@ public enum MarkdownRenderer {
             h5 { font-size: 0.875em; }
             h6 { font-size: 0.85em; color: var(--blockquote-fg); }
             p { margin-top: 0; margin-bottom: 16px; }
-            a { color: var(--link-color); text-decoration: none; }
+            /* -webkit-user-drag: none because a selection that begins on a
+               link would otherwise start a URL drag instead. Selection
+               capture is a document-level mouseup handler with no mousedown
+               counterpart, so a drag produces no selection, no mouseup with a
+               range, and no annotation toolbar — a passage starting with a
+               URL would silently refuse to be annotated. */
+            a {
+              color: var(--link-color);
+              text-decoration: none;
+              -webkit-user-drag: none;
+            }
             a:hover { text-decoration: underline; }
             code {
                 font-family: "SF Mono", "Menlo", "Monaco", "Courier New", monospace;
