@@ -292,8 +292,13 @@ public class ScrollbackOverlayView: NSView {
         findEscapeMonitor = NSEvent.addLocalMonitorForEvents(
             matching: .keyDown
         ) { [weak self] event in
+            // A confirmation sheet owns Escape while it is up, where it already
+            // means Cancel. Without this the first Escape closes the find bar
+            // behind the sheet and never reaches it, which is what made
+            // cancelling a sheet raised over a visible find bar take two.
             guard let self = self,
                   event.keyCode == Keystroke.Key.esc,
+                  !SheetAlert.isClaimingKeyboard,
                   self.findController.isVisible,
                   self.isActiveSurface()
             else { return event }

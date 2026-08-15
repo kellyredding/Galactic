@@ -218,7 +218,12 @@ public final class CheatSheetPresenter: ObservableObject {
         escapeMonitor = NSEvent.addLocalMonitorForEvents(
             matching: .keyDown
         ) { [weak self] event in
+            // Named directly rather than asked of `GalacticModals`, which
+            // counts this sheet among its claimants — consulting it here would
+            // stand the monitor down against itself and leave Escape unanswered
+            // whenever the cheat sheet is the only thing up.
             guard let self, self.isPresented,
+                  !SheetAlert.isClaimingKeyboard,
                   event.keyCode == Keystroke.Key.esc
             else { return event }
             self.dismiss()

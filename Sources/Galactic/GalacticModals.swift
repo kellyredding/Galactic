@@ -9,6 +9,12 @@ import Foundation
 /// deliberately does not bail for a focused text view because its own body is
 /// one.
 ///
+/// A confirmation sheet defeats the same gate by the opposite route. It is a
+/// window of its own rather than an overlay, so a key-window check would catch
+/// it — but only while it holds key, and a sheet that failed to take key leaves
+/// the host's window answering that check exactly when standing down matters
+/// most.
+///
 /// One predicate rather than each monitor naming the modals it knows about.
 /// The failure this prevents is the quiet kind: a new modal ships, seven
 /// monitors keep answering keys behind it, and nothing reports a problem — the
@@ -30,6 +36,7 @@ public enum GalacticModals {
         MainActor.assumeIsolated {
             CheatSheetPresenter.isClaimingKeyboard
                 || AgentInboxPresenter.isClaimingKeyboard
+                || SheetAlert.isClaimingKeyboard
         }
     }
 }

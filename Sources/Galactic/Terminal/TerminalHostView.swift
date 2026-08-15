@@ -630,6 +630,14 @@ public final class TerminalHostView: NSView {
                 // in flight. The re-assert would then land a hop after that
                 // command and take the caret straight back to the pane the bar
                 // was over.
+                // Never while a sheet is attached. Raising one makes its parent
+                // key, which arrives here — and answering by pulling the caret
+                // into the pane takes it from the sheet that was just raised,
+                // leaving its default button nothing to hear Return through.
+                // The sheet's own focus loop re-makes the parent key on every
+                // pass, so this would fire again for as long as that loop runs:
+                // the correction and the theft share a trigger.
+                guard window.attachedSheet == nil else { return }
                 guard !self.holdsFirstResponder else { return }
                 self.requestFocus()
             }

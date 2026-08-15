@@ -43,6 +43,27 @@ public enum SheetAlert {
         if let keyWindow, keyWindow.canBecomeMain { return keyWindow }
         return windows.first { $0.isVisible && $0.canBecomeMain }
     }
+    /// Whether a confirmation sheet is on screen.
+    ///
+    /// A sheet is modal to its window, but its key events still travel through
+    /// `NSApp` — so every local monitor in the host sees them, and any that
+    /// answers an unmodified key answers this one too: Return reaching a list
+    /// chord instead of the default button, Escape closing a reader instead of
+    /// cancelling the question. The ordinary gate does not catch it. A monitor
+    /// asking whether the host's own window is key is answered `true` in
+    /// precisely the case that matters, because a sheet that failed to take key
+    /// is a sheet whose parent still holds it.
+    ///
+    /// Counted rather than flagged because sheets queue: a second confirmation
+    /// raised while one is up must not drop the claim when the first is
+    /// answered.
+    public static var isClaimingKeyboard: Bool { presentedCount > 0 }
+
+    /// Main-thread only, like the presentation below it — `nonisolated(unsafe)`
+    /// states that discipline rather than proving it, the same trade the log
+    /// sink makes.
+    nonisolated(unsafe) private static var presentedCount = 0
+
     /// Present a warning-style confirmation sheet attached to `window`.
     ///
     /// A `window` that cannot become main is redirected to `hostWindow()`
@@ -95,7 +116,12 @@ public enum SheetAlert {
         NSApp.activate()
         host.makeKeyAndOrderFront(nil)
 
+        // Claimed before presenting and released before the answer is
+        // delivered, so a callback that raises another question or moves focus
+        // reads a claim that already reflects this sheet being gone.
+        presentedCount += 1
         alert.beginSheetModal(for: host) { response in
+            presentedCount -= 1
             if response == .alertFirstButtonReturn {
                 onConfirm()
             } else {
