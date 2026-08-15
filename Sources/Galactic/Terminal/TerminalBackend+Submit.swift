@@ -218,6 +218,44 @@ public struct SubmitVerification {
 /// acknowledges when it dequeues, which is bounded by whatever it is already
 /// doing. A host that submits mid-turn will pass the bound routinely on
 /// prompts that land perfectly well, so it must not retype on that signal.
+/// How a send finished, for a caller that needs to act on it rather than read
+/// about it in a log.
+///
+/// The gesture already knew all of this and told nobody: `then` fires when the
+/// writing is over, which is not the same question, and the verdict computed
+/// inside `verifySubmission` went to the log and stopped there. That was fine
+/// while every caller's answer to "what if it did not land" was a human reading
+/// the channel afterwards. A caller holding a queue needs to know whether to
+/// retire an entry, and cannot ask a log.
+///
+/// Four cases rather than a Bool, because the failures are not
+/// interchangeable — one of them is not even a failure — and collapsing them
+/// at this level would leave every caller to guess which it had.
+public enum SubmitOutcome: Equatable {
+    /// The agent reported taking the prompt.
+    case accepted
+
+    /// The bound passed with no report, after any retries the policy allowed.
+    ///
+    /// Deliberately not called "lost". A harness that queues prompts of its own
+    /// acknowledges one when it dequeues it, which can be far later than a
+    /// bound calibrated for an idle agent — measured at 20s against a prompt
+    /// that landed perfectly well.
+    case unconfirmed
+
+    /// The session went away before the gesture finished.
+    case abandoned
+
+    /// No report was ever possible, because the caller supplied no
+    /// verification.
+    ///
+    /// Distinct from `unconfirmed`: nothing failed and nothing was missed. The
+    /// caller said in advance that this send bypasses whatever channel would
+    /// have reported it — a context-reset command being the standing example —
+    /// so waiting or retrying would only ever produce a duplicate.
+    case unverifiable
+}
+
 public enum SubmitRetryPolicy {
     /// Retype the whole gesture and resubmit, up to the harness's retry
     /// ceiling. For bounded payloads sent into a harness expected to be idle.
@@ -273,13 +311,19 @@ extension TerminalBackend {
     ///   - then: Runs exactly once when the gesture finishes or abandons, on
     ///     either path. A caller serializing sends releases its gate here, so
     ///     skipping it on the abandon path would strand a queue.
+    ///   - outcome: Runs exactly once with what became of the prompt, after any
+    ///     retries have settled. Later than `then` on the normal path, and that
+    ///     gap is the point: `then` says the writing is over, this says whether
+    ///     the agent took it. A caller that only needs to release a gate wants
+    ///     `then`; a caller deciding whether to keep the message wants this.
     public func deliverPrompt(
         _ command: String,
         harness: AgentHarness,
         isAlive: @escaping () -> Bool,
         verification: SubmitVerification?,
         retry: SubmitRetryPolicy = .retype,
-        then: (() -> Void)? = nil
+        then: (() -> Void)? = nil,
+        outcome: ((SubmitOutcome) -> Void)? = nil
     ) {
         let text = harness.composedCommand(command)
         SessionSubmit.log("  text=\(SessionSubmit.describe(text: text))")
@@ -296,6 +340,7 @@ extension TerminalBackend {
             guard isAlive() else {
                 SessionSubmit.log("  session gone before the write")
                 then?()
+                outcome?(.abandoned)
                 return
             }
             self.send(text: text, asPaste: false)
@@ -312,6 +357,7 @@ extension TerminalBackend {
                 guard isAlive() else {
                     SessionSubmit.log("  session gone before the submit")
                     then?()
+                    outcome?(.abandoned)
                     return
                 }
                 self.submitPrompt(harness: harness)
@@ -319,7 +365,8 @@ extension TerminalBackend {
                     text: text,
                     harness: harness,
                     verification: verification,
-                    retry: retry
+                    retry: retry,
+                    outcome: outcome
                 )
                 then?()
             }
@@ -358,16 +405,30 @@ extension TerminalBackend {
         harness: AgentHarness,
         verification: SubmitVerification?,
         retry: SubmitRetryPolicy = .retype,
-        retriesLeft: Int? = nil
+        retriesLeft: Int? = nil,
+        outcome: ((SubmitOutcome) -> Void)? = nil
     ) {
-        guard let verification else { return }
+        guard let verification else {
+            // Nothing to wait for. A caller that supplied no verification has
+            // already said no report can arrive for this send, so the honest
+            // answer is that it is unverifiable — not that it failed.
+            outcome?(.unverifiable)
+            return
+        }
         let remaining = retriesLeft ?? harness.maxSubmitRetries
         awaitAcceptance(
             deadline: Date() + harness.submitVerifyTimeout,
             harness: harness,
             verification: verification
         ) { [weak self] accepted in
-            guard let self, verification.isAlive() else { return }
+            // The session going away mid-verification is reported rather than
+            // dropped. Silence here reads identically to a verification still
+            // in progress, and a caller holding the message would wait on a
+            // report that is never coming.
+            guard let self, verification.isAlive() else {
+                outcome?(.abandoned)
+                return
+            }
 
             if accepted {
                 switch retry {
@@ -378,6 +439,7 @@ extension TerminalBackend {
                     // reads as a safety net that was standing by.
                     SessionSubmit.log("  accepted")
                 }
+                outcome?(.accepted)
                 return
             }
 
@@ -400,10 +462,12 @@ extension TerminalBackend {
                             + "(may still be accepted later)",
                         harness.submitVerifyTimeout)
                 )
+                outcome?(.unconfirmed)
                 return
             }
             if remaining <= 0 {
                 SessionSubmit.log("  NOT accepted — retries exhausted, giving up")
+                outcome?(.unconfirmed)
                 return
             }
 
@@ -427,14 +491,18 @@ extension TerminalBackend {
             DispatchQueue.main.asyncAfter(
                 deadline: .now() + harness.inputPacingDelay
             ) { [weak self] in
-                guard let self, verification.isAlive() else { return }
+                guard let self, verification.isAlive() else {
+                    outcome?(.abandoned)
+                    return
+                }
                 self.submitPrompt(harness: harness)
                 self.verifySubmission(
                     text: text,
                     harness: harness,
                     verification: verification,
                     retry: retry,
-                    retriesLeft: remaining - 1
+                    retriesLeft: remaining - 1,
+                    outcome: outcome
                 )
             }
         }
@@ -458,7 +526,15 @@ extension TerminalBackend {
         DispatchQueue.main.asyncAfter(
             deadline: .now() + harness.submitVerifyPollInterval
         ) { [weak self] in
-            guard let self, verification.isAlive() else { return }
+            // A session that dies mid-poll, or a backend that goes away under
+            // one, completes rather than stopping where it stands. Abandoning
+            // the loop silently is indistinguishable from a poll still running,
+            // and the caller decides what an unfinished verification means —
+            // this only has to stop pretending one is still in flight.
+            guard let self, verification.isAlive() else {
+                completion(false)
+                return
+            }
             self.awaitAcceptance(
                 deadline: deadline, harness: harness,
                 verification: verification, completion)
