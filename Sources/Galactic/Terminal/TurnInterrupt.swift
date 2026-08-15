@@ -63,6 +63,24 @@ public extension Optional where Wrapped == TurnInterrupt {
     /// interrupt as a handled keystroke would stop the abort it is recording.
     func recordIfInterrupting(_ event: NSEvent) {
         guard let self, TurnInterrupt.isBareEscape(event) else { return }
+
+        // Stand down while a modal holds the keyboard. That Escape is closing
+        // the modal, not stopping a turn, and recording it invents an
+        // interrupt for a turn that is still running.
+        //
+        // Structural rather than incidental, which is the correction this
+        // encodes. The host's monitor already bails when its pane does not
+        // hold first responder, and that covered the cheat sheet by accident:
+        // the sheet focuses a search field, so the pane stops being first
+        // responder and the monitor goes quiet. A modal with nothing to focus
+        // leaves the pane holding the keyboard and slips straight through —
+        // which is exactly what the inbox modal did, and it cost a queued
+        // message an attempt into a busy agent.
+        //
+        // Asking about the modal rather than about focus means the next modal
+        // is covered whether or not it happens to want a text field.
+        guard !GalacticModals.isClaimingKeyboard else { return }
+
         guard self.isInTurn() else { return }
         self.record()
     }
