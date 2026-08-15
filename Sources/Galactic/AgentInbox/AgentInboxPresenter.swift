@@ -47,6 +47,29 @@ public final class AgentInboxPresenter: ObservableObject {
     /// the menu item and the keystroke do not each have to know about it.
     public var inboxProvider: () -> AgentInbox? = { nil }
 
+    /// The consumer draining the queue on show, when there is one.
+    ///
+    /// Separate from `inbox` because they answer to different owners: the queue
+    /// is a value the host stores, while the consumer is bound to a live agent
+    /// and is the only object that knows both whether a unit is already out and
+    /// whether the agent could read another. A row's Send Now needs all of
+    /// that, and none of it is reachable from the queue alone.
+    @Published public private(set) var consumer: AgentInboxConsumer?
+
+    /// Which consumer to show, asked as the modal opens — the companion to
+    /// `inboxProvider`, resolved at the same moment so the two cannot disagree
+    /// about which session is on screen.
+    public var consumerProvider: () -> AgentInboxConsumer? = { nil }
+
+    /// Set while a confirmation sheet is up, to stand the Escape monitor down.
+    ///
+    /// An `NSAlert` run as a window-modal sheet still dispatches its key events
+    /// through `NSApp`, so the monitor below sees the reader's Escape, treats it
+    /// as "close the inbox", and tears the modal out from under the sheet that
+    /// asked the question. Escape belongs to the sheet for as long as one is up,
+    /// where it already means Cancel.
+    var isConfirming = false
+
     /// Whether the modal is claiming the keyboard.
     ///
     /// Read as a stand-down gate by every other local key monitor that answers
@@ -86,6 +109,7 @@ public final class AgentInboxPresenter: ObservableObject {
     public func present() {
         guard !isPresented else { return }
         inbox = inboxProvider()
+        consumer = consumerProvider()
         captureFocus()
         isPresented = true
         installEscapeMonitor()
@@ -133,7 +157,7 @@ public final class AgentInboxPresenter: ObservableObject {
         escapeMonitor = NSEvent.addLocalMonitorForEvents(
             matching: .keyDown
         ) { [weak self] event in
-            guard let self, self.isPresented,
+            guard let self, self.isPresented, !self.isConfirming,
                 event.keyCode == Keystroke.Key.esc
             else { return event }
             self.dismiss()

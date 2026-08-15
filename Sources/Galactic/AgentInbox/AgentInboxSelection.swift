@@ -73,6 +73,34 @@ public enum AgentInboxSelection {
             retry: resolvedRetry(across: run))
     }
 
+    /// The unit for one entry the reader picked out by hand.
+    ///
+    /// Never coalesces, whatever the entry's delivery mode says. Coalescing is
+    /// an optimisation the queue applies when it chooses what goes next; a
+    /// reader pointing at one row has already chosen, and carrying its
+    /// neighbours along would send messages nobody asked to send.
+    ///
+    /// Deliberately ignores `state`. The two rows most worth sending by hand
+    /// are the ones automatic delivery will not touch — a stalled entry, whose
+    /// only way out this is, and a paused one, where the click is a plain
+    /// override. Re-arming either to `.ready` first would hand it back to the
+    /// drain loop as well, which is the opposite of what a one-off gesture
+    /// means: a stalled row would resume being retried automatically, and a
+    /// failed manual send would leave it counting toward a ceiling it had
+    /// already reached.
+    public static func unit(
+        for id: UUID,
+        in entries: [AgentInboxEntry]
+    ) -> AgentInboxUnit? {
+        guard let entry = entries.first(where: { $0.id == id }) else {
+            return nil
+        }
+        return AgentInboxUnit(
+            entryIDs: [entry.id],
+            body: entry.body,
+            retry: entry.retry)
+    }
+
     /// The most conservative policy in a run wins.
     ///
     /// In practice a run is always prose and always agrees; the rule exists so

@@ -48,6 +48,79 @@ public final class AgentInboxConsumer {
     /// Whether a unit is out with the host right now.
     public var isDelivering: Bool { inFlight }
 
+    /// Whether a message the reader picked could go out this instant.
+    ///
+    /// Both halves of the answer live here and nowhere else: the host knows
+    /// whether the agent can read a prompt, and this object knows whether the
+    /// drain is already holding one. A control consulting either alone would be
+    /// wrong exactly when it mattered.
+    public var canSendNow: Bool {
+        !inFlight && host?.canSendNow == true
+    }
+
+    /// What became of a send the reader asked for by hand.
+    ///
+    /// `refused` and `unconfirmed` are kept apart because the honest thing to
+    /// say about them differs: nothing at all was written in the first case, so
+    /// trying again shortly is free, while in the second the message may be
+    /// sitting in the agent right now with only its report lost — the same
+    /// ambiguity the attempt ceiling exists for. Collapsing the two would
+    /// invite a reader to re-send something already delivered.
+    public enum ManualSendOutcome: Equatable {
+        case delivered
+        case refused
+        case unconfirmed
+    }
+
+    /// Deliver one entry now, because the reader asked for it.
+    ///
+    /// Three things this deliberately does not do. It does not count the
+    /// attempt — the ceiling bounds the *consumer* talking itself into another
+    /// try, and a person who can see the result is not that loop. It does not
+    /// change the entry's state, so a stalled row stays stalled and a paused
+    /// one stays paused unless the send actually lands. And it does not force
+    /// past `inFlight` or `canSendNow`: writing while a blocker stands is the
+    /// regression that once put three copies of one comment into a question
+    /// form, and a button is not a good enough reason to re-earn it.
+    public func sendNow(
+        id: UUID,
+        outcome: @escaping (ManualSendOutcome) -> Void
+    ) {
+        guard !inFlight,
+            let host,
+            host.canSendNow,
+            let unit = AgentInboxSelection.unit(for: id, in: inbox.entries)
+        else {
+            outcome(.refused)
+            return
+        }
+
+        inFlight = true
+
+        // Same double-report guard as the drain path, for the same reason.
+        var settled = false
+
+        host.deliver(unit) { [weak self] accepted in
+            guard let self, !settled else { return }
+            settled = true
+
+            self.inFlight = false
+
+            guard accepted else {
+                outcome(.unconfirmed)
+                return
+            }
+
+            self.inbox.complete(unit)
+            outcome(.delivered)
+
+            // The agent just confirmed it took a prompt, so the surface is
+            // known to be one that accepts them — let the ordinary drain carry
+            // on from here rather than waiting for an unrelated signal.
+            self.wake()
+        }
+    }
+
     /// Try to make progress.
     ///
     /// Safe to call often and from anywhere. Every guard here is a reason not
