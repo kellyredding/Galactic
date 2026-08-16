@@ -128,13 +128,13 @@ final class CheatSheetPresenterTests: XCTestCase {
     func testTheEscapeMonitorLivesExactlyAsLongAsTheSheet() {
         let presenter = CheatSheetPresenter()
 
-        XCTAssertNil(presenter.escapeMonitor)
+        XCTAssertNil(presenter.focus.escapeMonitor)
 
         presenter.present()
-        XCTAssertNotNil(presenter.escapeMonitor)
+        XCTAssertNotNil(presenter.focus.escapeMonitor)
 
         presenter.dismiss()
-        XCTAssertNil(presenter.escapeMonitor)
+        XCTAssertNil(presenter.focus.escapeMonitor)
     }
 
     func testDismissingAClosedSheetIsHarmless() {
@@ -144,7 +144,7 @@ final class CheatSheetPresenterTests: XCTestCase {
         presenter.dismiss()
         presenter.dismiss()
 
-        XCTAssertNil(presenter.escapeMonitor)
+        XCTAssertNil(presenter.focus.escapeMonitor)
         XCTAssertFalse(presenter.isPresented)
     }
 
@@ -231,15 +231,15 @@ final class CheatSheetPresenterTests: XCTestCase {
         // `NSResponder()` would be gone before the assertion ran and the test
         // would pass whether or not anything cleared it.
         let responder = NSResponder()
-        presenter.priorResponder = responder
+        presenter.focus.priorResponder = responder
         XCTAssertNotNil(
-            presenter.priorResponder,
+            presenter.focus.priorResponder,
             "precondition: something is noted, so nil below means released")
 
         presenter.restoreFocus()
 
-        XCTAssertNil(presenter.priorResponder, "the note is released")
-        XCTAssertNil(presenter.priorWindow, "and so is the window it was in")
+        XCTAssertNil(presenter.focus.priorResponder, "the note is released")
+        XCTAssertNil(presenter.focus.priorWindow, "and so is the window it was in")
     }
 
     /// Dismissing does *not* restore, and that is the fix rather than an
@@ -255,12 +255,12 @@ final class CheatSheetPresenterTests: XCTestCase {
         presenter.present()
 
         let responder = NSResponder()
-        presenter.priorResponder = responder
+        presenter.focus.priorResponder = responder
 
         presenter.dismiss()
 
         XCTAssertTrue(
-            presenter.priorResponder === responder,
+            presenter.focus.priorResponder === responder,
             "the note outlives dismiss, because the only safe moment to act "
                 + "on it is once the overlay has actually gone")
     }
@@ -271,12 +271,12 @@ final class CheatSheetPresenterTests: XCTestCase {
         let presenter = CheatSheetPresenter()
         presenter.present()
         let responder = NSResponder()
-        presenter.priorResponder = responder
+        presenter.focus.priorResponder = responder
 
         presenter.restoreFocus()
         presenter.restoreFocus()
 
-        XCTAssertNil(presenter.priorResponder)
+        XCTAssertNil(presenter.focus.priorResponder)
     }
 
     /// A second open while already up must not overwrite the note.
@@ -290,12 +290,12 @@ final class CheatSheetPresenterTests: XCTestCase {
         presenter.present()
 
         let planted = NSResponder()
-        presenter.priorResponder = planted
+        presenter.focus.priorResponder = planted
 
         presenter.present()   // already up — must be a no-op
 
         XCTAssertTrue(
-            presenter.priorResponder === planted,
+            presenter.focus.priorResponder === planted,
             "the note survives a redundant open, so the caret still goes back "
                 + "to where the user actually was")
     }

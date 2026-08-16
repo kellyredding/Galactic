@@ -47,7 +47,7 @@ final class AgentInboxPresenterTests: XCTestCase {
         presenter.dismiss()
 
         XCTAssertFalse(presenter.isPresented)
-        XCTAssertNil(presenter.escapeMonitor)
+        XCTAssertNil(presenter.focus.escapeMonitor)
     }
 
     /// Opening with nothing wired is supported and deliberate: a reader who
@@ -106,13 +106,13 @@ final class AgentInboxPresenterTests: XCTestCase {
     /// longer there.
     func testTheEscapeMonitorLivesExactlyAsLongAsTheModal() {
         let presenter = AgentInboxPresenter()
-        XCTAssertNil(presenter.escapeMonitor, "nothing installed while closed")
+        XCTAssertNil(presenter.focus.escapeMonitor, "nothing installed while closed")
 
         presenter.present()
-        XCTAssertNotNil(presenter.escapeMonitor)
+        XCTAssertNotNil(presenter.focus.escapeMonitor)
 
         presenter.dismiss()
-        XCTAssertNil(presenter.escapeMonitor, "and removed again on close")
+        XCTAssertNil(presenter.focus.escapeMonitor, "and removed again on close")
     }
 
     /// A redundant open must not install a second monitor over the first —
@@ -121,11 +121,11 @@ final class AgentInboxPresenterTests: XCTestCase {
         let presenter = AgentInboxPresenter()
 
         presenter.present()
-        let installed = presenter.escapeMonitor
+        let installed = presenter.focus.escapeMonitor
         presenter.present()
 
         XCTAssertTrue(
-            (installed as AnyObject?) === (presenter.escapeMonitor as AnyObject?),
+            (installed as AnyObject?) === (presenter.focus.escapeMonitor as AnyObject?),
             "the monitor from the first open is the one still installed"
         )
     }
@@ -143,13 +143,13 @@ final class AgentInboxPresenterTests: XCTestCase {
         // `NSResponder()` would be gone before the assertion ran and the test
         // would pass whether or not anything released it.
         let responder = NSResponder()
-        presenter.priorResponder = responder
-        XCTAssertNotNil(presenter.priorResponder, "precondition")
+        presenter.focus.priorResponder = responder
+        XCTAssertNotNil(presenter.focus.priorResponder, "precondition")
 
         presenter.restoreFocus()
 
-        XCTAssertNil(presenter.priorResponder, "the note is released")
-        XCTAssertNil(presenter.priorWindow, "and so is the window it was in")
+        XCTAssertNil(presenter.focus.priorResponder, "the note is released")
+        XCTAssertNil(presenter.focus.priorWindow, "and so is the window it was in")
     }
 
     /// Dismissing does not restore, and that is the fix rather than an
@@ -159,12 +159,12 @@ final class AgentInboxPresenterTests: XCTestCase {
         let presenter = AgentInboxPresenter()
         presenter.present()
         let responder = NSResponder()
-        presenter.priorResponder = responder
+        presenter.focus.priorResponder = responder
 
         presenter.dismiss()
 
         XCTAssertTrue(
-            presenter.priorResponder === responder,
+            presenter.focus.priorResponder === responder,
             "the note outlives dismiss, because the only safe moment to act "
                 + "on it is once the overlay has actually gone"
         )
@@ -175,12 +175,12 @@ final class AgentInboxPresenterTests: XCTestCase {
     func testRestoringIsIdempotent() {
         let presenter = AgentInboxPresenter()
         presenter.present()
-        presenter.priorResponder = NSResponder()
+        presenter.focus.priorResponder = NSResponder()
 
         presenter.restoreFocus()
         presenter.restoreFocus()
 
-        XCTAssertNil(presenter.priorResponder)
+        XCTAssertNil(presenter.focus.priorResponder)
     }
 
     /// A second open must not overwrite the note. By then the modal itself is
@@ -190,12 +190,12 @@ final class AgentInboxPresenterTests: XCTestCase {
         let presenter = AgentInboxPresenter()
         presenter.present()
         let planted = NSResponder()
-        presenter.priorResponder = planted
+        presenter.focus.priorResponder = planted
 
         presenter.present()
 
         XCTAssertTrue(
-            presenter.priorResponder === planted,
+            presenter.focus.priorResponder === planted,
             "the note survives a redundant open"
         )
     }
@@ -208,8 +208,8 @@ final class AgentInboxPresenterTests: XCTestCase {
 
         presenter.restoreFocus()
 
-        XCTAssertNil(presenter.priorResponder)
-        XCTAssertNil(presenter.priorWindow)
+        XCTAssertNil(presenter.focus.priorResponder)
+        XCTAssertNil(presenter.focus.priorWindow)
     }
 
     // MARK: - The stand-down gate

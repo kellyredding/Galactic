@@ -79,14 +79,10 @@ public final class AgentInboxPresenter: ObservableObject {
     /// to build on.
     public static var isClaimingKeyboard: Bool { shared.isPresented }
 
-    /// Live only while the modal is up. Internal so a test can assert the
-    /// monitor lasts exactly as long as the modal does.
-    var escapeMonitor: Any?
-
-    /// Who held the keyboard when the modal opened. Weak, both: this must never
-    /// be the reason a window or a view outlives its host's intention.
-    weak var priorWindow: NSWindow?
-    weak var priorResponder: NSResponder?
+    /// The keyboard this modal borrows, and the Escape that closes it. Shared
+    /// with the cheat sheet, which reached the same answers first — see
+    /// `ModalFocusCapture` for why each of them is what it is.
+    let focus = ModalFocusCapture()
 
     /// Internal, so this package's tests can exercise an instance without
     /// mutating the singleton every other test shares. Hosts use `shared`.
@@ -110,63 +106,26 @@ public final class AgentInboxPresenter: ObservableObject {
         guard !isPresented else { return }
         inbox = inboxProvider()
         consumer = consumerProvider()
-        captureFocus()
+        focus.capture()
         isPresented = true
-        installEscapeMonitor()
+        focus.installEscape(
+            standDown: { [weak self] in self?.isConfirming ?? false },
+            isActive: { [weak self] in self?.isPresented ?? false },
+            onEscape: { [weak self] in self?.dismiss() }
+        )
     }
 
     public func dismiss() {
         isPresented = false
-        removeEscapeMonitor()
-    }
-
-    private func captureFocus() {
-        priorWindow = NSApp.keyWindow
-        priorResponder = priorWindow?.firstResponder
+        focus.removeEscape()
     }
 
     /// Give the keyboard back to whoever had it when the modal opened.
     ///
-    /// Called by `AgentInboxView` as it disappears, not by `dismiss`, for the
-    /// reason spelled out on `CheatSheetPresenter.restoreFocus`: an overlay in
-    /// the host's own view tree goes away when SwiftUI says so, and restoring
-    /// before it has gone puts the caret back only for SwiftUI to clear it a
-    /// pass later while tearing the overlay down.
+    /// Called by `AgentInboxView` as it disappears, not by `dismiss` — see
+    /// `ModalFocusCapture.restore`, which explains why that is the whole
+    /// correctness argument rather than a detail.
     func restoreFocus() {
-        let window = priorWindow
-        let responder = priorResponder
-        priorWindow = nil
-        priorResponder = nil
-
-        guard let window, let responder else { return }
-        // A view that has left the window it was saved from must not be dragged
-        // back into focus — the host is free to end a session or switch a tab
-        // while the modal is up.
-        if let view = responder as? NSView, view.window !== window { return }
-        if !window.isKeyWindow { window.makeKey() }
-        _ = window.makeFirstResponder(responder)
-    }
-
-    /// Escape closes the modal.
-    ///
-    /// A local monitor rather than `.onExitCommand`, because this floats over
-    /// surfaces that claim Escape for themselves — a terminal pane swallows it
-    /// outright — so a SwiftUI handler never sees the key.
-    private func installEscapeMonitor() {
-        guard escapeMonitor == nil else { return }
-        escapeMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: .keyDown
-        ) { [weak self] event in
-            guard let self, self.isPresented, !self.isConfirming,
-                event.keyCode == Keystroke.Key.esc
-            else { return event }
-            self.dismiss()
-            return nil  // consumed: it must not also reach the terminal
-        }
-    }
-
-    private func removeEscapeMonitor() {
-        if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
-        escapeMonitor = nil
+        focus.restore()
     }
 }

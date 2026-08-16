@@ -75,25 +75,10 @@ public final class CheatSheetPresenter: ObservableObject {
     /// closure, where it is the whole expression.
     public static var isClaimingKeyboard: Bool { shared.isPresented }
 
-    /// Live only while the sheet is up. See `installEscapeMonitor`.
-    ///
-    /// Internal rather than private so a test can assert the monitor exists
-    /// exactly as long as the sheet does — the claim the doc below makes, and
-    /// otherwise unassertable.
-    var escapeMonitor: Any?
-
-    /// Who held the keyboard when the sheet opened, and where. See
-    /// `captureFocus`.
-    ///
-    /// Weak, both of them: the sheet must never be the reason a window or a
-    /// view outlives its host's intention to be rid of it. A responder that
-    /// goes away while the sheet is up simply is not restored.
-    ///
-    /// Internal rather than private so a test can assert they are released on
-    /// dismiss — a saved responder surviving a close is a retain cycle waiting
-    /// for the next open.
-    weak var priorWindow: NSWindow?
-    weak var priorResponder: NSResponder?
+    /// The keyboard this sheet borrows, and the Escape that closes it. Shared
+    /// with the inbox modal — see `ModalFocusCapture`, which carries the
+    /// arguments for each part of it.
+    let focus = ModalFocusCapture()
 
     /// Internal, so this package's own tests can exercise an instance without
     /// mutating the singleton every other test shares. Hosts use `shared`.
@@ -124,33 +109,20 @@ public final class CheatSheetPresenter: ObservableObject {
     public func present() {
         guard !isPresented else { return }
         sections = sectionsProvider()
-        captureFocus()
+        focus.capture()
         isPresented = true
-        installEscapeMonitor()
+        focus.installEscape(
+            standDown: { SheetAlert.isClaimingKeyboard },
+            isActive: { [weak self] in self?.isPresented ?? false },
+            onEscape: { [weak self] in self?.dismiss() }
+        )
     }
 
     /// Close the sheet. The keyboard goes back once the overlay is actually
     /// gone — see `restoreFocus`, which `CheatSheetView` calls on its way out.
     public func dismiss() {
         isPresented = false
-        removeEscapeMonitor()
-    }
-
-    /// Remember who holds the keyboard, so closing can hand it back.
-    ///
-    /// Taken here for the same reason the sections are: by the time the overlay
-    /// has mounted, the sheet's own search field holds first responder, and
-    /// asking then would record the sheet as the thing to restore to.
-    ///
-    /// The window is recorded alongside the responder rather than resolved
-    /// again at dismiss. A host can have a panel holding key when the sheet is
-    /// summoned — a find bar is the usual one — and the caret then belongs to
-    /// that panel, not to the main window. Reading `keyWindow` a second time,
-    /// after the overlay has taken it, would answer a different window and
-    /// restore into the wrong one.
-    private func captureFocus() {
-        priorWindow = NSApp.keyWindow
-        priorResponder = priorWindow?.firstResponder
+        focus.removeEscape()
     }
 
     /// Give the keyboard back to whoever had it when the sheet opened.
@@ -187,52 +159,6 @@ public final class CheatSheetPresenter: ObservableObject {
     /// where the user was last. Nothing is being handed off here: the sheet is
     /// an overlay in one window and closing it is a return, not a move.
     func restoreFocus() {
-        let window = priorWindow
-        let responder = priorResponder
-        priorWindow = nil
-        priorResponder = nil
-
-        guard let window, let responder else { return }
-        // A view that has left the window it was saved from must not be
-        // dragged back into focus: the host is free to close a reader, switch
-        // a tab, or end a session while the sheet is up, and the caret belongs
-        // to whatever replaced it. A responder that is not a view carries no
-        // window reference to contradict, so it is trusted.
-        if let view = responder as? NSView, view.window !== window { return }
-        if !window.isKeyWindow { window.makeKey() }
-        _ = window.makeFirstResponder(responder)
-    }
-
-    /// Escape closes the sheet.
-    ///
-    /// A local event monitor rather than `.onExitCommand` on the view: the
-    /// overlay floats over surfaces that hold first responder and claim Escape
-    /// for themselves — a terminal pane swallows it outright — so a SwiftUI
-    /// handler never sees the key. `ScrollbackOverlayView` reaches for a
-    /// monitor over the same surface for the same reason.
-    ///
-    /// Installed only while presented, so Escape keeps its ordinary meaning
-    /// everywhere else in the host.
-    private func installEscapeMonitor() {
-        guard escapeMonitor == nil else { return }
-        escapeMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: .keyDown
-        ) { [weak self] event in
-            // Named directly rather than asked of `GalacticModals`, which
-            // counts this sheet among its claimants — consulting it here would
-            // stand the monitor down against itself and leave Escape unanswered
-            // whenever the cheat sheet is the only thing up.
-            guard let self, self.isPresented,
-                  !SheetAlert.isClaimingKeyboard,
-                  event.keyCode == Keystroke.Key.esc
-            else { return event }
-            self.dismiss()
-            return nil   // consumed: it must not also reach the terminal
-        }
-    }
-
-    private func removeEscapeMonitor() {
-        if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
-        escapeMonitor = nil
+        focus.restore()
     }
 }
