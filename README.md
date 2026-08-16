@@ -8,7 +8,7 @@ directly to any specific implementation.
 
 ## Status
 
-v0.6.0. Began as an engine bridge and is now also the shared
+v0.8.0. Began as an engine bridge and is now also the shared
 substrate for the applications built on it: pane composition, the
 scrollback surface, find, text-entry bindings, automated prompt
 submission, and reading files. The surface is correspondingly

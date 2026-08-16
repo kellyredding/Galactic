@@ -14,7 +14,6 @@ public enum MermaidRenderer {
     ) -> String {
         ReaderDocument.render(
             theme: .standard(isDark: isDark),
-            title: "Galaxy Artifact Reader",
             css: """
             .mermaid-container {
                 display: flex;

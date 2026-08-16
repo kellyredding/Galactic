@@ -48,7 +48,6 @@ public enum MarkdownRenderer {
 
         return ReaderDocument.render(
             theme: theme,
-            title: "Galaxy Snapshot Reader",
             fontSize: "14px",
             lineHeight: "1.6",
             css: """

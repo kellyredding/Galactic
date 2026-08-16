@@ -289,7 +289,6 @@ public enum HTMLRenderer {
         let baseCSS = htmlBaseCSS(isDark: isDark)
         return ReaderDocument.render(
             theme: theme,
-            title: "Galaxy Artifact Reader",
             css: """
             \(baseCSS)
             \(htmlAnnotationAdaptCSS)

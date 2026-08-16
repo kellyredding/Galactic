@@ -576,7 +576,6 @@ public enum TranscriptRenderer {
 
         return ReaderDocument.render(
             theme: theme,
-            title: "Galaxy Artifact Reader",
             lineHeight: "1.5",
             css: """
             .transcript-container {

@@ -41,7 +41,6 @@ public enum TableRenderer {
 
         return ReaderDocument.render(
             theme: theme,
-            title: "Galaxy Artifact Reader",
             css: """
             .table-container {
                 padding: 16px;

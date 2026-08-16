@@ -83,7 +83,6 @@ public enum ImageRenderer {
 
         return ReaderDocument.render(
             theme: theme,
-            title: "Galaxy Artifact Reader",
             css: """
             .image-container {
                 display: flex;

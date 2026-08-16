@@ -43,7 +43,6 @@ public enum SourceRenderer {
 
         return ReaderDocument.render(
             theme: theme,
-            title: "Galaxy Artifact Reader",
             fontFamily: ReaderFont.mono,
             css: """
             .source-container {
