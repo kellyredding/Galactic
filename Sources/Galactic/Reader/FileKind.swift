@@ -39,6 +39,10 @@ public enum FileKind: Equatable, Sendable {
     /// called: an agent transcript and a stream of unrelated records share a
     /// suffix. A caller that has not read the file passes nil and gets
     /// `.source`, which is the same fallback the sniff itself falls back to.
+    ///
+    /// This answers about a *name*, never about what is on disk. A directory
+    /// called `readme` resolves the same way a file called `readme` does, and
+    /// telling the two apart is the caller's job — nothing here stats anything.
     public static func resolve(
         filename: String,
         firstLine: String? = nil
@@ -57,6 +61,15 @@ public enum FileKind: Equatable, Sendable {
         case "jsonl":
             return isAgentTranscript(firstLine: firstLine)
                 ? .transcript : .source
+        case "":
+            // No extension at all. A build file carries its meaning in the
+            // whole name and a dotfile in its leading dot, so both are asked
+            // as names rather than as extensions. Only names with no *other*
+            // dot arrive here — `.mise.toml` has extension `toml` and was
+            // answered above, which is why listing it below would be dead.
+            let name = ((filename as NSString).lastPathComponent).lowercased()
+            return extensionlessSourceNames.contains(name)
+                ? .source : .unhandled("")
         case let ext where sourceExtensions.contains(ext):
             return .source
         case let ext:
@@ -140,23 +153,104 @@ public enum FileKind: Equatable, Sendable {
     }
 
     /// The highlight.js language for a filename, or nil to leave it unstyled.
+    ///
+    /// Asked of the extension first and of the whole name second, because a
+    /// file with no extension still has a language: `Makefile` and `.bashrc`
+    /// are answered by `filenameLanguages`.
+    ///
+    /// A nil is not a failure. `SourceRenderer` renders an unstyled document
+    /// perfectly well, and naming a language this package does not ship is
+    /// worse than naming none — `hljs.highlightElement` falls back to
+    /// auto-detection, which guesses.
     public static func highlightLanguage(
         forFilename filename: String
     ) -> String? {
-        highlightLanguages[
-            (filename as NSString).pathExtension.lowercased()
-        ]
+        let name = filename as NSString
+        if let byExtension = highlightLanguages[
+            name.pathExtension.lowercased()
+        ] {
+            return byExtension
+        }
+        return filenameLanguages[name.lastPathComponent.lowercased()]
     }
 
-    /// Extensions read as source. Everything here also has, or falls back
-    /// from, an entry in `highlightLanguages`.
+    /// Extensions read as source.
+    ///
+    /// **Never add `gdiff`.** Galaxy dispatches its diff reader on
+    /// `.unhandled("gdiff")`, so adding it here would render a diff as raw
+    /// JSON with nothing failing. `diff` and `patch` are different strings and
+    /// are safe.
+    ///
+    /// Nor anything routinely binary under a text-looking extension. `plist`
+    /// is the one that keeps being suggested and is deliberately absent: half
+    /// of them are binary, and a host that reads bytes into a `String` before
+    /// asking anything — which is what the artifact reader does — would render
+    /// those as garbage rather than hand them to the system.
+    ///
+    /// `gitignore`, `dockerignore` and `editorconfig` are matched here **and**
+    /// as whole names in `extensionlessSourceNames`, deliberately. They were
+    /// written for the dotfiles and never reached them, because a leading dot
+    /// is not an extension separator — the name set is what answers for
+    /// `.gitignore`. These stay because `Node.gitignore` should still read as
+    /// source.
     private static let sourceExtensions: Set<String> = [
+        // Original set
         "rb", "cr", "py", "js", "ts", "jsx", "tsx", "swift", "go", "rs",
         "java", "kt", "sql", "sh", "bash", "zsh", "yml", "yaml", "json",
         "toml", "xml", "css", "scss", "less", "vue", "txt", "log", "conf",
         "cfg", "ini", "env", "gitignore", "dockerignore", "editorconfig",
+        // C family
+        "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "m", "mm",
+        // Other languages
+        "cs", "vb", "php", "pl", "lua", "r", "scala", "clj", "ex", "exs",
+        "elm", "dart", "hs", "ml", "nim", "zig", "jl", "sol", "vim", "awk",
+        "coffee",
+        // Shells and scripts
+        "fish", "ps1", "bat",
+        // Build and infrastructure
+        "mk", "cmake", "gradle", "groovy", "tf", "hcl", "bzl",
+        "xcconfig", "entitlements", "lock", "properties",
+        // Data and config
+        "jsonc", "json5", "ndjson", "graphql", "gql", "wat",
+        // Prose and markup
+        "rst", "adoc", "tex", "mdx",
+        // Diffs — distinct from `gdiff`, see above
+        "diff", "patch",
+        // Templates
+        "erb", "haml", "slim", "liquid", "hbs", "mustache", "jinja", "tmpl",
+        // Styles and web
+        "sass", "styl", "svelte", "astro",
     ]
 
+    /// Whole filenames read as source, for files carrying no extension.
+    ///
+    /// Dotfiles are listed with their leading dot because that is what
+    /// `lastPathComponent` returns. Only dot-led names with no *further* dot
+    /// reach this set — `.mise.toml` resolves by its `toml` extension — so
+    /// listing a name that carries its own suffix would be dead code.
+    private static let extensionlessSourceNames: Set<String> = [
+        "makefile", "rakefile", "gemfile", "podfile", "procfile",
+        "dockerfile", "vagrantfile", "brewfile", "justfile",
+        "readme", "license", "licence", "changelog", "authors",
+        "notice", "copying", "codeowners",
+        ".gitignore", ".gitattributes", ".dockerignore", ".editorconfig",
+        ".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile",
+        ".env", ".npmrc", ".rspec", ".tool-versions",
+        ".ruby-version", ".node-version",
+    ]
+
+    /// Extension to highlight.js language.
+    ///
+    /// Only languages the vendored bundle actually registers appear here. It
+    /// ships the common subset — thirty-five languages — so most of what a
+    /// repository contains has no entry and renders unstyled, which is the
+    /// intended outcome rather than a gap to fill.
+    ///
+    /// Approximations are used where a family is close enough and there is
+    /// precedent: `zsh` and `fish` answer as bash, `vue` and `erb` as xml,
+    /// `toml` as ini. `cr` answers as crystal, which the bundle does *not*
+    /// register — it predates this note and degrades to auto-detection rather
+    /// than failing, so it is left alone.
     private static let highlightLanguages: [String: String] = [
         "rb": "ruby", "cr": "crystal",
         "py": "python", "js": "javascript",
@@ -176,5 +270,41 @@ public enum FileKind: Equatable, Sendable {
         "tsv": "plaintext",
         "mmd": "plaintext",
         "mermaid": "plaintext",
+        // C family
+        "c": "c", "h": "c",
+        "cpp": "cpp", "cc": "cpp", "cxx": "cpp",
+        "hpp": "cpp", "hh": "cpp",
+        "m": "objectivec", "mm": "objectivec",
+        // Other languages the bundle registers
+        "cs": "csharp", "vb": "vbnet",
+        "php": "php", "pl": "perl",
+        "lua": "lua", "r": "r",
+        "wat": "wasm",
+        "graphql": "graphql", "gql": "graphql",
+        // Shells, by family
+        "fish": "bash",
+        // Build files
+        "mk": "makefile",
+        // Data, by family
+        "jsonc": "json", "json5": "json", "ndjson": "json",
+        // Markup, by family
+        "erb": "xml", "entitlements": "xml",
+        "sass": "scss",
+        // Diffs
+        "diff": "diff", "patch": "diff",
+    ]
+
+    /// Whole filename to highlight.js language, for files with no extension.
+    ///
+    /// Consulted only after `highlightLanguages` misses, so a name that
+    /// carries a suffix never reaches this table.
+    private static let filenameLanguages: [String: String] = [
+        "makefile": "makefile",
+        "gemfile": "ruby", "rakefile": "ruby", "podfile": "ruby",
+        "vagrantfile": "ruby", "brewfile": "ruby",
+        ".bashrc": "bash", ".bash_profile": "bash",
+        ".zshrc": "bash", ".zprofile": "bash",
+        ".profile": "bash", ".env": "bash",
+        ".editorconfig": "ini", ".npmrc": "ini",
     ]
 }

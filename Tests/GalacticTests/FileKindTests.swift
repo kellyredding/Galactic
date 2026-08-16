@@ -34,27 +34,60 @@ final class FileKindTests: XCTestCase {
         )
     }
 
-    /// Extensionless files and dotfiles collapse onto one indistinguishable
-    /// value. Pinned so the branch that separates them reads as a diff rather
-    /// than as an absence.
-    func testAFileWithNoExtensionIsUnhandledAndUnnamed() {
+    /// A build file carries its meaning in the whole name and a dotfile in
+    /// its leading dot, so both are asked as names.
+    func testAFileWithNoExtensionIsNamedByItsWholeName() {
         for name in [
-            "Makefile", "README", "LICENSE", "Dockerfile",
-            ".gitignore", ".bashrc", ".editorconfig",
+            "Makefile", "README", "LICENSE", "Dockerfile", "Gemfile",
+            ".gitignore", ".bashrc", ".editorconfig", ".env",
         ] {
             XCTAssertEqual(
                 FileKind.resolve(filename: name),
-                .unhandled(""),
-                "\(name) resolves to an empty extension today"
+                .source,
+                "\(name) is read as source by its name"
             )
         }
     }
 
-    /// The three entries in `sourceExtensions` that were written for dotfiles
-    /// and only ever matched a file named after one.
-    func testTheDotfileEntriesOnlyMatchTheSuffixSpelling() {
+    /// A name the set does not know still resolves the old way, so the
+    /// fallback is narrowed rather than removed.
+    func testAnUnknownExtensionlessNameIsStillUnhandled() {
+        XCTAssertEqual(
+            FileKind.resolve(filename: "somebinary"),
+            .unhandled("")
+        )
+        XCTAssertEqual(FileKind.resolve(filename: ".DS_Store"), .unhandled(""))
+    }
+
+    /// Both spellings now answer. The extension entries were written for the
+    /// dotfiles and never reached them; they are kept because a file named
+    /// `Node.gitignore` is a real thing.
+    func testBothSpellingsOfADotfileReadAsSource() {
         XCTAssertEqual(FileKind.resolve(filename: "Node.gitignore"), .source)
-        XCTAssertEqual(FileKind.resolve(filename: ".gitignore"), .unhandled(""))
+        XCTAssertEqual(FileKind.resolve(filename: ".gitignore"), .source)
+    }
+
+    /// The trap in the name set: only a dot-led name with no *further* dot
+    /// arrives at the name lookup. Anything carrying its own suffix is
+    /// answered by the extension table, so listing it as a name would be dead.
+    func testADotLedNameCarryingASuffixResolvesByThatSuffix() {
+        XCTAssertEqual(FileKind.resolve(filename: ".mise.toml"), .source)
+        XCTAssertEqual(FileKind.resolve(filename: ".eslintrc.json"), .source)
+        XCTAssertEqual(
+            FileKind.resolve(filename: ".secret.bin"),
+            .unhandled("bin"),
+            "the suffix decides, and this one has no reader"
+        )
+    }
+
+    /// Deliberately absent from the source set. Half of these are binary and
+    /// share the extension with the XML half, and a host that reads bytes into
+    /// a String before asking anything would render those as garbage.
+    func testABinaryCapableExtensionIsLeftToTheSystem() {
+        XCTAssertEqual(
+            FileKind.resolve(filename: "Info.plist"),
+            .unhandled("plist")
+        )
     }
 
     // MARK: - The hard-coded branches
@@ -101,14 +134,29 @@ final class FileKindTests: XCTestCase {
         }
     }
 
-    /// The C family, the shells beyond bash, and the infrastructure formats a
-    /// file browser meets immediately — none of them are known today.
-    func testCommonSourceExtensionsAreNotKnownYet() {
-        for ext in ["c", "h", "cpp", "m", "php", "lua", "tf", "hs", "r"] {
+    /// The C family, the shells beyond bash, and the infrastructure and
+    /// template formats a file browser meets in the first minute.
+    func testTheWidenedSourceExtensions() {
+        let widened = [
+            "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "m", "mm",
+            "cs", "vb", "php", "pl", "lua", "r", "scala", "clj",
+            "ex", "exs", "elm", "dart", "hs", "ml", "nim", "zig",
+            "jl", "sol", "vim", "awk", "coffee",
+            "fish", "ps1", "bat",
+            "mk", "cmake", "gradle", "groovy", "tf", "hcl", "bzl",
+            "xcconfig", "entitlements", "lock", "properties",
+            "jsonc", "json5", "ndjson", "graphql", "gql", "wat",
+            "rst", "adoc", "tex", "mdx",
+            "diff", "patch",
+            "erb", "haml", "slim", "liquid", "hbs", "mustache",
+            "jinja", "tmpl",
+            "sass", "styl", "svelte", "astro",
+        ]
+        for ext in widened {
             XCTAssertEqual(
                 FileKind.resolve(filename: "thing.\(ext)"),
-                .unhandled(ext),
-                "\(ext) is absent from the source set today"
+                .source,
+                "\(ext) is read as source"
             )
         }
     }
@@ -292,9 +340,67 @@ final class FileKindTests: XCTestCase {
         )
     }
 
-    func testAnUnknownExtensionHasNoLanguage() {
-        XCTAssertNil(FileKind.highlightLanguage(forFilename: "a.zig"))
-        XCTAssertNil(FileKind.highlightLanguage(forFilename: "Makefile"))
-        XCTAssertNil(FileKind.highlightLanguage(forFilename: ".bashrc"))
+    /// The extension is asked first, the whole name second — so a file with no
+    /// extension still has a language.
+    func testAFileWithNoExtensionCanStillNameItsLanguage() {
+        XCTAssertEqual(
+            FileKind.highlightLanguage(forFilename: "Makefile"), "makefile"
+        )
+        XCTAssertEqual(
+            FileKind.highlightLanguage(forFilename: "Gemfile"), "ruby"
+        )
+        XCTAssertEqual(
+            FileKind.highlightLanguage(forFilename: ".bashrc"), "bash"
+        )
+        XCTAssertEqual(
+            FileKind.highlightLanguage(forFilename: ".editorconfig"), "ini"
+        )
+    }
+
+    /// A path, not just a bare name — the name lookup takes the last
+    /// component, the way the extension lookup does.
+    func testTheNameLookupTakesTheLastPathComponent() {
+        XCTAssertEqual(
+            FileKind.resolve(filename: "/a/b/Makefile"), .source
+        )
+        XCTAssertEqual(
+            FileKind.highlightLanguage(forFilename: "/a/b/Makefile"),
+            "makefile"
+        )
+    }
+
+    /// Only what the vendored bundle registers gets a name. It ships the
+    /// common subset, so plenty of the widened extensions render unstyled —
+    /// which beats naming a language the page cannot load and letting
+    /// auto-detection guess.
+    func testAnExtensionTheBundleCannotStyleHasNoLanguage() {
+        for ext in ["zig", "elm", "nim", "hcl", "tf", "svelte", "adoc"] {
+            XCTAssertNil(
+                FileKind.highlightLanguage(forFilename: "a.\(ext)"),
+                "\(ext) is read as source and rendered unstyled"
+            )
+        }
+        XCTAssertNil(FileKind.highlightLanguage(forFilename: "README"))
+    }
+
+    func testTheWidenedLanguageMappings() {
+        let expected = [
+            "a.c": "c", "a.h": "c", "a.cpp": "cpp", "a.hpp": "cpp",
+            "a.m": "objectivec", "a.mm": "objectivec",
+            "a.cs": "csharp", "a.vb": "vbnet",
+            "a.php": "php", "a.pl": "perl", "a.lua": "lua", "a.r": "r",
+            "a.fish": "bash", "a.mk": "makefile",
+            "a.jsonc": "json", "a.ndjson": "json",
+            "a.erb": "xml", "a.entitlements": "xml", "a.sass": "scss",
+            "a.diff": "diff", "a.patch": "diff",
+            "a.graphql": "graphql", "a.wat": "wasm",
+        ]
+        for (filename, language) in expected {
+            XCTAssertEqual(
+                FileKind.highlightLanguage(forFilename: filename),
+                language,
+                "\(filename) is styled as \(language)"
+            )
+        }
     }
 }
