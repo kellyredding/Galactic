@@ -29,7 +29,7 @@ released tag:
 ```swift
 .package(
     url: "https://github.com/kellyredding/Galactic.git",
-    exact: "0.6.0"
+    exact: "0.8.0"
 )
 ```
 
