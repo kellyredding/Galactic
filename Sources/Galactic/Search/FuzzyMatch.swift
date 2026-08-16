@@ -55,17 +55,62 @@ public enum FuzzyMatch {
     private static let leadingPenalty = 1
     private static let maxLeadingPenalty = 12
 
+    /// A query resolved once, for a caller matching it against many candidates.
+    ///
+    /// Lowercasing and splitting the query does not depend on the candidate, so
+    /// doing it per call is work paid for as many times as there are things to
+    /// search. The cheat sheet asks five fields per row against a catalogue of
+    /// well over a hundred, which is several hundred identical lowercasings for
+    /// one keystroke.
+    ///
+    /// Each scope prepares itself exactly as its matcher used to, and the order
+    /// matters: `.terms` splits and *then* lowercases each term, while
+    /// `.subsequence` lowercases the whole query and then reads it as
+    /// characters. Lowercasing once up front and splitting after would be the
+    /// same for ASCII and is not guaranteed to be in every script.
+    ///
+    /// Internal. Preparing a *candidate* list is the other half of this and is
+    /// deliberately absent — that wants an invalidation policy, which belongs to
+    /// whoever owns the corpus.
+    struct PreparedQuery {
+        let scope: Scope
+        /// Populated for `.subsequence`, empty otherwise.
+        let needle: [Character]
+        /// Populated for `.terms`, empty otherwise.
+        let terms: [[Character]]
+
+        init(_ query: String, scope: Scope = .subsequence) {
+            self.scope = scope
+            switch scope {
+            case .subsequence:
+                needle = Array(query.lowercased())
+                terms = []
+            case .terms:
+                needle = []
+                terms = query.split(whereSeparator: \.isWhitespace)
+                    .map { Array($0.lowercased()) }
+            }
+        }
+    }
+
     /// Match `candidate` against `query`, or nil when it does not match under
     /// `scope`. Case-insensitive. An empty query succeeds with a zero score and
     /// no offsets, so an unfiltered list shows everything.
     public static func result(
         _ candidate: String, query: String, scope: Scope = .subsequence
     ) -> Result? {
-        switch scope {
+        result(candidate, prepared: PreparedQuery(query, scope: scope))
+    }
+
+    /// The same match against a query already resolved.
+    static func result(
+        _ candidate: String, prepared: PreparedQuery
+    ) -> Result? {
+        switch prepared.scope {
         case .subsequence:
-            return spanning(candidate, query: query)
+            return spanning(candidate, needle: prepared.needle)
         case .terms:
-            return orderedTerms(candidate, query: query)
+            return orderedTerms(candidate, terms: prepared.terms)
         }
     }
 
@@ -79,10 +124,8 @@ public enum FuzzyMatch {
     /// sitting at a word start. For a search box the user watches while
     /// typing, that is a fair trade for predictability.
     private static func orderedTerms(
-        _ candidate: String, query: String
+        _ candidate: String, terms: [[Character]]
     ) -> Result? {
-        let terms = query.split(whereSeparator: \.isWhitespace)
-            .map { Array($0.lowercased()) }
         guard !terms.isEmpty else {
             return Result(score: 0, matchedOffsets: [])
         }
@@ -91,6 +134,10 @@ public enum FuzzyMatch {
         var cursor = 0
         var total = 0
         var offsets: [Int] = []
+        // Every term contributes its whole length, so the total is known
+        // before the walk. Without this the array regrows term by term, which
+        // the subsequence path has always avoided.
+        offsets.reserveCapacity(terms.reduce(0) { $0 + $1.count })
 
         for needle in terms {
             guard let at = firstOccurrence(of: needle, in: hay, from: cursor)
@@ -128,8 +175,9 @@ public enum FuzzyMatch {
     }
 
     /// Subsequence matching over the whole candidate, words and all.
-    private static func spanning(_ candidate: String, query: String) -> Result? {
-        let needle = Array(query.lowercased())
+    private static func spanning(
+        _ candidate: String, needle: [Character]
+    ) -> Result? {
         guard !needle.isEmpty else {
             return Result(score: 0, matchedOffsets: [])
         }

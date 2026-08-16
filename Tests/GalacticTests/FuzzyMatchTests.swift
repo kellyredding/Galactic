@@ -207,4 +207,32 @@ final class FuzzyMatchTests: XCTestCase {
         )
         XCTAssertFalse(FuzzyMatch.matches("Move to Icebox", query: "zzz"))
     }
+
+    // MARK: - Beyond ASCII
+
+    /// Both scopes fold case by lowercasing, and each does it in its own order
+    /// — one over the whole query, the other over each term after splitting.
+    /// Nothing here left ASCII before, so nothing would have caught the two
+    /// disagreeing.
+    func testANonASCIIQueryFoldsCaseInBothScopes() {
+        XCTAssertNotNil(
+            FuzzyMatch.result("Übersicht", query: "ÜBER", scope: .terms)
+        )
+        XCTAssertNotNil(
+            FuzzyMatch.result("Übersicht", query: "über", scope: .subsequence)
+        )
+        XCTAssertNotNil(
+            FuzzyMatch.result("Ärger und Öl", query: "ärger öl", scope: .terms)
+        )
+    }
+
+    /// Offsets index the candidate as characters, so an accented one occupies
+    /// a single position however many scalars compose it.
+    func testOffsetsCountAccentedCharactersAsOne() {
+        XCTAssertEqual(
+            FuzzyMatch.result("café", query: "É", scope: .terms)?
+                .matchedOffsets,
+            [3]
+        )
+    }
 }

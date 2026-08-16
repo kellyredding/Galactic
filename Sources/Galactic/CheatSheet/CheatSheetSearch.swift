@@ -82,12 +82,18 @@ public enum CheatSheetSearch {
     ) -> [Hit?] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return candidates.map { _ in Hit() } }
-        return candidates.map { hit($0, query: trimmed) }
+        // Resolved once for the whole catalogue rather than once per field per
+        // row — five fields over a hundred-odd rows is the same split and
+        // lowercase several hundred times for one keystroke.
+        let prepared = FuzzyMatch.PreparedQuery(trimmed, scope: .terms)
+        return candidates.map { hit($0, prepared: prepared) }
     }
 
-    private static func hit(_ c: Candidate, query: String) -> Hit? {
+    private static func hit(
+        _ c: Candidate, prepared: FuzzyMatch.PreparedQuery
+    ) -> Hit? {
         func offsets(_ field: String) -> [Int]? {
-            FuzzyMatch.result(field, query: query, scope: .terms)?.matchedOffsets
+            FuzzyMatch.result(field, prepared: prepared)?.matchedOffsets
         }
         let label = offsets(c.label)
         let keys = offsets(c.keys)
