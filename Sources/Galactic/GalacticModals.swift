@@ -36,6 +36,7 @@ public enum GalacticModals {
         MainActor.assumeIsolated {
             CheatSheetPresenter.isClaimingKeyboard
                 || AgentInboxPresenter.isClaimingKeyboard
+                || FilePickerPresenter.isClaimingKeyboard
                 || SheetAlert.isClaimingKeyboard
         }
     }

@@ -24,15 +24,26 @@ public struct FileTreeIndex: Equatable {
     public struct Item: Equatable {
         public let url: URL
         public let path: String
-        public let lowercasedPath: String
-        /// Path relative to the index's root, which is what a picker shows.
+        /// Path relative to the index's root, which is what a picker shows and
+        /// therefore what it matches against — highlight offsets have to index
+        /// the string on screen.
         public let relativePath: String
+        /// `relativePath`, lowercased once at build time.
+        ///
+        /// Not for the matcher, which lowercases its own candidate. This is for
+        /// the cheap necessary-condition filter in front of it: a subsequence
+        /// match requires every query character to appear somewhere, so a
+        /// candidate missing one can be rejected without being scored. Over
+        /// tens of thousands of files that is the difference between a picker
+        /// that keeps up with typing and one that does not.
+        public let lowercasedRelativePath: String
 
         init(url: URL, root: URL) {
             self.url = url
             path = url.path
-            lowercasedPath = url.path.lowercased()
-            relativePath = FileTabLabel.relativeOrAbbreviated(url, root: root)
+            let relative = FileTabLabel.relativeOrAbbreviated(url, root: root)
+            relativePath = relative
+            lowercasedRelativePath = relative.lowercased()
         }
     }
 

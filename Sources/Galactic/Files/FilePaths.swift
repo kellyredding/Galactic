@@ -38,14 +38,32 @@ public enum FilePaths {
 
     /// The path of `url` relative to `root`, or nil when it is not inside it.
     ///
-    /// Compared component-wise rather than by string prefix, so a sibling
-    /// directory whose name merely begins with the root's — `project-other`
-    /// against `project` — is correctly outside it.
+    /// Asked twice, because neither answer is sufficient alone:
+    ///
+    /// - **Canonically**, which is what handles a root reached through a
+    ///   symlink. `realpath` needs the path to exist, so this is the answer for
+    ///   a file that is there.
+    /// - **Lexically**, for a path that cannot be resolved because it is gone.
+    ///   The picker's empty list is made of files a reader *closed*, and some of
+    ///   those will have been deleted since — with only the canonical test, one
+    ///   unresolvable child fell back to its raw path while the root resolved,
+    ///   and the row displayed a full absolute path.
+    ///
+    /// Compared component-wise rather than by string prefix either way, so a
+    /// sibling directory whose name merely begins with the root's —
+    /// `project-other` against `project` — is correctly outside it.
     public static func relativePath(of url: URL, under root: URL) -> String? {
-        let child = canonical(url).split(separator: "/").map(String.init)
-        let base = canonical(root).split(separator: "/").map(String.init)
-        guard child.count > base.count, Array(child.prefix(base.count)) == base
+        if let resolved = relative(canonical(url), under: canonical(root)) {
+            return resolved
+        }
+        return relative(url.path, under: root.path)
+    }
+
+    private static func relative(_ path: String, under base: String) -> String? {
+        let child = path.split(separator: "/").map(String.init)
+        let root = base.split(separator: "/").map(String.init)
+        guard child.count > root.count, Array(child.prefix(root.count)) == root
         else { return nil }
-        return child.dropFirst(base.count).joined(separator: "/")
+        return child.dropFirst(root.count).joined(separator: "/")
     }
 }

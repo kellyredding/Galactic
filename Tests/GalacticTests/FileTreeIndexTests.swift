@@ -88,8 +88,8 @@ final class FileTreeIndexTests: XCTestCase {
         let item = index().items.first
         XCTAssertEqual(item?.relativePath, "Src/UserModel.swift")
         XCTAssertEqual(
-            item?.lowercasedPath, item?.path.lowercased(),
-            "lowercased once here rather than on every keystroke"
+            item?.lowercasedRelativePath, "src/usermodel.swift",
+            "lowercased once here, for the filter in front of the matcher"
         )
     }
 

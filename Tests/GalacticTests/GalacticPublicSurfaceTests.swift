@@ -366,4 +366,66 @@ final class GalacticPublicSurfaceTests: XCTestCase {
             TextEntryBindings.default.displayLabels(for: .submit), ["Enter"]
         )
     }
+
+    // MARK: - Reading files from disk
+
+    /// What a host builds a Files surface from: a file it can load, notes it can
+    /// hold, a review it can compose, a strip it can arrange, and an index it
+    /// can search. All values — nothing here needs the host to conform to
+    /// anything.
+    func testTheFilesEngineIsReachableAsValues() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("surface-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: dir, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("a.rb")
+        try Data("x = 1\n".utf8).write(to: url)
+
+        let file = try ReaderFile.load(url: url)
+        XCTAssertEqual(file.kind, .source)
+        XCTAssertFalse(FileDriftCheck.hasDrifted(file))
+
+        var notes = FileNoteStore()
+        notes.add(
+            filePath: url.path, startLine: 1, endLine: 1,
+            lineContent: "x = 1", content: "why", createdAt: "now"
+        )
+        XCTAssertEqual(notes.totalCount, 1)
+
+        var strip = FileTabStripModel()
+        strip.open(url: url)
+        XCTAssertEqual(strip.tabs.count, 1)
+
+        var closed = ClosedTabStack()
+        closed.push(url: url, row: 0)
+        XCTAssertEqual(closed.presented().count, 1)
+
+        XCTAssertFalse(FileTreeIndex.build(root: dir).items.isEmpty)
+        XCTAssertFalse(FileTabLabel.tiers(for: url, root: dir).isEmpty)
+        XCTAssertFalse(
+            FileReviewComposer.compose(
+                overallComment: "", files: [file], notes: notes, root: dir
+            ).isEmpty
+        )
+    }
+
+    /// The three members a host reaches for the picker, matching the shape the
+    /// cheat sheet and the inbox already have.
+    @MainActor
+    func testTheFilePickerIsReachedThroughItsSharedPresenter() {
+        let presenter = FilePickerPresenter.shared
+        defer {
+            presenter.dismiss()
+            presenter.rootProvider = { nil }
+        }
+        presenter.rootProvider = { nil }
+
+        presenter.toggle()
+
+        XCTAssertTrue(presenter.isPresented)
+        XCTAssertTrue(FilePickerPresenter.isClaimingKeyboard)
+        XCTAssertNotNil(FilePickerView())
+    }
 }
