@@ -69,12 +69,10 @@ public enum FileTabLabel {
     /// Relative to the root when under it; otherwise absolute with the home
     /// directory shortened to `~`.
     static func relativeOrAbbreviated(_ url: URL, root: URL?) -> String {
-        if let root {
-            var prefix = root.path
-            if !prefix.hasSuffix("/") { prefix += "/" }
-            if url.path.hasPrefix(prefix) {
-                return String(url.path.dropFirst(prefix.count))
-            }
+        if let root,
+           let relative = FilePaths.relativePath(of: url, under: root)
+        {
+            return relative
         }
         let home = NSHomeDirectory()
         if url.path.hasPrefix(home) {

@@ -113,10 +113,6 @@ public enum FileReviewComposer {
     /// source beside guidelines from a different tree — so shortening is a
     /// courtesy where it applies and never a claim about where a file lives.
     static func displayPath(for url: URL, root: URL) -> String {
-        let path = url.path
-        var prefix = root.path
-        if !prefix.hasSuffix("/") { prefix += "/" }
-        guard path.hasPrefix(prefix) else { return path }
-        return String(path.dropFirst(prefix.count))
+        FilePaths.relativePath(of: url, under: root) ?? url.path
     }
 }
