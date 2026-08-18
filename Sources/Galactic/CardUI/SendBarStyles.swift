@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 // MARK: - Send Bar
@@ -40,6 +41,58 @@ public let sendBarHTML: String = """
     </div>
     """
 
+/// The bar's green, as a value rather than as a string in a stylesheet.
+///
+/// The bar is the only green in either app, and it means one thing: work
+/// collected and waiting to be sent. Anything else that wants to say the same
+/// thing — a count on a file tab, a tint on the tab holding it — has to be
+/// *that* green rather than one chosen to look like it, or the two drift apart
+/// the first time either is adjusted. This file's own doc already says so about
+/// the CSS; the same argument covers a second copy typed into Swift.
+///
+/// Light and dark are different colours, not one colour at two opacities: the
+/// light bar is a darker, more saturated green because it sits on white.
+public enum SendBarGreen {
+    /// Component values, so both a `CGColor` and a CSS string derive from one
+    /// declaration rather than agreeing by inspection.
+    public struct Components {
+        public let red: Double
+        public let green: Double
+        public let blue: Double
+        public let alpha: Double
+    }
+
+    /// Spelled out as 0-255 values because that is how the stylesheet reads and
+    /// how anyone will check the two against each other.
+    public static func components(isLight: Bool) -> Components {
+        if isLight {
+            return Components(
+                red: 34 / 255, green: 139 / 255, blue: 34 / 255, alpha: 0.92
+            )
+        }
+        return Components(
+            red: 40 / 255, green: 170 / 255, blue: 80 / 255, alpha: 0.95
+        )
+    }
+
+    public static func color(isLight: Bool) -> NSColor {
+        let c = components(isLight: isLight)
+        return NSColor(
+            srgbRed: c.red, green: c.green, blue: c.blue, alpha: c.alpha
+        )
+    }
+
+    /// What a stylesheet needs. The alpha travels with it, so a token dropped
+    /// onto a light background keeps the translucency the bar was designed with.
+    public static func css(isLight: Bool) -> String {
+        let c = components(isLight: isLight)
+        let red = Int((c.red * 255).rounded())
+        let green = Int((c.green * 255).rounded())
+        let blue = Int((c.blue * 255).rounded())
+        return "rgba(\(red), \(green), \(blue), \(c.alpha))"
+    }
+}
+
 /// The four colours the bar resolves, as custom properties.
 ///
 /// Split from `sendBarCSS` for the reason `noteUXTokens` is split from the
@@ -50,9 +103,7 @@ public let sendBarHTML: String = """
 public func sendBarTokens(isLight: Bool) -> String {
     """
     :root {
-        --send-bar-bg: \(isLight
-            ? "rgba(34, 139, 34, 0.92)"
-            : "rgba(40, 170, 80, 0.95)");
+        --send-bar-bg: \(SendBarGreen.css(isLight: isLight));
         --send-bar-border-top: \(isLight
             ? "rgba(0, 0, 0, 0.1)"
             : "rgba(255, 255, 255, 0.15)");

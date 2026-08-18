@@ -287,4 +287,54 @@ final class SendBarTests: XCTestCase {
             "a quote in the noun produced unparseable JavaScript"
         )
     }
+
+    // MARK: - The green
+
+    /// The bar's green and the tab badge's green are the same colour because
+    /// they are the same value, not because two declarations agree. This is the
+    /// test that fails if one is edited alone.
+    func testTheCSSTokenIsBuiltFromTheSameComponentsAsTheColour() {
+        for isLight in [true, false] {
+            let c = SendBarGreen.components(isLight: isLight)
+            let color = SendBarGreen.color(isLight: isLight)
+            let css = SendBarGreen.css(isLight: isLight)
+
+            XCTAssertEqual(Double(color.redComponent), c.red, accuracy: 0.001)
+            XCTAssertEqual(
+                Double(color.greenComponent), c.green, accuracy: 0.001
+            )
+            XCTAssertEqual(Double(color.blueComponent), c.blue, accuracy: 0.001)
+            XCTAssertEqual(
+                Double(color.alphaComponent), c.alpha, accuracy: 0.001
+            )
+            XCTAssertEqual(
+                css,
+                "rgba(\(Int((c.red * 255).rounded())), "
+                    + "\(Int((c.green * 255).rounded())), "
+                    + "\(Int((c.blue * 255).rounded())), \(c.alpha))"
+            )
+        }
+    }
+
+    /// Light and dark are different colours rather than one at two opacities —
+    /// the light bar sits on white and needs the darker, more saturated green.
+    func testLightAndDarkAreDifferentGreens() {
+        XCTAssertNotEqual(
+            SendBarGreen.css(isLight: true), SendBarGreen.css(isLight: false)
+        )
+    }
+
+    /// The stylesheet must carry the shared token rather than a literal, or the
+    /// badge and the bar can drift while both still look right in isolation.
+    func testTheBarsBackgroundTokenUsesTheSharedGreen() {
+        for isLight in [true, false] {
+            let tokens = sendBarTokens(isLight: isLight)
+            XCTAssertTrue(
+                tokens.contains(
+                    "--send-bar-bg: \(SendBarGreen.css(isLight: isLight))"
+                ),
+                "the bar stopped deriving its own green"
+            )
+        }
+    }
 }

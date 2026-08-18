@@ -115,8 +115,18 @@ private struct FileTabView: View {
     let onReload: () -> Void
 
     @State private var isHovering = false
+    @Environment(\.colorScheme) private var colorScheme
 
     private typealias Metrics = FileTabStripView.Metrics
+
+    /// The send bar's green, and deliberately not a green chosen to look like
+    /// it. A tab carrying notes and the bar offering to send them are saying one
+    /// thing, so they say it in one colour — see `SendBarGreen`.
+    private var green: Color {
+        Color(SendBarGreen.color(isLight: colorScheme != .dark))
+    }
+
+    private var hasNotes: Bool { noteCount > 0 }
 
     private var tiers: [String] {
         FileTabLabel.tiers(for: tab.url, root: root, siblings: siblings)
@@ -126,14 +136,16 @@ private struct FileTabView: View {
         HStack(spacing: 4) {
             label
 
-            if noteCount > 0 {
+            if hasNotes {
                 Text("\(noteCount)")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 9, weight: .bold))
+                    // On a filled capsule of the bar's own green, so the count
+                    // is white on green wherever the tab is — the grey-on-grey
+                    // it replaced was legible only if you already knew it was
+                    // there.
+                    .foregroundColor(.white)
                     .padding(.horizontal, 4)
-                    .background(
-                        Capsule().fill(Color.primary.opacity(0.10))
-                    )
+                    .background(Capsule().fill(green))
                     .fixedSize()
             }
 
@@ -150,12 +162,16 @@ private struct FileTabView: View {
             RoundedRectangle(cornerRadius: 4)
                 .fill(Color.primary.opacity(background))
         )
+        // The green wash, under the selection treatment rather than replacing
+        // it: a tab can be both selected and carrying notes, and those are two
+        // different facts about it.
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(green.opacity(hasNotes ? tintOpacity : 0))
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 4)
-                .stroke(
-                    Color.primary.opacity(isSelected ? 0.14 : 0),
-                    lineWidth: 1
-                )
+                .stroke(borderColor, lineWidth: isSelected ? 1.5 : 1)
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
@@ -215,6 +231,24 @@ private struct FileTabView: View {
     private var background: Double {
         if isSelected { return 0.10 }
         return isHovering ? 0.05 : 0.02
+    }
+
+    /// Enough to read as green, little enough to read the label over.
+    ///
+    /// Stronger on the selected tab, which already carries a grey background the
+    /// wash has to survive — an equal tint on both makes the selected annotated
+    /// tab the *palest* green in the row, which is backwards.
+    private var tintOpacity: Double {
+        isSelected ? 0.22 : 0.14
+    }
+
+    /// Selection is the border's job, and it had to get stronger once tabs could
+    /// be tinted: a 1px grey hairline reads as selection against a plain tab and
+    /// disappears against a green one. Green tabs take a green border, so the
+    /// selected one is the *saturated* green rather than merely a filled one.
+    private var borderColor: Color {
+        if isSelected { return hasNotes ? green : Color.primary.opacity(0.28) }
+        return hasNotes ? green.opacity(0.35) : .clear
     }
 
     private var relativePath: String {
