@@ -422,4 +422,82 @@ final class FileKindTests: XCTestCase {
     func testPlainTextNamesNoLanguage() {
         XCTAssertNil(FileKind.highlightLanguage(forFilename: "prompts.txt"))
     }
+
+    // MARK: - Shebangs
+
+    /// The files that carry a shebang are exactly the files with nothing else to
+    /// go on: a shim, a hook, a script on a path.
+    func testAnExtensionlessScriptTakesItsLanguageFromTheShebang() {
+        XCTAssertEqual(
+            FileKind.highlightLanguage(
+                forFilename: "ri", firstLine: "#!/usr/bin/env bash"
+            ),
+            "bash"
+        )
+        XCTAssertEqual(
+            FileKind.highlightLanguage(
+                forFilename: "pre-commit", firstLine: "#!/bin/sh"
+            ),
+            "bash"
+        )
+    }
+
+    /// The interpreter, not the path — and not `env`, which is only how the
+    /// interpreter is found.
+    func testTheInterpreterIsReadThroughEnvAndItsFlags() {
+        XCTAssertEqual(FileKind.shebangLanguage("#!/bin/bash"), "bash")
+        XCTAssertEqual(
+            FileKind.shebangLanguage("#!/usr/bin/env ruby"), "ruby"
+        )
+        XCTAssertEqual(
+            FileKind.shebangLanguage("#!/usr/bin/env -S ruby -w"), "ruby"
+        )
+        XCTAssertEqual(
+            FileKind.shebangLanguage("#!/usr/bin/perl -w"), "perl"
+        )
+        XCTAssertEqual(FileKind.shebangLanguage("#!/usr/bin/env node"),
+                       "javascript")
+    }
+
+    /// `python3` and `python3.12` are one grammar.
+    func testAVersionSuffixIsDropped() {
+        XCTAssertEqual(
+            FileKind.shebangLanguage("#!/usr/bin/env python3"), "python"
+        )
+        XCTAssertEqual(
+            FileKind.shebangLanguage("#!/usr/bin/python3.12"), "python"
+        )
+    }
+
+    /// A name that names a language is a stronger claim than a first line: a
+    /// `.rb` file is Ruby even when it is launched through bash.
+    func testAKnownExtensionWinsOverTheShebang() {
+        XCTAssertEqual(
+            FileKind.highlightLanguage(
+                forFilename: "notes.rb", firstLine: "#!/usr/bin/env bash"
+            ),
+            "ruby"
+        )
+    }
+
+    /// A name that names *nothing* yields to the shebang, whatever the extension
+    /// is. A `.txt` whose first line is `#!/usr/bin/env bash` is a script
+    /// someone saved under the wrong name, and reading it as bash is more use
+    /// than reading it flat — the extension said only that it is text, which the
+    /// shebang does not contradict.
+    func testAnUnknownExtensionStillYieldsToTheShebang() {
+        XCTAssertEqual(
+            FileKind.highlightLanguage(
+                forFilename: "notes.txt", firstLine: "#!/usr/bin/env bash"
+            ),
+            "bash"
+        )
+    }
+
+    func testALineThatIsNotAShebangNamesNothing() {
+        XCTAssertNil(FileKind.shebangLanguage("set -e"))
+        XCTAssertNil(FileKind.shebangLanguage("#!"))
+        XCTAssertNil(FileKind.shebangLanguage("#!/usr/bin/env"))
+        XCTAssertNil(FileKind.shebangLanguage("#!/usr/bin/env fortran"))
+    }
 }

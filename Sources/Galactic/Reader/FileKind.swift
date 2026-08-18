@@ -174,6 +174,87 @@ public enum FileKind: Equatable, Sendable {
         return filenameLanguages[name.lastPathComponent.lowercased()]
     }
 
+    /// The language, asking the file's first line when its name does not say.
+    ///
+    /// A shebang is the only other place a file declares what it is, and the
+    /// files that carry one are exactly the files with nothing else to go on:
+    /// a shim, a hook, a script on a path. `.rb/shims/ri` is a bash script whose
+    /// name says `ri`.
+    ///
+    /// Name first, but only when the name says something. An extension that names
+    /// a language is the stronger claim — a `.rb` file launched through bash is
+    /// still Ruby — while an extension that names nothing has not disagreed with
+    /// anything, so the shebang is taken. A `.txt` whose first line is
+    /// `#!/usr/bin/env bash` is a script saved under the wrong name.
+    public static func highlightLanguage(
+        forFilename filename: String,
+        firstLine: String?
+    ) -> String? {
+        if let byName = highlightLanguage(forFilename: filename) {
+            return byName
+        }
+        guard let firstLine else { return nil }
+        return shebangLanguage(firstLine)
+    }
+
+    /// The language a `#!` line declares, or nil.
+    ///
+    /// Reads the interpreter rather than the path: `/bin/bash`, `/usr/bin/env
+    /// bash` and `/usr/bin/env -S bash -e` all name bash. A version suffix is
+    /// dropped, because `python3` and `python3.12` are the same grammar.
+    static func shebangLanguage(_ firstLine: String) -> String? {
+        guard firstLine.hasPrefix("#!") else { return nil }
+
+        var tokens = firstLine.dropFirst(2)
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+        guard let interpreter = tokens.first else { return nil }
+
+        var name = (interpreter as NSString).lastPathComponent
+        if name == "env" {
+            tokens.removeFirst()
+            // `env` takes flags of its own — `-S` splits a string, `-i` clears
+            // the environment — and the interpreter is whatever follows them.
+            while let next = tokens.first, next.hasPrefix("-") {
+                tokens.removeFirst()
+            }
+            guard let actual = tokens.first else { return nil }
+            name = (actual as NSString).lastPathComponent
+        }
+
+        return shebangLanguages[versionless(name).lowercased()]
+    }
+
+    /// `python3.12` → `python`. Trailing digits and dots only, so a name that
+    /// ends in a numeral for another reason is left alone by having no entry.
+    private static func versionless(_ name: String) -> String {
+        var trimmed = name
+        while let last = trimmed.last, last.isNumber || last == "." {
+            trimmed.removeLast()
+        }
+        return trimmed.isEmpty ? name : trimmed
+    }
+
+    /// Interpreter name → highlighter language.
+    ///
+    /// Separate from the extension table because the keys are a different
+    /// vocabulary: `sh` is an extension *and* an interpreter, but `node` and
+    /// `Rscript` are only ever interpreters. Naming one the bundle does not
+    /// register is safe — the renderer checks before it highlights and leaves the
+    /// source alone otherwise.
+    static let shebangLanguages: [String: String] = [
+        // Shells, all read as bash
+        "sh": "bash", "bash": "bash", "zsh": "bash",
+        "dash": "bash", "ksh": "bash", "fish": "bash",
+        "python": "python", "ruby": "ruby",
+        "node": "javascript", "deno": "javascript", "bun": "javascript",
+        "perl": "perl", "php": "php", "lua": "lua",
+        "crystal": "crystal", "swift": "swift",
+        "rscript": "r", "r": "r",
+        "awk": "awk", "gawk": "awk",
+        "tclsh": "tcl", "groovy": "groovy",
+    ]
+
     /// Extensions read as source.
     ///
     /// **Never add `gdiff`.** Galaxy dispatches its diff reader on
