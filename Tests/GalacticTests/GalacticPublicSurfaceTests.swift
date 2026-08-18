@@ -428,4 +428,34 @@ final class GalacticPublicSurfaceTests: XCTestCase {
         XCTAssertTrue(FilePickerPresenter.isClaimingKeyboard)
         XCTAssertNotNil(FilePickerView())
     }
+
+    /// What a host mounts a Files surface out of: the keyed collection, the set
+    /// it hands back, and the strip that draws it.
+    @MainActor
+    func testAFilesSurfaceIsReachedThroughASetAndItsStrip() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("files-surface-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: dir, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("a.swift")
+        try Data("let x = 1\n".utf8).write(to: url)
+
+        let sets = FileSets(defaultRoot: { _ in dir })
+        let set = sets.set(forOwner: "default")
+        let tab = try set.open(url: url)
+
+        XCTAssertEqual(set.selectedTab?.id, tab.id)
+        XCTAssertEqual(set.selectedFile?.content, "let x = 1\n")
+        XCTAssertEqual(set.openPathRows, [[url.path]])
+        XCTAssertNotNil(
+            FileTabStripView(
+                set: set,
+                onSelect: { _ in },
+                onClose: { _ in },
+                onRequestOpen: {}
+            )
+        )
+    }
 }

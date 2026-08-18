@@ -175,6 +175,34 @@ final class FileTabLabelTests: XCTestCase {
         XCTAssertEqual(Set(tiers).count, tiers.count, "no tier repeats")
     }
 
+    /// The strip spells out one `ViewThatFits` child per tier, because a
+    /// `ForEach` inside one is a single candidate. A fifth tier arriving here
+    /// without `tierCount` moving would simply never be offered — the label
+    /// would sit one notch wider than it had to, and nothing would fail.
+    func testNoTierListExceedsTheCountTheStripDrawsFor() {
+        let siblings = [
+            url("/work/project/web/index.ts"),
+            url("/work/project/worker/index.ts"),
+        ]
+        for path in [
+            "/work/project/a.rb",
+            "/work/project/src/a.rb",
+            "/work/project/a/b/c/d/e.rb",
+            "/work/project/web/index.ts",
+            "/elsewhere/deeply/nested/f.rb",
+            "/f.rb",
+        ] {
+            let tiers = FileTabLabel.tiers(
+                for: url(path), root: root, siblings: siblings
+            )
+            XCTAssertLessThanOrEqual(
+                tiers.count,
+                FileTabLabel.tierCount,
+                "\(path) offers more tiers than the strip has slots"
+            )
+        }
+    }
+
     func testEveryTierListIsNonEmpty() {
         for path in [
             "/work/project/a.rb",

@@ -14,6 +14,15 @@ import Foundation
 /// nothing setting a repeating curve on the transaction.
 public enum FileTabLabel {
 
+    /// The most tiers `tiers(for:root:siblings:)` can return.
+    ///
+    /// Read by the strip, which needs a **fixed** number of `ViewThatFits`
+    /// children — a `ForEach` inside one is a single child, so the slots have to
+    /// be spelled out. A fifth tier added here without this number moving would
+    /// simply never be offered, and the label would be one notch wider than it
+    /// had to be with nothing failing. `FileTabLabelTests` pins the two together.
+    public static let tierCount = 4
+
     /// Labels for one tab, widest first.
     ///
     /// - Parameters:
