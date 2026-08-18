@@ -114,9 +114,17 @@ public struct FilePickerView: View {
 
             Spacer()
             if presenter.isIndexing {
-                Text("indexing…")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                // The count, not just the verb. A walk of a large tree runs for
+                // tens of seconds, and a reader watching a number climb knows it
+                // is working and roughly how far in it is — where a bare
+                // "indexing…" is indistinguishable from a hang.
+                Text(
+                    presenter.indexedCount > 0
+                        ? "indexing… \(presenter.indexedCount.formatted())"
+                        : "indexing…"
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
             } else if presenter.corpusWasTruncated {
                 // The number rather than "partial index", which said that
                 // something was incomplete without saying how much or what to do

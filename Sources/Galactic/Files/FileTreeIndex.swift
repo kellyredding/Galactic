@@ -125,18 +125,36 @@ public struct FileTreeIndex: Equatable {
     /// waits for a field.
     public static let defaultResultCap = 500_000
 
+    /// How many files arrive in one batch.
+    ///
+    /// Large enough that the bookkeeping is noise against the walking, small
+    /// enough that a reader sees the corpus grow rather than appear.
+    public static let defaultBatchSize = 5_000
+
     /// Walk a root and index what is under it.
+    ///
+    /// **Reports as it goes.** A tree of half a million files takes tens of
+    /// seconds to enumerate, and a picker that waits for the end of that is a
+    /// picker nobody can type into. `onBatch` receives each batch as it is
+    /// found, so a caller can rank against a corpus that is still growing; the
+    /// return value is the whole thing, so a caller that does not care passes
+    /// nothing and reads the result.
     ///
     /// - Parameters:
     ///   - depthCap: how deep to descend. A guard against a pathological tree
     ///     rather than a policy — twelve is past anything a person navigates.
     ///   - resultCap: how many files to index before stopping, reported through
     ///     `wasTruncated`.
+    ///   - batchSize: how many files to collect before reporting a batch.
+    ///   - onBatch: called with each batch, on the walking thread. Batches are
+    ///     disjoint and in walk order; concatenating them gives `items`.
     public static func build(
         root: URL,
         skipping skipList: Set<String> = defaultSkipList,
         depthCap: Int = 12,
-        resultCap: Int = defaultResultCap
+        resultCap: Int = defaultResultCap,
+        batchSize: Int = defaultBatchSize,
+        onBatch: (([Item]) -> Void)? = nil
     ) -> FileTreeIndex {
         // Resolved before anything is walked, and `root` here is the resolved
         // one from this point on.
@@ -149,51 +167,81 @@ public struct FileTreeIndex: Equatable {
         // absolute and a picker would have shown a column of them.
         let root = URL(fileURLWithPath: FilePaths.canonical(root))
         let manager = FileManager.default
-        // Hidden files are *not* skipped. Dotfiles are among the things most
-        // worth opening — `.gitignore`, `.env`, a shell profile — and the kind
-        // table was widened during pre-work specifically so they resolve. The
-        // hidden directories that are genuinely noise are named in the skip
-        // list, which is a more honest instrument than a blanket flag.
-        guard
-            let walker = manager.enumerator(
-                at: root,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: []
-            )
-        else {
-            return FileTreeIndex(root: root, items: [], wasTruncated: false)
-        }
 
         var items: [Item] = []
+        var batch: [Item] = []
         var truncated = false
-        let rootDepth = root.pathComponents.count
 
-        for case let url as URL in walker {
-            let isDirectory =
-                (try? url.resourceValues(forKeys: [.isDirectoryKey]))?
-                .isDirectory ?? false
+        // Breadth-first, over an explicit queue, and that is the reason this is
+        // not `FileManager.enumerator` any more.
+        //
+        // The enumerator is depth-first, which is the wrong order for a walk
+        // whose partial results are shown: it spends its first several seconds
+        // inside whichever subtree happens to sort first, so a reader watching
+        // the count climb sees tens of thousands of files from one corner of the
+        // tree and none of the shallow ones they are most likely to want. Level
+        // by level, everything near the root arrives first.
+        var queue: [(url: URL, depth: Int)] = [(root, 0)]
+        var head = 0
 
-            if isDirectory {
-                // Skipping the descent rather than filtering afterwards is what
-                // makes the list cheap: `node_modules` is never read at all,
-                // rather than read and discarded.
-                if skipList.contains(url.lastPathComponent) {
-                    walker.skipDescendants()
+        walk: while head < queue.count {
+            let (directory, depth) = queue[head]
+            head += 1
+
+            // Hidden files are *not* skipped. Dotfiles are among the things most
+            // worth opening — `.gitignore`, `.env`, a shell profile — and the
+            // kind table was widened during pre-work specifically so they
+            // resolve. The hidden directories that are genuinely noise are named
+            // in the skip list, which is a more honest instrument than a blanket
+            // flag.
+            guard
+                let entries = try? manager.contentsOfDirectory(
+                    at: directory,
+                    includingPropertiesForKeys: [
+                        .isDirectoryKey, .isSymbolicLinkKey,
+                    ],
+                    options: []
+                )
+            else { continue }
+
+            for entry in entries {
+                let values = try? entry.resourceValues(forKeys: [
+                    .isDirectoryKey, .isSymbolicLinkKey,
+                ])
+
+                if values?.isDirectory == true {
+                    // Symlinked directories are not descended into, which is
+                    // what `FileManager.enumerator` did before this and is the
+                    // behaviour worth keeping: a link can point at an ancestor,
+                    // and a walk that follows one does not terminate.
+                    if values?.isSymbolicLink == true { continue }
+
+                    // Skipping the descent rather than filtering afterwards is
+                    // what makes the list cheap: `node_modules` is never read at
+                    // all, rather than read and discarded.
+                    if skipList.contains(entry.lastPathComponent) { continue }
+                    if depth + 1 <= depthCap {
+                        queue.append((entry, depth + 1))
+                    }
                     continue
                 }
-                if url.pathComponents.count - rootDepth >= depthCap {
-                    walker.skipDescendants()
-                }
-                continue
-            }
 
-            items.append(Item(url: url, root: root))
-            if items.count >= resultCap {
-                truncated = true
-                break
+                let item = Item(url: entry, root: root)
+                items.append(item)
+                batch.append(item)
+
+                if batch.count >= batchSize {
+                    onBatch?(batch)
+                    batch.removeAll(keepingCapacity: true)
+                }
+                if items.count >= resultCap {
+                    truncated = true
+                    break walk
+                }
             }
         }
 
+        if !batch.isEmpty { onBatch?(batch) }
         return FileTreeIndex(root: root, items: items, wasTruncated: truncated)
     }
 }

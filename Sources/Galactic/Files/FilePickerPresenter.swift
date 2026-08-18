@@ -327,6 +327,9 @@ public final class FilePickerPresenter: ObservableObject {
         index = held?.index
         corpusWasTruncated = held?.index.wasTruncated ?? false
         indexedCount = held?.index.items.count ?? 0
+        // Cleared before a walk starts, so batches accumulate onto nothing
+        // rather than onto the tree that was showing a moment ago.
+        if held == nil { index = nil }
 
         // Only claimed while there is genuinely nothing to rank against. A
         // refresh behind a usable index is not something to report — it would put
@@ -353,7 +356,23 @@ public final class FilePickerPresenter: ObservableObject {
         let skipping = skipListProvider()
         Task {
             let built = await Task.detached(priority: .userInitiated) {
-                FileTreeIndex.build(root: target, skipping: skipping)
+                // Batches are handed back as they are found, so a reader can
+                // rank against a corpus that is still growing. On a large tree
+                // the whole walk takes tens of seconds and the first useful
+                // batch takes a fraction of one — waiting for the end of it is
+                // what made the picker feel broken.
+                //
+                // Hopped to the main actor per batch rather than accumulated
+                // here, because the point is that the rows update.
+                FileTreeIndex.build(
+                    root: target,
+                    skipping: skipping,
+                    onBatch: { batch in
+                        Task { @MainActor [weak self] in
+                            self?.absorb(batch, of: target)
+                        }
+                    }
+                )
             }.value
             walksInFlight.remove(canonical)
             guard !Task.isCancelled else { return }
@@ -373,6 +392,23 @@ public final class FilePickerPresenter: ObservableObject {
             isIndexing = false
             refreshRows()
         }
+    }
+
+    /// Take one batch from a walk in progress.
+    ///
+    /// Appended to whatever is already showing for this root, so the ranked list
+    /// widens as the tree is read. Ignored once the reader has moved to another
+    /// tree — a batch is only meaningful for the root it was walked under, and
+    /// the walk that produced it is finishing into the cache anyway.
+    private func absorb(_ batch: [FileTreeIndex.Item], of target: URL) {
+        guard target.path == root?.path else { return }
+
+        let combined = (index?.items ?? []) + batch
+        index = FileTreeIndex(
+            root: target, items: combined, wasTruncated: false
+        )
+        indexedCount = combined.count
+        refreshRows()
     }
 
     /// Hold a walked tree, evicting the oldest once there are too many.

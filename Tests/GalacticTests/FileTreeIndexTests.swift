@@ -223,4 +223,77 @@ final class FileTreeIndexTests: XCTestCase {
             Set(viaLink.items.map(\.relativePath)), ["src/a.swift"]
         )
     }
+
+    // MARK: - Reporting as it goes
+
+    /// The batches are the index. Anything else would mean a reader ranking
+    /// against a corpus that does not match what the walk finally returns.
+    func testConcatenatedBatchesEqualTheFinishedIndex() throws {
+        for i in 0..<25 { try touch("f\(i).swift") }
+
+        var batched: [String] = []
+        let built = FileTreeIndex.build(
+            root: root,
+            batchSize: 4,
+            onBatch: { batch in
+                batched += batch.map { $0.relativePath }
+            }
+        )
+
+        XCTAssertEqual(batched, built.items.map { $0.relativePath })
+        XCTAssertEqual(batched.count, 25)
+    }
+
+    /// More than one batch, or the streaming is theoretical.
+    func testABatchIsReportedBeforeTheWalkFinishes() throws {
+        for i in 0..<10 { try touch("f\(i).swift") }
+
+        var batches = 0
+        _ = FileTreeIndex.build(
+            root: root, batchSize: 3, onBatch: { _ in batches += 1 }
+        )
+
+        XCTAssertGreaterThan(batches, 1)
+    }
+
+    func testAWalkWithNothingToReportCallsNoBatch() throws {
+        var called = false
+        _ = FileTreeIndex.build(root: root, onBatch: { _ in called = true })
+
+        XCTAssertFalse(called)
+    }
+
+    /// Breadth-first, which is the whole reason the walk is not an enumerator
+    /// any more: partial results are shown, and a depth-first walk spends its
+    /// first seconds inside whichever subtree sorts first — so a reader sees tens
+    /// of thousands of files from one corner and none of the shallow ones they
+    /// are most likely to want.
+    func testShallowFilesAreFoundBeforeDeepOnes() throws {
+        try touch("deep/deeper/deepest/buried.swift")
+        try touch("top.swift")
+
+        let built = FileTreeIndex.build(root: root)
+        let paths = built.items.map { $0.relativePath }
+
+        XCTAssertEqual(
+            paths.firstIndex(of: "top.swift"), 0,
+            "the shallow file arrives first: \(paths)"
+        )
+    }
+
+    /// A batch is reported even when the cap cuts the walk short, so what a
+    /// reader has been ranking against does not disagree with what was kept.
+    func testTruncationStillReportsWhatItFound() throws {
+        for i in 0..<20 { try touch("f\(i).swift") }
+
+        var batched = 0
+        let built = FileTreeIndex.build(
+            root: root, resultCap: 7, batchSize: 3,
+            onBatch: { batched += $0.count }
+        )
+
+        XCTAssertTrue(built.wasTruncated)
+        XCTAssertEqual(built.items.count, 7)
+        XCTAssertEqual(batched, 7)
+    }
 }
