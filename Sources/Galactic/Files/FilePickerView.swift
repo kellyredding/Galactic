@@ -1,10 +1,22 @@
 import AppKit
 import SwiftUI
 
-/// The file picker: a field, a ranked list, and a scrim.
+/// The file picker: a field and a ranked list, sized to what it is offering.
 ///
-/// Mounted as an overlay at the host's window root, above every column, so ⌘T
-/// reaches it from any surface. See `FilePickerPresenter` for the snippet.
+/// **Anchored, not floating.** Mounted by the host as a top-aligned overlay on
+/// the area under its tab strip, the way an editor's go-to-file panel sits under
+/// its tabs — so the field appears where the reader's eye already is and the list
+/// grows downward over the document it is about to replace. A centred modal put
+/// the field in a different place depending on how many results there were, which
+/// is the one thing a search field must not do.
+///
+/// It draws no dimming. The scrim is clear and exists only to catch a click
+/// outside the card, because dimming a document the reader is choosing a
+/// replacement for hides the thing that tells them which one they want.
+///
+/// The card sizes itself: header and field are fixed, and the list is as tall as
+/// its rows up to a cap, past which it scrolls. Nothing here reserves height it
+/// is not using. See `FilePickerPresenter` for the mounting snippet.
 public struct FilePickerView: View {
     @ObservedObject private var presenter: FilePickerPresenter
     @FocusState private var fieldFocused: Bool
@@ -18,7 +30,7 @@ public struct FilePickerView: View {
     public init(presenter: FilePickerPresenter) { self.presenter = presenter }
 
     public var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             scrim
             card
         }
@@ -33,9 +45,11 @@ public struct FilePickerView: View {
         }
     }
 
+    /// Clear rather than dimmed: this sits over the document a reader is
+    /// choosing a replacement for, and dimming it would hide the context that
+    /// tells them which file they want. It is here for the click, not the look.
     private var scrim: some View {
-        Color.black.opacity(0.35)
-            .ignoresSafeArea()
+        Color.clear
             .contentShape(Rectangle())
             .onTapGesture { presenter.dismiss() }
     }
@@ -48,35 +62,74 @@ public struct FilePickerView: View {
             Divider()
             results
         }
-        .frame(width: 640)
-        .frame(maxHeight: 460)
+        .frame(width: Metrics.width)
+        // Sized by its content, in both directions. The height this replaced —
+        // a `maxHeight` with no alignment — centred the card's content inside a
+        // fixed 460pt box, so an empty list drew a tall panel with one line of
+        // text floating in the middle of it.
+        .fixedSize(horizontal: false, vertical: true)
         .background(Color(nsColor: .windowBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .shadow(radius: 24, y: 8)
+        .clipShape(
+            RoundedRectangle(cornerRadius: Metrics.cornerRadius)
+        )
+        .shadow(radius: 20, y: 6)
+        .padding(.top, Metrics.topInset)
+    }
+
+    enum Metrics {
+        static let width: CGFloat = 640
+        static let cornerRadius: CGFloat = 8
+        /// A hair below the divider it hangs from, so the card reads as attached
+        /// to the strip rather than dropped on top of the document.
+        static let topInset: CGFloat = 6
+        /// One row, fixed so the list's height is arithmetic rather than a
+        /// measurement — a list that has to be laid out before it can be sized
+        /// is a list that resizes after it is drawn.
+        static let rowHeight: CGFloat = 26
+        /// How many rows show before the list scrolls.
+        static let visibleRows = 10
     }
 
     /// Which tree is being searched, said out loud so a reader wondering why a
     /// file is missing can see the answer before they go looking for it.
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: "folder")
+            // A button, because "which tree am I searching" and "how do I search
+            // a different one" are the same question and this was only answering
+            // the first. Pressing it types the current root into the field, which
+            // is where the hint about Return and Tab already lives.
+            Button(action: presenter.beginRootChange) {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder")
+                    Text(rootLabel)
+                        .font(.system(size: 11, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
                 .foregroundStyle(.secondary)
-            Text(rootLabel)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.head)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Change the folder being searched")
+
             Spacer()
             if presenter.isIndexing {
                 Text("indexing…")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
             } else if presenter.corpusWasTruncated {
-                // Surfaced rather than swallowed: ranking over part of a tree
-                // is a thing to know, not a thing to discover.
-                Text("partial index")
+                // The number rather than "partial index", which said that
+                // something was incomplete without saying how much or what to do
+                // about it. A count is actionable: it is the ceiling the walk hit,
+                // so the answers are a narrower root or a wider skip list.
+                Text("first \(presenter.indexedCount.formatted()) files")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
+                    .help(
+                        "This folder holds more files than the picker indexes, "
+                            + "so some are not searched. Browse a narrower "
+                            + "folder to see all of it."
+                    )
             }
         }
         .padding(.horizontal, 12)
@@ -133,12 +186,20 @@ public struct FilePickerView: View {
                         }
                     }
                 }
+                .frame(height: listHeight)
                 .onChange(of: presenter.selectedIndex) { _, new in
                     guard presenter.rows.indices.contains(new) else { return }
                     proxy.scrollTo(presenter.rows[new].id)
                 }
             }
         }
+    }
+
+    /// As tall as the rows it has, up to the cap. Arithmetic rather than a
+    /// measurement, which is what `rowHeight` is fixed for.
+    private var listHeight: CGFloat {
+        let shown = min(presenter.rows.count, Metrics.visibleRows)
+        return CGFloat(shown) * Metrics.rowHeight
     }
 
     /// Says which of the several nothings this is. "No agent running" and
@@ -185,7 +246,7 @@ private struct FilePickerRow: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 5)
+        .frame(height: FilePickerView.Metrics.rowHeight)
         .background(
             isSelected
                 ? Color.accentColor.opacity(0.18) : Color.clear

@@ -231,4 +231,65 @@ final class FilePickerRankingTests: XCTestCase {
 
         XCTAssertTrue(rows.first?.matchedOffsets.isEmpty == true)
     }
+
+    // MARK: - Whitespace is a gap
+
+    /// The bug this closes was total, not partial: a space went into the
+    /// necessary-condition set, no path contained one, and every candidate was
+    /// rejected before being scored. Any query with a space answered "no file
+    /// matches" over a tree full of them.
+    func testASpaceSeparatedQueryMatchesInOrder() throws {
+        let items = try index([
+            "projects/kellyredding/galaxy/README.md",
+            "projects/other/notes.md",
+        ])
+
+        let rows = FilePickerRanking.matches(items, query: "projects kelly")
+
+        XCTAssertEqual(
+            paths(rows), ["projects/kellyredding/galaxy/README.md"]
+        )
+    }
+
+    /// Ordered, because typing fragments in the order you remember them is what
+    /// the space means.
+    func testReversedFragmentsAreNotAMatch() throws {
+        let items = try index(["projects/kellyredding/galaxy/README.md"])
+
+        XCTAssertFalse(
+            FilePickerRanking.matches(items, query: "projects galaxy").isEmpty
+        )
+        XCTAssertTrue(
+            FilePickerRanking.matches(items, query: "galaxy projects").isEmpty
+        )
+    }
+
+    /// A space in the query and a space in the filename are the same gap.
+    func testAFilenameContainingASpaceStillAnswersToItsWords() throws {
+        let items = try index(["Desktop/AI prompts.txt"])
+
+        XCTAssertEqual(
+            paths(FilePickerRanking.matches(items, query: "ai prompts")),
+            ["Desktop/AI prompts.txt"]
+        )
+    }
+
+    /// Spelling one query with and without spaces asks the same question.
+    func testSpacesDoNotChangeWhatIsFound() throws {
+        let items = try index([
+            "projects/kellyredding/galaxy/README.md",
+            "projects/kellyredding/conduit/LICENSE",
+        ])
+
+        XCTAssertEqual(
+            paths(FilePickerRanking.matches(items, query: "proj kelly gal")),
+            paths(FilePickerRanking.matches(items, query: "projkellygal"))
+        )
+    }
+
+    func testAQueryOfOnlySpacesFindsNothing() throws {
+        let items = try index(["projects/a.rb"])
+
+        XCTAssertTrue(FilePickerRanking.matches(items, query: "   ").isEmpty)
+    }
 }

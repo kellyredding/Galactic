@@ -5,17 +5,21 @@ import Foundation
 /// Presentation state for the file picker: whether it is up, what it is
 /// offering, and what is selected.
 ///
-/// An in-window overlay on the `CheatSheetPresenter` pattern, mounted by the
-/// host:
+/// Mounted by the host as a **top-aligned overlay on the area under its tab
+/// strip**, not at the window root — the picker is anchored where an editor's
+/// go-to-file panel is, so the field lands where the reader is already looking:
 ///
 /// ```swift
 /// @ObservedObject private var picker = FilePickerPresenter.shared
 ///
-/// .overlay {
+/// reader.overlay(alignment: .top) {
 ///     if picker.isPresented { FilePickerView().transition(.opacity) }
 /// }
 /// .animation(.easeInOut(duration: 0.12), value: picker.isPresented)
 /// ```
+///
+/// Anchoring is safe from any surface because opening it selects the tab that
+/// holds it first — see the host's own ⌘T path.
 ///
 /// ### What is resolved when
 ///
@@ -57,6 +61,14 @@ public final class FilePickerPresenter: ObservableObject {
     /// a reader ranking against half a tree should know that is what they are
     /// doing.
     @Published public private(set) var corpusWasTruncated = false
+
+    /// How many files the walk actually indexed.
+    ///
+    /// Shown when the walk stopped short, because "part of the tree" is not
+    /// something a reader can act on and a number is: it says how much was
+    /// searched and implies what to do about it — narrow the root, or widen what
+    /// is skipped.
+    @Published public private(set) var indexedCount = 0
 
     // MARK: - What the host supplies
 
@@ -183,6 +195,21 @@ public final class FilePickerPresenter: ObservableObject {
         onOpen(item.url)
     }
 
+    /// Put the reader on the path-typing route, from the header's folder chip.
+    ///
+    /// Prefills the field with the root's own path rather than opening a folder
+    /// dialog, and that is the point: typing a path *is* how the root changes
+    /// here, and the affordance that changes it should teach the mechanism
+    /// instead of routing around it. The hint under the field takes over from
+    /// there — it already says Return to browse and Tab to complete.
+    public func beginRootChange() {
+        let home = NSHomeDirectory()
+        let path = root?.path ?? home
+        query =
+            (path.hasPrefix(home)
+            ? "~" + path.dropFirst(home.count) : path) + "/"
+    }
+
     /// Extend a partly-typed path, the way a shell's Tab does.
     public func completePath() {
         guard let typed = FilePickerRootInput.expandedPath(query) else { return }
@@ -247,6 +274,7 @@ public final class FilePickerPresenter: ObservableObject {
             guard !Task.isCancelled else { return }
             index = built
             corpusWasTruncated = built.wasTruncated
+            indexedCount = built.items.count
             isIndexing = false
             refreshRows()
         }

@@ -23,22 +23,38 @@ public enum FilePickerRanking {
     /// over the underscore. `FuzzyMatch` already treats `/` as a word start, so
     /// a path segment beginning with a typed character is scored above one
     /// merely containing it.
+    ///
+    /// **Whitespace in the query is a gap, not a character to find.** Nobody
+    /// types a whole path; they type remembered fragments in the order they
+    /// remember them — `projects kelly readme` — and the space between them
+    /// means "then, somewhere later". Since a subsequence match already allows
+    /// a gap between every character, dropping the spaces *is* that rule rather
+    /// than an approximation of it.
+    ///
+    /// Kept literal, a space was worse than useless: it went into the
+    /// necessary-condition set below, no path contained one, and every single
+    /// candidate was rejected before it was ever scored. A query with a space
+    /// answered "no file matches" over a tree full of matches.
+    ///
+    /// This also does the right thing by the filenames that *do* contain
+    /// spaces — `Desktop/AI prompts.txt` still answers to `ai prompts`, because
+    /// the space in the path is simply one of the gaps the subsequence skips.
     public static func matches(
         _ items: [FileTreeIndex.Item],
         query: String,
         limit: Int = resultLimit
     ) -> [FilePickerItem] {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
+        let condensed = query.filter { !$0.isWhitespace }
+        guard !condensed.isEmpty else { return [] }
 
-        let prepared = FuzzyMatch.PreparedQuery(trimmed, scope: .subsequence)
+        let prepared = FuzzyMatch.PreparedQuery(condensed, scope: .subsequence)
         // A necessary condition, checked before anything is scored: a
         // subsequence match needs every query character to appear somewhere.
         // Rejecting on that is a set lookup against a string lowercased once at
         // index time, where scoring is an allocation and a walk — and over tens
         // of thousands of files the difference is whether the picker keeps up
         // with typing.
-        let required = Set(trimmed.lowercased())
+        let required = Set(condensed.lowercased())
 
         var scored: [(item: FileTreeIndex.Item, result: FuzzyMatch.Result)] = []
         for item in items {
