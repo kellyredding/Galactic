@@ -202,24 +202,19 @@ public struct FilePickerView: View {
         return CGFloat(shown) * Metrics.rowHeight
     }
 
-    /// Says which of the several nothings this is. "No agent running" and
-    /// "nothing matched" are different answers and a reader acts on them
-    /// differently — the same distinction `AgentInboxView` draws.
-    @ViewBuilder
+    /// Says which of the several nothings this is — see `FilePickerEmptyState`,
+    /// which owns the wording and the precedence between the five of them.
     private var emptyState: some View {
-        let message: String = {
-            if presenter.root == nil { return "No folder to browse" }
-            if presenter.isIndexing { return "Reading the folder…" }
-            if FilePickerRootInput.isRootChange(presenter.query) {
-                return "Return to browse here, Tab to complete"
-            }
-            if presenter.query.isEmpty {
-                return "Nothing open or closed yet — type to search"
-            }
-            return "No file matches"
-        }()
-
-        Text(message)
+        Text(
+            FilePickerEmptyState.message(
+                hasRoot: presenter.root != nil,
+                isIndexing: presenter.isIndexing,
+                isRootChange: FilePickerRootInput.isRootChange(
+                    presenter.query
+                ),
+                query: presenter.query
+            )
+        )
             .font(.system(size: 12))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
