@@ -372,6 +372,193 @@ final class FileSetTests: XCTestCase {
         XCTAssertEqual(set.totalNoteCount, 0)
     }
 
+    func testANoteIsFoundAndChangedByThePageSNumbering() throws {
+        let set = makeSet()
+        let a = try write("a.swift")
+        try set.open(url: a)
+        let note = set.addNoteForTesting(path: a.path)
+
+        set.updateNote(filePath: a.path, number: note!.number, content: "edited")
+
+        XCTAssertEqual(set.notes.notes(forPath: a.path).first?.content, "edited")
+
+        set.deleteNote(filePath: a.path, number: note!.number)
+
+        XCTAssertEqual(set.totalNoteCount, 0)
+    }
+
+    /// A card the page still shows but the store has dropped. Doing nothing is
+    /// the right answer to a notification about something already gone.
+    func testAMutationForAnUnknownNumberDoesNothing() throws {
+        let set = makeSet()
+        let a = try write("a.swift")
+        try set.open(url: a)
+        set.addNoteForTesting(path: a.path)
+
+        set.updateNote(filePath: a.path, number: 99, content: "edited")
+        set.deleteNote(filePath: a.path, number: 99)
+
+        XCTAssertEqual(set.totalNoteCount, 1)
+        XCTAssertEqual(set.notes.notes(forPath: a.path).first?.content, "a note")
+    }
+
+    // MARK: - The review
+
+    func testComposingWithNoNotesIsNil() throws {
+        let set = makeSet()
+        try set.open(url: try write("a.swift"))
+
+        XCTAssertNil(set.composeReview())
+    }
+
+    /// Blocks in tab order, because that is the order the reader arranged and
+    /// therefore the order they will read their own review in.
+    func testTheReviewLeadsWithTheCommentAndFollowsTabOrder() throws {
+        let set = makeSet()
+        let a = try write("a.swift", "alpha\n")
+        let b = try write("b.swift", "beta\n")
+        try set.open(url: a)
+        try set.open(url: b)
+        set.addNoteForTesting(path: b.path)
+        set.addNoteForTesting(path: a.path)
+        set.setOverallComment("the shape of it", expanded: true)
+
+        let review = set.composeReview()
+
+        XCTAssertNotNil(review)
+        XCTAssertTrue(review!.hasPrefix("the shape of it"))
+        let aAt = review!.range(of: "a.swift")!.lowerBound
+        let bAt = review!.range(of: "b.swift")!.lowerBound
+        XCTAssertLessThan(aAt, bAt, "tab order, not the order notes arrived")
+    }
+
+    /// The comment described the review that just left. Kept, it would lead the
+    /// next one — a summary of work already sent, above unrelated notes.
+    func testClearingTheReviewTakesTheCommentToo() throws {
+        let set = makeSet()
+        let a = try write("a.swift")
+        try set.open(url: a)
+        set.addNoteForTesting(path: a.path)
+        set.setOverallComment("sent already", expanded: true)
+
+        set.clearReview()
+
+        XCTAssertEqual(set.totalNoteCount, 0)
+        XCTAssertEqual(set.overallComment, "")
+        XCTAssertFalse(set.overallExpanded)
+        XCTAssertNil(set.composeReview())
+    }
+
+    func testOrderedFilesFollowTheStrip() throws {
+        let set = makeSet()
+        let a = try write("a.swift")
+        let b = try write("b.swift")
+        let aTab = try set.open(url: a)
+        try set.open(url: b)
+        set.move(id: aTab.id, toRow: 0, at: 1)
+
+        XCTAssertEqual(
+            set.orderedFiles.map(\.url.lastPathComponent),
+            ["b.swift", "a.swift"]
+        )
+    }
+
+    // MARK: - The composer across a rebuild
+
+    /// The whole reason switching files needs no warning: the half-written card
+    /// goes onto the file being left, and the summary stays with the review.
+    func testAHandOffSplitsTheRescuedBlobByWhatItBelongsTo() throws {
+        let set = makeSet()
+        let a = try write("a.swift")
+        let b = try write("b.swift")
+        let aTab = try set.open(url: a)
+        set.handOffComposer(rescued: nil, to: aTab.id)
+
+        let bTab = try set.open(url: b)
+        let incoming = set.handOffComposer(
+            rescued: """
+                {"textareaValue":"half a thought","overallComment":"the summary",
+                 "overallExpanded":true}
+                """,
+            to: bTab.id
+        )
+
+        // The set took the summary.
+        XCTAssertEqual(set.overallComment, "the summary")
+        XCTAssertTrue(set.overallExpanded)
+
+        // The file being left took the card, without the summary in it.
+        let filed = set.tabs.tab(forPath: a.path)?.composerState
+        XCTAssertNotNil(filed)
+        XCTAssertTrue(filed!.contains("half a thought"))
+        XCTAssertFalse(filed!.contains("the summary"))
+
+        // The file arriving is handed the summary and none of that card.
+        XCTAssertNotNil(incoming)
+        XCTAssertTrue(incoming!.contains("the summary"))
+        XCTAssertFalse(incoming!.contains("half a thought"))
+    }
+
+    /// Coming back to a file restores what was left in it, alongside a summary
+    /// no single page ever held at the same time.
+    func testComingBackToAFileRestoresItsOwnCardAndTheSetsComment() throws {
+        let set = makeSet()
+        let a = try write("a.swift")
+        let b = try write("b.swift")
+        let aTab = try set.open(url: a)
+        set.handOffComposer(rescued: nil, to: aTab.id)
+        let bTab = try set.open(url: b)
+        set.handOffComposer(
+            rescued: #"{"textareaValue":"on a","overallComment":"summary"}"#,
+            to: bTab.id
+        )
+
+        set.select(id: aTab.id)
+        let back = set.handOffComposer(rescued: nil, to: aTab.id)
+
+        XCTAssertNotNil(back)
+        XCTAssertTrue(back!.contains("on a"))
+        XCTAssertTrue(back!.contains("summary"))
+    }
+
+    /// A theme change rebuilds the same file's page. The rescue has to survive
+    /// arriving back where it came from.
+    func testAHandOffToTheSameTabRoundTripsTheCard() throws {
+        let set = makeSet()
+        let a = try write("a.swift")
+        let aTab = try set.open(url: a)
+        set.handOffComposer(rescued: nil, to: aTab.id)
+
+        let again = set.handOffComposer(
+            rescued: #"{"textareaValue":"kept"}"#, to: aTab.id
+        )
+
+        XCTAssertNotNil(again)
+        XCTAssertTrue(again!.contains("kept"))
+    }
+
+    /// A rescue that cannot be read must cost the composer and never the switch,
+    /// and must not be read as the reader deleting their summary.
+    func testAnUnreadableRescueLeavesTheSetSCommentAlone() throws {
+        let set = makeSet()
+        let a = try write("a.swift")
+        let aTab = try set.open(url: a)
+        set.handOffComposer(rescued: nil, to: aTab.id)
+        set.setOverallComment("still here", expanded: false)
+
+        set.handOffComposer(rescued: "not json at all", to: aTab.id)
+
+        XCTAssertEqual(set.overallComment, "still here")
+    }
+
+    func testTheFirstRenderHasNothingToFileAndNothingToRestore() throws {
+        let set = makeSet()
+        let aTab = try set.open(url: try write("a.swift"))
+
+        XCTAssertNil(set.handOffComposer(rescued: nil, to: aTab.id))
+        XCTAssertNil(set.tabs.tab(forPath: "a.swift")?.composerState)
+    }
+
     func testClearingNotesEmptiesEveryFile() throws {
         let set = makeSet()
         let a = try write("a.swift")

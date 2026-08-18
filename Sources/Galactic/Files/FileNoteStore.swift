@@ -52,6 +52,18 @@ public struct FileNoteStore: Equatable {
         }
     }
 
+    /// One note, found the way the page names it.
+    ///
+    /// The page reports a per-file `number`, never the store's id — card
+    /// numbering is what a reader sees and what the page's own DOM keys on. The
+    /// pair is unique for as long as a file is open, because `nextNumberByPath`
+    /// only ever increments: a deleted note's number is not handed out again, so
+    /// an update arriving for a card that has since gone finds nothing rather
+    /// than finding its replacement.
+    public func note(forPath path: String, number: Int32) -> FileNote? {
+        notesByPath[path]?.first { $0.number == number }
+    }
+
     /// Every path carrying at least one note.
     public var annotatedPaths: [String] {
         notesByPath.filter { !$0.value.isEmpty }.map(\.key)

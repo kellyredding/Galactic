@@ -45,6 +45,23 @@ public final class FileSet: ObservableObject {
     /// the closed stack runs out.
     @Published public private(set) var recentFiles: [URL]
 
+    /// What the whole review is about, and whether its field is open.
+    ///
+    /// Set-wide, and that is the entire reason it lives here: the send bar
+    /// carrying it is drawn inside whichever file's page is on screen, so a
+    /// comment stored per file would reappear on the file that happened to be
+    /// showing when it was typed and vanish everywhere else. `ComposerStateMerge`
+    /// is what separates it back out of the page's rescued blob.
+    @Published public private(set) var overallComment: String = ""
+    @Published public private(set) var overallExpanded: Bool = false
+
+    /// Which tab the page currently on screen was built for.
+    ///
+    /// Not the same as the selected tab, and the difference is the point: a
+    /// rescue arrives from the page being replaced, so filing it needs to know
+    /// what that page *was*. Selection has already moved on by then.
+    private var renderedTabID: FileTab.ID?
+
     /// The content of every open file, as it was when it was opened.
     ///
     /// Not `@Published`: a whole file's text arriving in a publisher would push
@@ -93,6 +110,17 @@ public final class FileSet: ObservableObject {
 
     /// What the send bar shows — the whole review, not the file on screen.
     public var totalNoteCount: Int { notes.totalCount }
+
+    /// Every open file's frozen content, in tab order.
+    ///
+    /// What `FileReviewComposer` takes: the order blocks appear in a review is
+    /// the order the tabs sit in, so a reader reading their own review reads it
+    /// in the order they arranged. Files whose content is somehow missing are
+    /// skipped rather than faulted — a review is worth sending without one file
+    /// in it.
+    public var orderedFiles: [ReaderFile] {
+        tabs.tabs.compactMap { frozen[$0.path] }
+    }
 
     // MARK: - Opening and closing
 
@@ -246,9 +274,114 @@ public final class FileSet: ObservableObject {
         notes.delete(id: id)
     }
 
+    /// The two the page asks for, which names a note by its per-file number.
+    ///
+    /// Resolved to an id here rather than the store growing number-keyed
+    /// mutators: ids are what the store is built on, and a second addressing
+    /// scheme reaching into it is a second thing to keep consistent. A number
+    /// with no note — a card the page still shows but the store has dropped —
+    /// does nothing, which is the right answer to a notification about
+    /// something already gone.
+
+    public func updateNote(filePath: String, number: Int32, content: String) {
+        guard let note = notes.note(forPath: filePath, number: number) else {
+            return
+        }
+        notes.update(id: note.id, content: content)
+    }
+
+    public func deleteNote(filePath: String, number: Int32) {
+        guard let note = notes.note(forPath: filePath, number: number) else {
+            return
+        }
+        notes.delete(id: note.id)
+    }
+
+    public func setOverallComment(_ text: String, expanded: Bool) {
+        overallComment = text
+        overallExpanded = expanded
+    }
+
+    // MARK: - The review
+
+    /// The message an agent would receive right now, or nil when there is
+    /// nothing to send.
+    ///
+    /// Composing and clearing are **deliberately separate calls.** A single
+    /// take-and-empty would be atomic and would lose a review whenever the
+    /// send was refused — and refusal is a real state here, since the target
+    /// can decline a prompt the agent is not ready to read. Notes surviving a
+    /// refused send is the failure worth having.
+    public func composeReview() -> String? {
+        let text = FileReviewComposer.compose(
+            overallComment: overallComment,
+            files: orderedFiles,
+            notes: notes,
+            root: root
+        )
+        return text.isEmpty ? nil : text
+    }
+
+    /// The review landed. Everything it carried goes, including the comment.
+    ///
+    /// The comment goes too because it described *that* review. Left behind, it
+    /// would lead the next one — a summary of work already sent, sitting above
+    /// unrelated notes.
+    public func clearReview() {
+        notes.clear()
+        overallComment = ""
+        overallExpanded = false
+    }
+
     /// Everything goes — the review was sent.
     public func clearNotes() {
         notes.clear()
+    }
+
+    // MARK: - The composer across a rebuild
+
+    /// File what the outgoing page was holding, and say what the incoming one
+    /// should be given.
+    ///
+    /// This is the whole reason switching files needs no warning. The page is
+    /// destroyed on every switch, so the rescue is the only thing carrying a
+    /// half-written note across one — and the blob mixes two lifetimes, which is
+    /// why it cannot simply be stored as it arrives. The card state belongs to
+    /// the file being left; the send bar's summary belongs to the review, which
+    /// spans every file in the set.
+    ///
+    /// A rescue that cannot be read costs the composer and never the switch: both
+    /// directions degrade to nil rather than throwing, and a page that reported
+    /// no comment leaves whatever the set already held rather than clearing it —
+    /// a failed rescue is not a reader deleting their summary.
+    @discardableResult
+    public func handOffComposer(
+        rescued: String?, to incoming: FileTab.ID?
+    ) -> String? {
+        if let rescued, let outgoing = renderedTabID {
+            if let lifted = ComposerStateMerge.overallComment(from: rescued) {
+                overallComment = lifted.text
+                overallExpanded = lifted.expanded
+            }
+            // Stored with the set-wide half taken out, so the same summary
+            // cannot come back from two places at once.
+            let perFile = ComposerStateMerge.merged(
+                perFile: rescued, overallComment: "", expanded: false
+            )
+            tabs.update(id: outgoing) { $0.composerState = perFile }
+        }
+
+        renderedTabID = incoming
+
+        guard let incoming,
+            let tab = tabs.tabs.first(where: { $0.id == incoming })
+        else { return nil }
+
+        return ComposerStateMerge.merged(
+            perFile: tab.composerState,
+            overallComment: overallComment,
+            expanded: overallExpanded
+        )
     }
 
     // MARK: - Persistence
