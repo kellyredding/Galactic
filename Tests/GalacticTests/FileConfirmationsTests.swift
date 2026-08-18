@@ -23,7 +23,6 @@ final class FileConfirmationsTests: XCTestCase {
         let details = [
             FileConfirmations.closeDetail(fileName: "user.rb", count: 2),
             FileConfirmations.reloadDetail(fileName: "user.rb", count: 2),
-            FileConfirmations.quitDetail(count: 2, fileCount: 1),
             FileConfirmations.switchSetDetail(setName: "Default", count: 2),
         ]
         for detail in details {
@@ -59,15 +58,35 @@ final class FileConfirmationsTests: XCTestCase {
 
     /// At quit the reader cannot see the strip, so notes alone do not tell them
     /// how much work this is.
-    func testQuittingCountsFilesAsWellAsNotes() {
-        XCTAssertTrue(
-            FileConfirmations.quitDetail(count: 5, fileCount: 2)
-                .contains("5 notes across 2 files")
+    func testTheQuitReasonCountsFilesAsWellAsNotes() {
+        XCTAssertEqual(
+            FileConfirmations.quitReason(count: 5, fileCount: 2),
+            "5 notes on 2 files in the Files tab will be discarded and "
+                + "cannot be recovered."
         )
-        XCTAssertTrue(
-            FileConfirmations.quitDetail(count: 1, fileCount: 1)
-                .contains("1 note across 1 file")
+        XCTAssertEqual(
+            FileConfirmations.quitReason(count: 1, fileCount: 1),
+            "1 note on 1 file in the Files tab will be discarded and "
+                + "cannot be recovered."
         )
+    }
+
+    /// A host appends it unconditionally, so nothing to say has to be nil rather
+    /// than a sentence about zero notes.
+    func testTheQuitReasonIsAbsentWhenThereAreNoNotes() {
+        XCTAssertNil(FileConfirmations.quitReason(count: 0, fileCount: 0))
+    }
+
+    /// It joins a list of sentences about other stakes, so it has to read like
+    /// one of them: declarative, future tense, and finished in one line.
+    func testTheQuitReasonIsOneSentence() {
+        let reason = FileConfirmations.quitReason(count: 2, fileCount: 1)!
+
+        XCTAssertTrue(reason.hasSuffix("."))
+        XCTAssertEqual(
+            reason.filter { $0 == "." }.count, 1, "one sentence, not two"
+        )
+        XCTAssertFalse(reason.contains("\n"))
     }
 
     func testSwitchingSetsNamesTheSetBeingLeft() {

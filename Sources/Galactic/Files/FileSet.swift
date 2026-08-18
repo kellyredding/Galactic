@@ -186,6 +186,38 @@ public final class FileSet: ObservableObject {
         return tab
     }
 
+    /// Read a file again, replacing what was frozen at open.
+    ///
+    /// The one way content is ever unfrozen while a tab stays open. Everything
+    /// else about this feature assumes the bytes cannot move underneath a reader:
+    /// a note quotes lines as they were read, and `FileDriftCheck` reports at
+    /// send time that the file has moved on rather than trying to follow it.
+    ///
+    /// **Notes on the file go.** They are fastened to line numbers in the
+    /// document being replaced, and a fresh read is a different document — the
+    /// quote would survive while the line it cites moved, which is worse than
+    /// losing it, because it looks right. The caller asks first;
+    /// `FileConfirmations.confirmReloadFile` is that question.
+    ///
+    /// Scroll offset and the find query stay, because they are about where the
+    /// reader was rather than about what the content said, and landing back at
+    /// the top of a file you were halfway down is its own small loss. Throws when
+    /// the file has stopped being readable, leaving the tab and its frozen
+    /// content exactly as they were — a failed reread must not empty the tab.
+    @discardableResult
+    public func reload(id: FileTab.ID) throws -> ReaderFile? {
+        guard let tab = tabs.tabs.first(where: { $0.id == id }) else {
+            return nil
+        }
+        let fresh = try ReaderFile.load(url: tab.url)
+        frozen[tab.path] = fresh
+        notes.drop(path: tab.path)
+        // The composer goes with the notes: a half-written card names lines that
+        // may no longer be there.
+        tabs.update(id: id) { $0.composerState = nil }
+        return fresh
+    }
+
     public func select(id: FileTab.ID) { tabs.select(id: id) }
 
     public func selectTab(forPath path: String) {

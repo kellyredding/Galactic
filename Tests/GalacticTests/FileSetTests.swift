@@ -192,6 +192,81 @@ final class FileSetTests: XCTestCase {
         XCTAssertTrue(set.closedTabs.isEmpty)
     }
 
+    // MARK: - Rereading
+
+    /// The one way frozen content is replaced while a tab stays open.
+    func testRereadingReplacesTheFrozenContent() throws {
+        let set = makeSet()
+        let url = try write("a.swift", "before\n")
+        let tab = try set.open(url: url)
+        try Data("after\n".utf8).write(to: url)
+
+        let fresh = try set.reload(id: tab.id)
+
+        XCTAssertEqual(fresh?.content, "after\n")
+        XCTAssertEqual(set.file(forPath: url.path)?.content, "after\n")
+        XCTAssertEqual(set.tabs.tabs.count, 1)
+    }
+
+    /// A note cites a line in the document being replaced. Kept, the quote would
+    /// survive while the line moved — which looks right and is not.
+    func testRereadingDropsThatFilesNotesAndComposer() throws {
+        let set = makeSet()
+        let a = try write("a.swift", "before\n")
+        let b = try write("b.swift")
+        let aTab = try set.open(url: a)
+        try set.open(url: b)
+        set.addNoteForTesting(path: a.path)
+        set.addNoteForTesting(path: b.path)
+        set.updateTab(id: aTab.id) { $0.composerState = #"{"textareaValue":"x"}"# }
+
+        try set.reload(id: aTab.id)
+
+        XCTAssertEqual(set.noteCount(forPath: a.path), 0)
+        XCTAssertNil(set.tabs.tab(forPath: a.path)?.composerState)
+        XCTAssertEqual(
+            set.noteCount(forPath: b.path), 1, "another file's notes stay"
+        )
+    }
+
+    /// Where the reader was is not what the content said, and landing back at the
+    /// top of a file you were halfway down is its own loss.
+    func testRereadingKeepsScrollAndFindState() throws {
+        let set = makeSet()
+        let url = try write("a.swift")
+        let tab = try set.open(url: url)
+        set.updateTab(id: tab.id) {
+            $0.scrollOffset = 420
+            $0.findQuery = "activate"
+        }
+
+        try set.reload(id: tab.id)
+
+        XCTAssertEqual(set.tabs.tab(forPath: url.path)?.scrollOffset, 420)
+        XCTAssertEqual(set.tabs.tab(forPath: url.path)?.findQuery, "activate")
+    }
+
+    /// A failed reread must not empty the tab it was asked about.
+    func testAFailedRereadLeavesTheTabAsItWas() throws {
+        let set = makeSet()
+        let url = try write("a.swift", "before\n")
+        let tab = try set.open(url: url)
+        set.addNoteForTesting(path: url.path)
+        try FileManager.default.removeItem(at: url)
+
+        XCTAssertThrowsError(try set.reload(id: tab.id))
+
+        XCTAssertEqual(set.file(forPath: url.path)?.content, "before\n")
+        XCTAssertEqual(set.noteCount(forPath: url.path), 1)
+        XCTAssertEqual(set.tabs.tabs.count, 1)
+    }
+
+    func testRereadingAnUnknownTabDoesNothing() throws {
+        let set = makeSet()
+
+        XCTAssertNil(try set.reload(id: UUID()))
+    }
+
     // MARK: - The root
 
     func testChangingTheRootKeepsOpenTabsOpen() throws {

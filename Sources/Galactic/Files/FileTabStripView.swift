@@ -20,6 +20,13 @@ public struct FileTabStripView: View {
     private let onSelect: (FileTab.ID) -> Void
     private let onClose: (FileTab.ID) -> Void
 
+    /// Read this file from disk again, replacing what was frozen at open.
+    ///
+    /// In the context menu rather than as a button in the strip: it is the rare
+    /// one of these actions, it destroys notes, and a row of tabs has no width to
+    /// spare for an affordance nobody reaches for twice a day.
+    private let onReload: (FileTab.ID) -> Void
+
     /// What the trailing affordance does. The host decides what opening means —
     /// a fuzzy picker, or the system's own dialog — because only it knows which
     /// of those it has.
@@ -29,11 +36,13 @@ public struct FileTabStripView: View {
         set: FileSet,
         onSelect: @escaping (FileTab.ID) -> Void,
         onClose: @escaping (FileTab.ID) -> Void,
+        onReload: @escaping (FileTab.ID) -> Void,
         onRequestOpen: @escaping () -> Void
     ) {
         self.set = set
         self.onSelect = onSelect
         self.onClose = onClose
+        self.onReload = onReload
         self.onRequestOpen = onRequestOpen
     }
 
@@ -50,7 +59,8 @@ public struct FileTabStripView: View {
                             noteCount: set.noteCount(forPath: tab.path),
                             isSelected: set.tabs.selectedID == tab.id,
                             onSelect: { onSelect(tab.id) },
-                            onClose: { onClose(tab.id) }
+                            onClose: { onClose(tab.id) },
+                            onReload: { onReload(tab.id) }
                         )
                     }
 
@@ -102,6 +112,7 @@ private struct FileTabView: View {
     let isSelected: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
+    let onReload: () -> Void
 
     @State private var isHovering = false
 
@@ -157,6 +168,7 @@ private struct FileTabView: View {
             Button("Copy Path") { copy(tab.url.path) }
             Button("Copy Relative Path") { copy(relativePath) }
             Divider()
+            Button("Reread from Disk") { onReload() }
             Button("Close") { onClose() }
         }
     }

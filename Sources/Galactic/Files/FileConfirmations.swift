@@ -1,6 +1,6 @@
 import AppKit
 
-/// The four moments a reader is asked before their notes go.
+/// The four moments a reader is warned before their notes go.
 ///
 /// Modelled on `ScrollbackConfirmations`, which exists because both hosts had
 /// written the same five prompts letter for letter and one side's improvements
@@ -100,32 +100,30 @@ public enum FileConfirmations {
 
     // MARK: - Quitting
 
-    static func quitDetail(count: Int, fileCount: Int) -> String {
-        let files = "\(fileCount) file\(fileCount == 1 ? "" : "s")"
-        return "You have \(notesPhrase(count)) across \(files) that have not "
-            + "been sent. " + finality
-    }
-
-    /// Quitting with a review nobody has sent.
+    /// One sentence for a host's own quit sheet — **not** a sheet of its own.
     ///
-    /// Counts files as well as notes, unlike the others: at quit the reader is
-    /// not looking at the strip, so the number of notes alone does not tell them
-    /// how much of their afternoon this is.
-    public static func confirmQuit(
-        in window: NSWindow,
-        count: Int,
-        fileCount: Int,
-        onDiscard: @escaping () -> Void,
-        onCancel: @escaping () -> Void = {}
-    ) {
-        SheetAlert.confirm(
-            in: window,
-            message: "Quit and discard your notes?",
-            detail: quitDetail(count: count, fileCount: fileCount),
-            confirm: "Quit",
-            onConfirm: onDiscard,
-            onCancel: onCancel
-        )
+    /// Quitting is one decision, and a host already has a place where it is
+    /// asked: Assist Ant assembles every stake into a single list of reasons and
+    /// presents them together, on the argument that quitting takes the agent and
+    /// the notes at the same time. A second sheet arriving in sequence would ask
+    /// a reader to answer the same question twice and let them answer it two
+    /// different ways.
+    ///
+    /// Counts files as well as notes, unlike the prompts above: at quit the
+    /// reader cannot see the strip, so a note count alone does not tell them how
+    /// much of their afternoon this is. Phrased to sit beside sentences like "the
+    /// agent session is running and will be stopped" — declarative, in the
+    /// future tense, one line — with the recoverability clause folded in rather
+    /// than appended, because that list has no room for a second sentence per
+    /// reason.
+    ///
+    /// Returns nil when there is nothing to say, so a host can append it
+    /// unconditionally.
+    public static func quitReason(count: Int, fileCount: Int) -> String? {
+        guard count > 0 else { return nil }
+        let files = "\(fileCount) file\(fileCount == 1 ? "" : "s")"
+        return "\(notesPhrase(count)) on \(files) in the Files tab will be "
+            + "discarded and cannot be recovered."
     }
 
     // MARK: - Switching sets
