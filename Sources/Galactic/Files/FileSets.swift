@@ -62,6 +62,22 @@ public final class FileSets {
         setsByOwner.values.contains { $0.totalNoteCount > 0 }
     }
 
+    /// How many notes there are altogether, and across how many files.
+    ///
+    /// What the quit prompt says. Both numbers come from here rather than the
+    /// caller adding them up, because "how many files" means files carrying
+    /// notes rather than files open — a distinction a host would have to know
+    /// the store's shape to get right.
+    public var pendingNoteTally: (notes: Int, files: Int) {
+        var notes = 0
+        var files = 0
+        for set in setsByOwner.values {
+            notes += set.totalNoteCount
+            files += set.notes.annotatedPaths.count
+        }
+        return (notes, files)
+    }
+
     /// An owner has gone away — a session closed — and takes its set with it.
     ///
     /// The notes go with it, unwarned, and the warning is the caller's job. This

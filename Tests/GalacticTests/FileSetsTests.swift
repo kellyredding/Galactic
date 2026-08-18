@@ -104,4 +104,43 @@ final class FileSetsTests: XCTestCase {
 
         XCTAssertFalse(sets.hasPendingNotes)
     }
+
+    /// The quit prompt's two numbers. "How many files" means files carrying
+    /// notes, not files open — which is why the set answers it rather than the
+    /// host counting tabs.
+    func testTheTallyCountsNotesAndTheFilesHoldingThem() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("file-sets-tally-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: dir, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let a = dir.appendingPathComponent("a.swift")
+        let b = dir.appendingPathComponent("b.swift")
+        let c = dir.appendingPathComponent("c.swift")
+        for url in [a, b, c] { try Data("one\n".utf8).write(to: url) }
+
+        let sets = FileSets(defaultRoot: { _ in dir })
+        let set = sets.set(forOwner: "default")
+        try set.open(url: a)
+        try set.open(url: b)
+        try set.open(url: c)
+
+        func note(_ url: URL) {
+            set.addNote(
+                filePath: url.path, startLine: 1, endLine: 1,
+                lineContent: "one", content: "n",
+                createdAt: "2026-08-18T00:00:00Z"
+            )
+        }
+        note(a)
+        note(a)
+        note(b)
+
+        let tally = sets.pendingNoteTally
+
+        XCTAssertEqual(tally.notes, 3)
+        XCTAssertEqual(tally.files, 2, "c is open but carries nothing")
+    }
 }
