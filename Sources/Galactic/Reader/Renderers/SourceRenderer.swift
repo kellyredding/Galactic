@@ -9,6 +9,122 @@ public enum SourceRenderer {
     /// How this renderer's markup is anchored.
     public static let anchoring = ReaderAnchoring.lines(selector: ".code-line")
 
+
+    /// The highlighting pass, as one language-free constant.
+    ///
+    /// Separate from the document so it is a *value* — `ShippedJavaScriptTests`
+    /// parses everything this package ships, and it can only parse what it can
+    /// name. Built inline it was neither named nor parsed, which is the state the
+    /// apps' own gates exist to prevent and cannot see into.
+    ///
+    /// ### Highlighted once, then distributed
+    ///
+    /// A row is not a unit of syntax. Highlighting each one alone cannot see a
+    /// block comment, a multi-line string, or a fence inside a markdown file read
+    /// as source, because the construct that opens on one row closes on another
+    /// and neither row knows about the other. It is also N calls into a grammar
+    /// where one would do, over a document that can be twenty thousand rows.
+    ///
+    /// The document has exactly one language — the host resolved it from the
+    /// filename — so there is nothing per-row to decide. That is the difference
+    /// from `MarkdownRenderer`, which highlights each fenced block separately
+    /// *because* each fence names its own language, and is deliberately left
+    /// alone.
+    ///
+    /// ### Why it checks itself
+    ///
+    /// Splitting highlighted markup back into rows means re-opening the spans
+    /// that straddle a newline, and getting that wrong shows as scrambled markup
+    /// rather than as an error. So the split is verified against the row count
+    /// before any row is written, and every unexpected answer — a mismatch, a
+    /// throw, an unregistered language — falls back to the per-row pass this
+    /// replaced. That fallback is the previous behaviour exactly, which bounds
+    /// what a mistake in here can cost to what it already cost.
+    static let highlightJS = """
+        // Close every open span at a newline and re-open them after it, so each
+        // row is standalone markup. A stack, because spans nest.
+        function galaxySplitLines(html) {
+            var lines = [];
+            var open = [];
+            var current = "";
+            var i = 0;
+            while (i < html.length) {
+                if (html[i] === "<") {
+                    var end = html.indexOf(">", i);
+                    if (end === -1) { current += html.slice(i); break; }
+                    var tag = html.slice(i, end + 1);
+                    if (tag.indexOf("</") === 0) {
+                        open.pop();
+                    } else if (tag.indexOf("<span") === 0) {
+                        open.push(tag);
+                    }
+                    current += tag;
+                    i = end + 1;
+                    continue;
+                }
+                if (html[i] === "\\n") {
+                    for (var c = 0; c < open.length; c++) {
+                        current += "</span>";
+                    }
+                    lines.push(current);
+                    current = open.join("");
+                    i += 1;
+                    continue;
+                }
+                current += html[i];
+                i += 1;
+            }
+            lines.push(current);
+            return lines;
+        }
+
+        // What this replaced, kept as the fallback for every case the pass below
+        // declines to handle.
+        function galaxyHighlightPerLine(cells, language) {
+            cells.forEach(function(el) {
+                el.classList.add("language-" + language);
+                hljs.highlightElement(el);
+            });
+        }
+
+        function galaxyHighlightSource(language) {
+            if (typeof hljs === "undefined") { return; }
+            // An unregistered name is worse than none: hljs answers one by
+            // auto-detecting, which is the behaviour being escaped.
+            if (!language || !hljs.getLanguage(language)) { return; }
+
+            var cells = Array.prototype.slice.call(
+                document.querySelectorAll(".line-content")
+            );
+            if (cells.length === 0) { return; }
+
+            // Reassembled from the rows rather than shipped a second time. The
+            // table already holds every line, and embedding the source again
+            // would double the page's text for a document that can be large.
+            var source = cells.map(function(el) {
+                return el.textContent;
+            }).join("\\n");
+
+            try {
+                var result = hljs.highlight(source, {
+                    language: language,
+                    ignoreIllegals: true
+                });
+                var lines = galaxySplitLines(result.value);
+                if (lines.length !== cells.length) {
+                    galaxyHighlightPerLine(cells, language);
+                    return;
+                }
+                for (var i = 0; i < cells.length; i++) {
+                    cells[i].innerHTML = lines[i] === "" ? "&nbsp;" : lines[i];
+                    cells[i].classList.add("hljs");
+                }
+            } catch (e) {
+                galaxyHighlightPerLine(cells, language);
+            }
+        }
+        """
+
     public static func document(
         content: String,
         language: String?,
@@ -118,31 +234,8 @@ public enum SourceRenderer {
             // rows it anchors to, and highlighting rewrites their contents.
             scriptsBeforeCards: """
             \(hjsContent)
-            // The language goes on each line before it is highlighted, and that
-            // is the fix rather than a tidy-up: `highlightElement` reads the
-            // language from the element's *own* class and ignores its ancestors.
-            // The class was on the table, so every cell arrived without one and
-            // hljs auto-detected each line independently — guessing per line,
-            // over a table where a line is often three words. A markdown file
-            // came out with "for" and "with" coloured as keywords, and a plain
-            // text file was highlighted as whatever it resembled, because
-            // `nohighlight` on the table was never read either.
-            //
-            // `getLanguage` is the second half. Naming a language the bundle
-            // does not register is worse than naming none, since hljs answers an
-            // unknown name by auto-detecting — the exact behaviour this is
-            // getting away from. No language, or one that is not registered,
-            // means the source is left alone.
-            var galaxyLang = "\(jsLanguage)";
-            if (typeof hljs !== 'undefined'
-                && galaxyLang
-                && hljs.getLanguage(galaxyLang)) {
-                document.querySelectorAll('.line-content')
-                    .forEach(function(el) {
-                        el.classList.add('language-' + galaxyLang);
-                        hljs.highlightElement(el);
-                    });
-            }
+            \(highlightJS)
+            galaxyHighlightSource("\(jsLanguage)");
             """
         )
     }

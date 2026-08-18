@@ -45,6 +45,7 @@ final class ShippedJavaScriptTests: XCTestCase {
                 "HTMLRenderer.blockIndexDOMWalkJS",
                 HTMLRenderer.blockIndexDOMWalkJS
             ),
+            ("SourceRenderer.highlightJS", SourceRenderer.highlightJS),
         ]
     }
 
