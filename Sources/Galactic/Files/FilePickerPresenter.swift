@@ -71,6 +71,21 @@ public final class FilePickerPresenter: ObservableObject {
     /// Files opened earlier and still around, behind the closed ones.
     public var recentProvider: () -> [URL] = { [] }
 
+    /// Directories the walk does not descend into.
+    ///
+    /// The host's answer rather than the engine's, because the right list
+    /// depends on what the root *is*. `FileTreeIndex.defaultSkipList` is project
+    /// noise, chosen for a root that is a repository; an application browsing a
+    /// home directory needs more, and for a different reason — the walk caps and
+    /// reports truncation, so one enormous directory spends the whole corpus
+    /// before reaching anything a reader wanted.
+    ///
+    /// Defaults to the engine's list, so a host that has no opinion still gets
+    /// the sensible answer.
+    public var skipListProvider: () -> Set<String> = {
+        FileTreeIndex.defaultSkipList
+    }
+
     /// Open a file. The picker dismisses itself first, so a host that opens
     /// synchronously does not have to think about ordering.
     public var onOpen: (URL) -> Void = { _ in }
@@ -222,9 +237,12 @@ public final class FilePickerPresenter: ObservableObject {
         }
         isIndexing = true
         let target = root
+        // Resolved here rather than inside the detached task, so the provider is
+        // called on the main actor with the rest of the host's state.
+        let skipping = skipListProvider()
         Task {
             let built = await Task.detached(priority: .userInitiated) {
-                FileTreeIndex.build(root: target)
+                FileTreeIndex.build(root: target, skipping: skipping)
             }.value
             guard !Task.isCancelled else { return }
             index = built

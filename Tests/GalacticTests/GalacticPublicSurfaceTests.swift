@@ -422,6 +422,12 @@ final class GalacticPublicSurfaceTests: XCTestCase {
         }
         presenter.rootProvider = { nil }
 
+        // The host answers what counts as noise, because the right answer
+        // depends on what its root is.
+        XCTAssertEqual(
+            presenter.skipListProvider(), FileTreeIndex.defaultSkipList
+        )
+
         presenter.toggle()
 
         XCTAssertTrue(presenter.isPresented)
