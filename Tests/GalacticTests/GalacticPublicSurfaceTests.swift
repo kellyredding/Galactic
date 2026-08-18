@@ -460,8 +460,7 @@ final class GalacticPublicSurfaceTests: XCTestCase {
                 set: set,
                 onSelect: { _ in },
                 onClose: { _ in },
-                onReload: { _ in },
-                onRequestOpen: {}
+                onReload: { _ in }
             )
         )
     }

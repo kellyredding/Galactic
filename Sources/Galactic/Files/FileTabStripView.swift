@@ -27,23 +27,16 @@ public struct FileTabStripView: View {
     /// spare for an affordance nobody reaches for twice a day.
     private let onReload: (FileTab.ID) -> Void
 
-    /// What the trailing affordance does. The host decides what opening means —
-    /// a fuzzy picker, or the system's own dialog — because only it knows which
-    /// of those it has.
-    private let onRequestOpen: () -> Void
-
     public init(
         set: FileSet,
         onSelect: @escaping (FileTab.ID) -> Void,
         onClose: @escaping (FileTab.ID) -> Void,
-        onReload: @escaping (FileTab.ID) -> Void,
-        onRequestOpen: @escaping () -> Void
+        onReload: @escaping (FileTab.ID) -> Void
     ) {
         self.set = set
         self.onSelect = onSelect
         self.onClose = onClose
         self.onReload = onReload
-        self.onRequestOpen = onRequestOpen
     }
 
     public var body: some View {
@@ -64,23 +57,23 @@ public struct FileTabStripView: View {
                         )
                     }
 
-                    // On the last row only, so the affordance stays at the end
-                    // of the strip rather than appearing once per row.
-                    if index == set.tabs.rows.count - 1 {
-                        OpenAffordance(action: onRequestOpen)
-                        Spacer(minLength: 0)
-                    }
+                    Spacer(minLength: 0)
                 }
             }
 
+            // The strip carries no open affordance of its own. It had a `+`
+            // wired to the system's file dialog while the picker did not exist
+            // yet, and once it did that button was a second way to do one thing
+            // — with the worse ergonomics of the two, and taking width from the
+            // labels on every row to offer it. Opening is a keystroke.
             if set.tabs.rows.isEmpty {
                 HStack(spacing: Metrics.tabSpacing) {
-                    OpenAffordance(action: onRequestOpen)
-                    Text("No files open")
+                    Text("No files open — press ⌘T")
                         .font(.system(size: Metrics.fontSize))
                         .foregroundColor(.secondary)
                     Spacer(minLength: 0)
                 }
+                .frame(height: Metrics.tabHeight)
             }
         }
         .padding(.horizontal, Metrics.stripPadding)
@@ -258,33 +251,5 @@ private struct FileTabView: View {
     private func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-    }
-}
-
-// MARK: - Opening
-
-/// The trailing `+`. Says nothing about what opening means; the host answers.
-private struct OpenAffordance: View {
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    private typealias Metrics = FileTabStripView.Metrics
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "plus")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundColor(.secondary)
-                .frame(width: Metrics.tabHeight, height: Metrics.tabHeight)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.primary.opacity(isHovering ? 0.08 : 0.02))
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
-        .help("Open a file")
     }
 }

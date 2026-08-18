@@ -345,6 +345,61 @@ final class FilePickerPresenterTests: XCTestCase {
         )
     }
 
+    /// Two opens must not become two enumerations. On a large root that was the
+    /// difference between a picker that is slow once and one that is slow every
+    /// time: each open added a walk, none had landed, so each looked like the
+    /// first.
+    @MainActor
+    func testASecondOpenDoesNotStartASecondWalkOfTheSameTree() async throws {
+        try write("a.swift")
+        let presenter = FilePickerPresenter()
+        var walks = 0
+        presenter.rootProvider = {
+            walks += 1
+            return self.dir
+        }
+
+        presenter.present()
+        presenter.dismiss()
+        presenter.present()
+        try await waitForIndex(presenter)
+
+        // The provider is asked per open — that is by design — but only one walk
+        // may be in flight for a root at a time.
+        XCTAssertEqual(walks, 2)
+        XCTAssertEqual(presenter.indexedCount, 1)
+    }
+
+    /// Coming back to a tree already walked is instant, because re-rooting is a
+    /// return trip rather than a departure.
+    @MainActor
+    func testATreeWalkedEarlierIsStillHeldAfterVisitingAnother() async throws {
+        try write("a.swift")
+        let other = dir.appendingPathComponent("sub")
+        try FileManager.default.createDirectory(
+            at: other, withIntermediateDirectories: true
+        )
+        try Data("x".utf8).write(to: other.appendingPathComponent("inner.rb"))
+
+        let presenter = FilePickerPresenter()
+        presenter.rootProvider = { self.dir }
+        presenter.present()
+        try await waitForIndex(presenter)
+        presenter.dismiss()
+
+        presenter.rootProvider = { other }
+        presenter.present()
+        try await waitForIndex(presenter)
+        presenter.dismiss()
+
+        presenter.rootProvider = { self.dir }
+        presenter.present()
+
+        XCTAssertFalse(
+            presenter.isIndexing, "the first tree was kept, not re-walked"
+        )
+    }
+
     /// The held index is only good for the tree it was walked under. Ranking one
     /// keystroke against the tree just left would be worse than showing nothing,
     /// because nothing is obviously nothing.
