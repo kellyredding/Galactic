@@ -126,6 +126,47 @@ public enum FileConfirmations {
             + "discarded and cannot be recovered."
     }
 
+    // MARK: - The composer
+
+    /// Escape over a note form holding text nobody has committed.
+    ///
+    /// Not about files at all — this is the page's composer, and the same two
+    /// questions the artifact readers ask. They live here because this is where
+    /// the Files surface keeps every question it knows how to ask, and because a
+    /// third hand-written copy of the artifact readers' wording is how the four
+    /// of them start disagreeing. Those two copies are worth folding in here
+    /// later; nothing depends on it happening now.
+    public static func confirmDiscardNoteForm(
+        in window: NSWindow,
+        onDiscard: @escaping () -> Void,
+        onCancel: @escaping () -> Void = {}
+    ) {
+        SheetAlert.confirm(
+            in: window,
+            message: "Discard note?",
+            detail: "You have unsaved text in the note form. It will be lost "
+                + "if you dismiss.",
+            onConfirm: onDiscard,
+            onCancel: onCancel
+        )
+    }
+
+    /// Escape over an edit whose text has diverged from the note it is editing.
+    public static func confirmDiscardNoteEdit(
+        in window: NSWindow,
+        onDiscard: @escaping () -> Void,
+        onCancel: @escaping () -> Void = {}
+    ) {
+        SheetAlert.confirm(
+            in: window,
+            message: "Discard changes?",
+            detail: "You have unsaved changes to this note. They will be lost "
+                + "if you cancel editing.",
+            onConfirm: onDiscard,
+            onCancel: onCancel
+        )
+    }
+
     // MARK: - Switching sets
 
     static func switchSetDetail(setName: String, count: Int) -> String {
