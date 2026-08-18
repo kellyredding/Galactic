@@ -1285,16 +1285,27 @@ public enum ScrollbackHTMLRenderer {
                 const line = document.querySelector(
                     '[data-line=\"' + i + '\"]');
                 if (!line) continue;
-                // An empty terminal row is rendered as a single
-                // non-breaking space, because a div with nothing
-                // in it collapses and the row has to keep its
-                // height. Read back through textContent that
-                // comes out as a character rather than as an
-                // absence, so an empty row has to be recognised
-                // here or it travels into a quote as invisible
-                // trailing whitespace.
-                rows.push(line.textContent === '\\u00a0'
-                    ? '' : line.textContent);
+                // Right-trimmed, and this is the load-bearing
+                // line. A row is rendered cell by cell across
+                // the *whole terminal width* — a null cell
+                // becomes a space — so every captured row ends
+                // in a run of padding as wide as the window.
+                // Two consequences, both invisible inside a
+                // fence and both real: a hundred bytes of
+                // nothing per line in a prompt, and two trailing
+                // spaces meaning a hard line break to anything
+                // reading the quote as markdown, which is what
+                // puts a blank line after every quoted row.
+                //
+                // It also subsumes the empty-row case: a blank
+                // row is drawn as a single non-breaking space,
+                // since a div with nothing in it collapses and
+                // the row has to keep its height, and NBSP is
+                // whitespace to trimEnd.
+                //
+                // Leading whitespace is left alone — that is the
+                // output's own indentation.
+                rows.push(line.textContent.trimEnd());
             }
             // Blank rows at either end are an artifact of where
             // the selection was dragged to, never something the
