@@ -2,7 +2,7 @@ import Foundation
 
 /// Turns a set's notes into the one message an agent receives.
 ///
-/// The scrollback's format, extended with a location and a language. Composed
+/// The scrollback's format, extended with a location. Composed
 /// in Swift rather than in the page, which is where the scrollback does it,
 /// because these notes live in Swift and a review spans files the page on
 /// screen does not have.
@@ -55,7 +55,6 @@ public enum FileReviewComposer {
             // between two notes on the same file, and each ask is a stat.
             let drifted = hasDrifted(file)
             let shown = displayPath(for: file.url, root: root)
-            let language = FileKind.highlightLanguage(forFilename: path) ?? ""
 
             for note in fileNotes {
                 blocks.append(
@@ -63,7 +62,6 @@ public enum FileReviewComposer {
                         position: position,
                         path: shown,
                         note: note,
-                        language: language,
                         drifted: drifted
                     )
                 )
@@ -90,7 +88,6 @@ public enum FileReviewComposer {
         position: Int,
         path: String,
         note: FileNote,
-        language: String,
         drifted: Bool
     ) -> String {
         let range =
@@ -101,10 +98,40 @@ public enum FileReviewComposer {
         if drifted { location += " \(driftMarker)" }
 
         return location + "\n"
-            + "```\(language)\n"
-            + note.lineContent + "\n"
-            + "```\n"
+            + quoted(note.lineContent) + "\n"
             + note.content
+    }
+
+    /// The captured lines, marked as quoted on every line.
+    ///
+    /// A fence marks two ends; this marks every line, and that difference is the
+    /// whole reason for it. **A fence can be closed by its own content** — a
+    /// quoted markdown file, a README, a docstring discussing shell commands —
+    /// and when it is, the block ends early and the remainder of the snippet
+    /// arrives as loose prose between the quote and the note. Nothing reports it.
+    /// The earlier format accepted that on the argument that a nested fence costs
+    /// an agent less than altered source would; a prefix costs neither.
+    ///
+    /// There is no rendering step anywhere in this path — the string goes into a
+    /// prompt — so this is chosen for a reader that reads raw text. Leading
+    /// whitespace survives exactly, since nothing reinterprets what follows the
+    /// prefix, and a quoted line already beginning with `>` simply gains
+    /// another.
+    ///
+    /// The note itself is left bare, and the asymmetry is the delimiter: quoted
+    /// lines carry the prefix, the reader's own prose does not. That needs no
+    /// label and nothing to match up.
+    static func quoted(_ content: String) -> String {
+        // A trailing newline would otherwise produce a final bare `>` marking a
+        // line the capture does not have.
+        var body = content
+        if body.hasSuffix("\n") { body.removeLast() }
+
+        return body.components(separatedBy: "\n")
+            // `>` alone rather than `> ` for a blank line, so a quote does not
+            // ship trailing whitespace on the lines that had none.
+            .map { $0.isEmpty ? ">" : "> " + $0 }
+            .joined(separator: "\n")
     }
 
     /// Relative to the root when the file is under it, absolute otherwise.

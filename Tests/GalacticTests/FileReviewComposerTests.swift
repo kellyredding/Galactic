@@ -73,11 +73,9 @@ final class FileReviewComposerTests: XCTestCase {
             out,
             """
             [1] src/user.rb:42-48
-            ```ruby
-              def activate!
-                return if active?
-              end
-            ```
+            >   def activate!
+            >     return if active?
+            >   end
             Should this be idempotent?
             """
         )
@@ -96,7 +94,7 @@ final class FileReviewComposerTests: XCTestCase {
             out,
             "Mostly about the activation path."
                 + "\n\n\n"
-                + "[1] a.rb:1\n```ruby\nx = 1\n```\nwhy"
+                + "[1] a.rb:1\n> x = 1\nwhy"
         )
     }
 
@@ -205,7 +203,7 @@ final class FileReviewComposerTests: XCTestCase {
             notes: store([("/work/project/annotated.rb", 5, 5, "q", "why")])
         )
 
-        XCTAssertEqual(out, "[1] annotated.rb:5\n```ruby\nq\n```\nwhy")
+        XCTAssertEqual(out, "[1] annotated.rb:5\n> q\nwhy")
     }
 
     func testBlocksAreSeparatedByExactlyTwoBlankLines() {
@@ -219,9 +217,9 @@ final class FileReviewComposerTests: XCTestCase {
 
         XCTAssertEqual(
             out,
-            "[1] a.rb:1\n```ruby\none\n```\nfirst"
+            "[1] a.rb:1\n> one\nfirst"
                 + "\n\n\n"
-                + "[2] a.rb:2\n```ruby\ntwo\n```\nsecond"
+                + "[2] a.rb:2\n> two\nsecond"
         )
     }
 
@@ -329,54 +327,95 @@ final class FileReviewComposerTests: XCTestCase {
         XCTAssertEqual(asked, 0)
     }
 
-    // MARK: - Language tags
+    // MARK: - How the quote is marked
 
-    func testTheFenceCarriesTheFilesLanguage() {
+    /// Every line, not two ends. This is the property that makes the delimiter
+    /// unbreakable by its own content.
+    func testEveryQuotedLineCarriesThePrefix() {
         let out = compose(
-            files: [file("/work/project/main.swift")],
-            notes: store([("/work/project/main.swift", 1, 1, "let x = 1", "why")])
+            files: [file("/work/project/a.rb")],
+            notes: store([("/work/project/a.rb", 1, 3, "one\ntwo\nthree", "why")])
         )
 
-        XCTAssertTrue(out.contains("```swift\n"))
+        XCTAssertTrue(out.contains("> one\n> two\n> three\nwhy"))
     }
 
-    /// The vendored highlighter ships a subset, so plenty of readable files
-    /// have no language. A bare fence is the honest answer.
-    func testAFileWithNoKnownLanguageGetsABareFence() {
+    /// Nothing reinterprets what follows the prefix, so indentation arrives as
+    /// it was captured — which is most of what a code quote is for.
+    func testLeadingWhitespaceSurvivesExactly() {
         let out = compose(
-            files: [file("/work/project/infra.tf")],
-            notes: store([("/work/project/infra.tf", 1, 1, "resource {}", "why")])
+            files: [file("/work/project/a.rb")],
+            notes: store([
+                ("/work/project/a.rb", 1, 2, "    deep\n\t\ttabbed", "why")
+            ])
         )
 
-        XCTAssertTrue(out.contains("```\nresource {}\n```"))
+        XCTAssertTrue(out.contains(">     deep\n> \t\ttabbed"))
     }
 
-    /// An extensionless build file still names its language, which is the
-    /// whole-name lookup earning its place in the review rather than only on
-    /// screen.
-    func testAnExtensionlessFileStillNamesItsLanguage() {
+    /// A blank line inside a quote is marked without gaining trailing
+    /// whitespace, which a bare `> ` would add to every empty line.
+    func testABlankQuotedLineIsABareMarker() {
         let out = compose(
-            files: [file("/work/project/Makefile")],
-            notes: store([("/work/project/Makefile", 1, 1, "all:", "why")])
+            files: [file("/work/project/a.rb")],
+            notes: store([("/work/project/a.rb", 1, 3, "one\n\nthree", "why")])
         )
 
-        XCTAssertTrue(out.contains("```makefile\n"))
+        XCTAssertTrue(out.contains("> one\n>\n> three"))
+        XCTAssertFalse(out.contains("> \n"))
+    }
+
+    /// A capture that ends in a newline must not produce a final marker for a
+    /// line it does not have.
+    func testATrailingNewlineDoesNotBecomeAnEmptyQuotedLine() {
+        let out = compose(
+            files: [file("/work/project/a.rb")],
+            notes: store([("/work/project/a.rb", 1, 1, "one\n", "why")])
+        )
+
+        XCTAssertTrue(out.hasSuffix("> one\nwhy"))
+    }
+
+    /// The note is bare, and that asymmetry is the delimiter: no label, nothing
+    /// to match, and no way to confuse the reader's prose with the file's.
+    func testTheNoteItselfIsNotMarked() {
+        let out = compose(
+            files: [file("/work/project/a.rb")],
+            notes: store([("/work/project/a.rb", 1, 1, "q", "my own words")])
+        )
+
+        XCTAssertTrue(out.hasSuffix("\nmy own words"))
     }
 
     // MARK: - Content is quoted verbatim
 
-    /// A quote containing a fence is left alone. Escaping it would corrupt the
-    /// thing being asked about, and an agent reading a nested fence loses less
-    /// than one reading altered source.
-    func testAQuoteContainingAFenceIsNotEscaped() {
+    /// The case the old format could not survive, and the reason for this one.
+    ///
+    /// A fenced quote containing a fence ended early, and everything after it
+    /// arrived as prose between the quote and the note — most likely on exactly
+    /// the files a reader annotates most, since markdown is full of fences. The
+    /// choice used to be between corrupting the source by escaping it and
+    /// handing an agent an ambiguous block. A prefix costs neither.
+    func testAQuoteContainingAFenceStaysWhollyQuoted() {
         let out = compose(
             files: [file("/work/project/README.md")],
             notes: store([
-                ("/work/project/README.md", 1, 2, "```\ncode\n```", "meta")
+                ("/work/project/README.md", 1, 3, "```\ncode\n```", "meta")
             ])
         )
 
-        XCTAssertTrue(out.contains("```\n```\ncode\n```\n```"))
+        XCTAssertTrue(out.contains("> ```\n> code\n> ```\nmeta"))
+    }
+
+    /// A quoted line that already begins with a marker simply gains another. It
+    /// still cannot be mistaken for the note, which has none.
+    func testAQuotedLineAlreadyBeginningWithAMarkerGainsAnother() {
+        let out = compose(
+            files: [file("/work/project/a.md")],
+            notes: store([("/work/project/a.md", 1, 1, "> quoted", "meta")])
+        )
+
+        XCTAssertTrue(out.contains("> > quoted\nmeta"))
     }
 
     func testMultiLineNoteTextSurvivesUnchanged() {

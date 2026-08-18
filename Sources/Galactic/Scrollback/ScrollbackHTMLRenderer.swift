@@ -1752,10 +1752,21 @@ public enum ScrollbackHTMLRenderer {
 
             const sorted = [...this.items].sort((a, b) =>
                 a.endLine - b.endLine || a.startLine - b.startLine);
+            // Marked on every line rather than fenced at both ends, and
+            // byte-identical to what the file review composes — see
+            // `FileReviewComposer.quoted`. A fence can be closed by the
+            // thing it is quoting, and terminal output is entirely capable
+            // of containing one; a prefix cannot be. A blank captured line
+            // gets a bare marker so the quote ships no trailing spaces.
+            const quote = (text) => text
+                .replace(/\\n$/, '')
+                .split('\\n')
+                .map((line) => line === '' ? '>' : '> ' + line)
+                .join('\\n');
             const blocks = sorted.map((note, i) => {
                 const n = i + 1;
                 return '[' + n + ']\\n'
-                    + '```\\n' + note.lineContent + '\\n```\\n'
+                    + quote(note.lineContent) + '\\n'
                     + note.content;
             }).join('\\n\\n\\n');
 
