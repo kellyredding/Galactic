@@ -166,6 +166,25 @@ public struct FileTabStripModel: Equatable {
         return tab
     }
 
+    // MARK: - Restoring
+
+    /// Rebuild the strip from persisted rows, arrangement intact.
+    ///
+    /// Not expressible as repeated `open` calls, and that is why it exists:
+    /// `open` honours the soft row limit and appends to the last row, so a
+    /// reader who arranged four tabs into three rows would get them re-packed
+    /// into one on the way back in. The soft limit governs where *new* tabs
+    /// land; it has no business deciding where old ones were.
+    ///
+    /// Empty rows are dropped rather than preserved. A row with nothing in it
+    /// is a gap in the strip that no reader made and none can close.
+    public mutating func restore(rows persisted: [[URL]]) {
+        rows = persisted
+            .filter { !$0.isEmpty }
+            .map { $0.map { FileTab(url: $0) } }
+        selectedID = rows.first?.first?.id
+    }
+
     // MARK: - Navigating
 
     /// Along the current row. Stops at the end rather than wrapping, matching

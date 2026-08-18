@@ -1,0 +1,339 @@
+import Combine
+import Foundation
+
+/// One browsing context: a root, the files open under it, and the notes on them.
+///
+/// The engine's pieces are values — a strip model, a closed stack, a note store,
+/// a frozen file. This is the object that holds one of each and keeps them
+/// agreeing, which is the part every host would otherwise write for itself:
+/// closing a tab has to push the closed stack, drop that file's notes and
+/// release its frozen content, and a host that remembered two of those three
+/// leaks a note onto a file nobody has open.
+///
+/// **Frozen content lives here rather than in the reader.** A single reader is
+/// rebuilt on every file switch, so anything the reader holds is gone the moment
+/// the reader points somewhere else — and the whole render policy rests on the
+/// content being what was read at open, not what is on disk now. Holding it here
+/// means switching away and back shows the same bytes the notes quote.
+///
+/// Not actor-isolated, matching `AgentInbox` and both hosts: this is a plain
+/// `ObservableObject` driving SwiftUI from the main queue. See that type for the
+/// longer argument.
+public final class FileSet: ObservableObject {
+
+    /// Which application context this set belongs to — a session id in Galaxy,
+    /// a constant in Assist Ant. Opaque here on purpose: nothing in this file
+    /// interprets it, and the day it means something else it can.
+    public let ownerID: String
+
+    /// What a reader calls this set. One per owner today, so there is nothing to
+    /// tell apart yet; named sets are a later phase and this is the field they
+    /// will use.
+    @Published public private(set) var name: String
+
+    /// Where browsing starts, and what a tab's label is relative to.
+    @Published public private(set) var root: URL
+
+    @Published public private(set) var tabs: FileTabStripModel
+
+    @Published public private(set) var closedTabs: ClosedTabStack
+
+    /// In memory, and nowhere else. See `FileNoteStore`.
+    @Published public private(set) var notes: FileNoteStore
+
+    /// Files opened in this set, most recent first — what the picker offers once
+    /// the closed stack runs out.
+    @Published public private(set) var recentFiles: [URL]
+
+    /// The content of every open file, as it was when it was opened.
+    ///
+    /// Not `@Published`: a whole file's text arriving in a publisher would push
+    /// every observer through a view update for something none of them reads
+    /// directly. Readers ask for it by path at build time.
+    private var frozen: [String: ReaderFile]
+
+    /// How much history is kept. Larger than anything presented, because the
+    /// record is cheap and the presentation cap is the thing that changes.
+    public static let recentLimit = 60
+
+    public init(
+        ownerID: String,
+        name: String = "Default",
+        root: URL
+    ) {
+        self.ownerID = ownerID
+        self.name = name
+        self.root = root
+        tabs = FileTabStripModel()
+        closedTabs = ClosedTabStack()
+        notes = FileNoteStore()
+        recentFiles = []
+        frozen = [:]
+    }
+
+    // MARK: - Reading
+
+    public var selectedTab: FileTab? { tabs.selected }
+
+    /// The frozen content behind one open path.
+    public func file(forPath path: String) -> ReaderFile? { frozen[path] }
+
+    /// The frozen content behind whichever tab is showing.
+    public var selectedFile: ReaderFile? {
+        guard let path = tabs.selected?.path else { return nil }
+        return frozen[path]
+    }
+
+    public var isEmpty: Bool { tabs.isEmpty }
+
+    /// What the badge on one tab shows.
+    public func noteCount(forPath path: String) -> Int {
+        notes.count(forPath: path)
+    }
+
+    /// What the send bar shows — the whole review, not the file on screen.
+    public var totalNoteCount: Int { notes.totalCount }
+
+    // MARK: - Opening and closing
+
+    /// Open a file, reading and freezing it.
+    ///
+    /// Throws what `ReaderFile` throws, unread: a host answers a binary file by
+    /// handing it to the system and an oversized one by saying by how much, and
+    /// flattening those into one failure here would take that choice away.
+    ///
+    /// A file already open is selected rather than re-read. That is what keeps
+    /// the content frozen across a reader who reaches the same file twice — a
+    /// second read would replace the bytes their notes are quoting.
+    @discardableResult
+    public func open(url: URL) throws -> FileTab {
+        if let existing = tabs.tab(forPath: url.path) {
+            tabs.select(id: existing.id)
+            recordRecent(url)
+            return existing
+        }
+
+        let file = try ReaderFile.load(url: url)
+        frozen[url.path] = file
+        let tab = tabs.open(url: url)
+
+        // It is open, so it is no longer closed. Left in, the history would
+        // offer a file whose tab is on screen.
+        closedTabs.remove(url: url)
+        recordRecent(url)
+        return tab
+    }
+
+    /// Close a tab, and take its notes and its content with it.
+    ///
+    /// Returns the stacked entry so a caller can say what it just did. The three
+    /// effects are one operation on purpose — a host that pushed the stack and
+    /// forgot to drop the notes would keep a review alive on a file the reader
+    /// has closed, and nothing would report it.
+    @discardableResult
+    public func close(id: FileTab.ID) -> ClosedTabStack.Entry? {
+        guard let position = tabs.position(of: id) else { return nil }
+        guard let closed = tabs.close(id: id) else { return nil }
+
+        closedTabs.push(url: closed.url, row: position.row)
+        notes.drop(path: closed.path)
+        frozen[closed.path] = nil
+        return ClosedTabStack.Entry(url: closed.url, row: position.row)
+    }
+
+    /// Reopen the most recently closed file, into the row it came from.
+    ///
+    /// Nil when the stack is empty — the caller beeps. A file that has since
+    /// become unopenable throws, and is *not* put back on the stack: it would
+    /// then be the first thing offered again, and offering it again is offering
+    /// the same failure.
+    @discardableResult
+    public func reopenLastClosed() throws -> FileTab? {
+        guard let entry = closedTabs.pop() else { return nil }
+
+        let file = try ReaderFile.load(url: entry.url)
+        frozen[entry.url.path] = file
+        let tab = tabs.reopen(url: entry.url, preferredRow: entry.row)
+        recordRecent(entry.url)
+        return tab
+    }
+
+    public func select(id: FileTab.ID) { tabs.select(id: id) }
+
+    public func selectTab(forPath path: String) {
+        guard let tab = tabs.tab(forPath: path) else { return }
+        tabs.select(id: tab.id)
+    }
+
+    // MARK: - Rearranging and navigating
+
+    public func move(id: FileTab.ID, toRow row: Int, at index: Int) {
+        tabs.move(id: id, toRow: row, at: index)
+    }
+
+    public func selectNextInRow() { tabs.selectNextInRow() }
+    public func selectPreviousInRow() { tabs.selectPreviousInRow() }
+    public func selectNextRow() { tabs.selectNextRow() }
+    public func selectPreviousRow() { tabs.selectPreviousRow() }
+
+    // MARK: - The root
+
+    /// Change where browsing starts.
+    ///
+    /// Open tabs stay open, including any now outside the root — they keep an
+    /// absolute label, which `FileTabLabel` already answers. Closing them would
+    /// make changing the root a way to lose work.
+    public func changeRoot(to url: URL) {
+        guard url.path != root.path else { return }
+        root = url
+    }
+
+    public func rename(to newName: String) {
+        guard !newName.isEmpty, newName != name else { return }
+        name = newName
+    }
+
+    // MARK: - Per-tab state
+
+    /// Record something the reader left in the tab that is showing.
+    ///
+    /// The scroll offset, the find query, the rescued composer — all of it is
+    /// per-file state a rebuild would otherwise lose. See `FileTab`.
+    public func updateSelectedTab(_ mutate: (inout FileTab) -> Void) {
+        guard let id = tabs.selectedID else { return }
+        tabs.update(id: id, mutate)
+    }
+
+    public func updateTab(id: FileTab.ID, _ mutate: (inout FileTab) -> Void) {
+        tabs.update(id: id, mutate)
+    }
+
+    // MARK: - Notes
+
+    /// The store is `private(set)` and these are why: every note a reader writes
+    /// arrives through the set, so there is exactly one object that knows how a
+    /// note and its file relate. A host holding the store directly could add a
+    /// note to a path it has no tab for, and nothing would report it.
+
+    @discardableResult
+    public func addNote(
+        filePath: String,
+        startLine: Int32,
+        endLine: Int32,
+        lineContent: String,
+        content: String,
+        createdAt: String
+    ) -> FileNote? {
+        // Refused rather than stored for a file this set does not have open. A
+        // note is anchored to frozen content, and there is none to anchor to.
+        guard frozen[filePath] != nil else { return nil }
+
+        return notes.add(
+            filePath: filePath,
+            startLine: startLine,
+            endLine: endLine,
+            lineContent: lineContent,
+            content: content,
+            createdAt: createdAt
+        )
+    }
+
+    public func updateNote(id: Int64, content: String) {
+        notes.update(id: id, content: content)
+    }
+
+    public func deleteNote(id: Int64) {
+        notes.delete(id: id)
+    }
+
+    /// Everything goes — the review was sent.
+    public func clearNotes() {
+        notes.clear()
+    }
+
+    // MARK: - Persistence
+
+    /// The open files, as rows, for a host to persist.
+    ///
+    /// Rows rather than a flat list, because the arrangement is the reader's.
+    /// Persisting the files alone and letting them re-pack on the way back in
+    /// would quietly undo every row a reader made — the same wrong answer as
+    /// reflowing on close, arriving a restart later.
+    public var openPathRows: [[String]] {
+        tabs.rows.map { $0.map(\.path) }
+    }
+
+    public var selectedPath: String? { tabs.selected?.path }
+
+    /// Rebuild a set from what a host persisted.
+    ///
+    /// Best effort by design. A path that will not open is dropped and the rest
+    /// still come back: between two launches a file gets deleted, renamed,
+    /// replaced by a build step with something binary, or grown past the cap,
+    /// and none of those is a reason to lose the other nine tabs. Returns the
+    /// paths that did not make it, so a host can say so if it wants to.
+    ///
+    /// **Notes are never restored**, here or anywhere. There is nothing to
+    /// restore them from.
+    @discardableResult
+    public func restore(
+        openPathRows rows: [[String]],
+        selectedPath: String? = nil
+    ) -> [String] {
+        var dropped: [String] = []
+        var restored: [[URL]] = []
+
+        for row in rows {
+            var urls: [URL] = []
+            for path in row {
+                let url = URL(fileURLWithPath: path)
+                guard let file = try? ReaderFile.load(url: url) else {
+                    dropped.append(path)
+                    continue
+                }
+                frozen[path] = file
+                urls.append(url)
+                recordRecent(url)
+            }
+            if !urls.isEmpty { restored.append(urls) }
+        }
+
+        tabs.restore(rows: restored)
+        if let selectedPath { selectTab(forPath: selectedPath) }
+        return dropped
+    }
+
+    // MARK: - History
+
+    /// Most recent first, deduped, capped. Every open goes through here — a
+    /// fresh open, a reopen, and a restore — because "recent" means *reached*
+    /// rather than newly discovered.
+    private func recordRecent(_ url: URL) {
+        recentFiles.removeAll { $0.path == url.path }
+        recentFiles.insert(url, at: 0)
+        if recentFiles.count > Self.recentLimit {
+            recentFiles.removeLast(recentFiles.count - Self.recentLimit)
+        }
+    }
+
+    /// Recent files that are not currently open, newest first.
+    ///
+    /// Open files are excluded here because whether a file has a tab is this
+    /// object's knowledge, and a caller that had to intersect the two itself
+    /// would be a second place that knows what open means.
+    ///
+    /// **The closed stack is deliberately not subtracted.** A closed file is in
+    /// both lists, and which one shows it is a question only the picker can
+    /// answer — it is the thing displaying both, in a chosen order, so the
+    /// de-duplication is part of composing that display rather than a property
+    /// of either list. Subtracting it here would also make this always empty
+    /// in-session, since the only way a file leaves this set's tabs is by being
+    /// closed.
+    public func presentedRecents(limit: Int = 20) -> [URL] {
+        let openPaths = Set(tabs.tabs.map(\.path))
+        return recentFiles
+            .filter { !openPaths.contains($0.path) }
+            .prefix(max(0, limit))
+            .map { $0 }
+    }
+}

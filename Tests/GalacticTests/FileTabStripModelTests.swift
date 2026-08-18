@@ -241,6 +241,75 @@ final class FileTabStripModelTests: XCTestCase {
         XCTAssertEqual(m.tabs.count, 1)
     }
 
+    // MARK: - Restoring
+
+    /// The reason this is not repeated `open` calls: `open` honours the soft row
+    /// limit, so a reader's three rows would come back as one.
+    func testRestoringKeepsTheRowsItWasGiven() {
+        var m = FileTabStripModel()
+
+        m.restore(rows: [[url("a.swift")], [url("b.swift"), url("c.swift")]])
+
+        XCTAssertEqual(m.rows.count, 2)
+        XCTAssertEqual(m.rows[0].map(\.url.lastPathComponent), ["a.swift"])
+        XCTAssertEqual(
+            m.rows[1].map(\.url.lastPathComponent), ["b.swift", "c.swift"]
+        )
+        XCTAssertEqual(m.tabs.count, 3)
+    }
+
+    /// More tabs in one row than a new tab would ever be given, because the
+    /// limit governs where new tabs land and not where old ones were.
+    func testRestoringDoesNotSplitARowAtTheSoftLimit() {
+        var m = FileTabStripModel()
+        let many = (0..<(FileTabStripModel.softRowLimit + 4)).map {
+            url("f\($0).swift")
+        }
+
+        m.restore(rows: [many])
+
+        XCTAssertEqual(m.rows.count, 1)
+        XCTAssertEqual(m.rows[0].count, many.count)
+    }
+
+    func testRestoringSelectsTheFirstTab() {
+        var m = FileTabStripModel()
+
+        m.restore(rows: [[url("a.swift")], [url("b.swift")]])
+
+        XCTAssertEqual(m.selected?.url.lastPathComponent, "a.swift")
+    }
+
+    /// An empty row is a gap no reader made and none can close.
+    func testRestoringDropsEmptyRows() {
+        var m = FileTabStripModel()
+
+        m.restore(rows: [[], [url("a.swift")], []])
+
+        XCTAssertEqual(m.rows.count, 1)
+        XCTAssertEqual(m.rows[0].count, 1)
+    }
+
+    func testRestoringNothingLeavesAnEmptyStrip() {
+        var m = filled(3)
+
+        m.restore(rows: [])
+
+        XCTAssertTrue(m.isEmpty)
+        XCTAssertNil(m.selectedID)
+    }
+
+    /// Restoring replaces rather than merges. A strip that kept what it had
+    /// would double every tab on a second restore.
+    func testRestoringReplacesWhateverWasOpen() {
+        var m = filled(3)
+
+        m.restore(rows: [[url("only.swift")]])
+
+        XCTAssertEqual(m.tabs.count, 1)
+        XCTAssertEqual(m.tabs[0].url.lastPathComponent, "only.swift")
+    }
+
     // MARK: - Navigating
 
     func testStepsAlongARowStopAtItsEnds() {
