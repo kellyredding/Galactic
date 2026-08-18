@@ -1279,17 +1279,45 @@ public enum ScrollbackHTMLRenderer {
         pendingFormText() {
             if (this.formStartLine == null
                 || this.formEndLine == null) return '';
-            let out = '';
+            const rows = [];
             for (let i = this.formStartLine;
                  i <= this.formEndLine; i++) {
                 const line = document.querySelector(
                     '[data-line=\"' + i + '\"]');
-                if (line) {
-                    if (out) out += '\\n';
-                    out += line.textContent;
-                }
+                if (!line) continue;
+                // An empty terminal row is rendered as a single
+                // non-breaking space, because a div with nothing
+                // in it collapses and the row has to keep its
+                // height. Read back through textContent that
+                // comes out as a character rather than as an
+                // absence, so an empty row has to be recognised
+                // here or it travels into a quote as invisible
+                // trailing whitespace.
+                rows.push(line.textContent === '\\u00a0'
+                    ? '' : line.textContent);
             }
-            return out;
+            // Blank rows at either end are an artifact of where
+            // the selection was dragged to, never something the
+            // reader meant to quote.
+            while (rows.length && rows[0] === '') rows.shift();
+            while (rows.length
+                   && rows[rows.length - 1] === '') rows.pop();
+            // A run of them is the terminal's own spacing —
+            // Claude Code double-spaces its output, so half the
+            // rows in any multi-row selection are empty. One is
+            // kept, because it separates what were visibly
+            // separate blocks; the rest say nothing a reader of
+            // the quote can use. Deliberately unlike the file
+            // composer, which alters nothing: a blank line in
+            // source is content, and its quote has to keep
+            // matching the line range printed above it.
+            const kept = [];
+            for (const row of rows) {
+                if (row === '' && kept.length
+                    && kept[kept.length - 1] === '') continue;
+                kept.push(row);
+            }
+            return kept.join('\\n');
         },
 
         submitNote() {
