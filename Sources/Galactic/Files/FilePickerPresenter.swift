@@ -112,13 +112,20 @@ public final class FilePickerPresenter: ObservableObject {
     /// for why each part of it is what it is.
     let focus = ModalFocusCapture()
 
-    /// The corpus in front of the reader right now.
-    private var index: FileTreeIndex?
-
-    /// One walked tree, and when it was walked.
+    /// One tree, complete or still filling.
+    ///
+    /// A walk in progress writes into this as it goes, which is what lets a
+    /// reader close the picker and reopen it further along instead of at zero.
+    /// Held partials used to live outside the cache, so every open replaced the
+    /// accumulated corpus with nothing and the count started over while the walk
+    /// carried on unseen — the picker looked like it was restarting a walk that
+    /// had in fact never stopped.
     private struct Corpus {
-        let index: FileTreeIndex
-        let builtAt: Date
+        var root: URL
+        var items: [FileTreeIndex.Item]
+        var wasTruncated: Bool
+        /// When the walk finished. Nil while it is still running.
+        var completedAt: Date?
     }
 
     /// Indexes by **canonical** root path.
@@ -142,17 +149,30 @@ public final class FilePickerPresenter: ObservableObject {
     /// of them had landed, so every open looked like the first.
     private var walksInFlight: Set<String> = []
 
-    /// How many trees are kept. Small — this is a return trip, not a history.
-    private static let corpusLimit = 4
-
-    /// How stale a held index may be before an open refreshes it.
+    /// How many indexed files are kept across all roots before the oldest
+    /// finished tree is dropped.
     ///
-    /// A refresh is a whole enumeration of the tree, so doing one per open spends
-    /// real disk on a question the reader did not ask — and on a root that
-    /// crosses protected directories it is also a permission prompt per walk.
-    /// Files created since are found by the next refresh rather than instantly,
-    /// which is the trade a corpus this size forces.
-    private static let refreshWindow: TimeInterval = 600
+    /// A budget in files rather than a count of trees, because the trees are not
+    /// comparable: a home directory is half a million files and a project is
+    /// twenty thousand. Counting trees would evict a home index to make room for
+    /// something a hundredth its cost to rebuild, which is the wrong way round.
+    ///
+    /// Nothing is evicted while it is being walked, and never the tree on screen.
+    private static let itemBudget = 750_000
+
+    /// **A finished index is never re-walked.**
+    ///
+    /// There is no staleness window, and that is deliberate rather than pending:
+    /// re-walking meant a reader who came back to a root watched a complete
+    /// corpus be replaced by one counting up from zero — the restart this type
+    /// spent three rounds removing, arriving through the door marked refresh. On
+    /// a tree that takes tens of seconds and raises a permission prompt per
+    /// protected directory, an unrequested re-walk is not a background detail.
+    ///
+    /// The cost is that a file created after the walk is not found until the
+    /// process restarts. Noticing changes as they happen — and a way to ask for a
+    /// refresh by hand — is its own effort, and the shape of this makes room for
+    /// it: a corpus knows when it completed.
 
     /// Cancelled on every keystroke, so a slow filter over a large tree cannot
     /// land after the query it was answering has been typed past.
@@ -311,7 +331,6 @@ public final class FilePickerPresenter: ObservableObject {
     /// because re-rooting is usually a return trip.
     private func buildIndex() {
         guard let root else {
-            index = nil
             rows = []
             return
         }
@@ -319,35 +338,43 @@ public final class FilePickerPresenter: ObservableObject {
         let canonical = FilePaths.canonical(root)
         let held = corpora[canonical]
 
-        // The rows are deliberately left alone when there is no held index. What
+        // The rows are deliberately left alone when there is nothing held. What
         // is showing at this moment is the closed-and-recent list `present()`
         // offered before the walk started — the host's own history, which owes
         // the corpus nothing — and clearing it made a reader watch a tree be
         // indexed before they could reopen the file they just closed.
-        index = held?.index
-        corpusWasTruncated = held?.index.wasTruncated ?? false
-        indexedCount = held?.index.items.count ?? 0
-        // Cleared before a walk starts, so batches accumulate onto nothing
-        // rather than onto the tree that was showing a moment ago.
-        if held == nil { index = nil }
+        //
+        // Whatever is held is adopted as it stands, complete or partway. A
+        // partial corpus is a usable one: it is the shallow end of the tree,
+        // which is where the file they want usually is.
+        corpusWasTruncated = held?.wasTruncated ?? false
+        indexedCount = held?.items.count ?? 0
 
-        // Only claimed while there is genuinely nothing to rank against. A
-        // refresh behind a usable index is not something to report — it would put
-        // "indexing…" in the corner every time the picker opened.
-        isIndexing = index == nil
+        let walking = walksInFlight.contains(canonical)
+        // Reported while a walk is running, or while there is nothing at all to
+        // rank against. A *refresh* behind a complete corpus is not reported —
+        // that would put "indexing…" in the corner on every open.
+        isIndexing = walking || held == nil
 
-        // Nothing to do: a usable index that is not stale yet.
-        if let held, Date().timeIntervalSince(held.builtAt) < Self.refreshWindow
-        {
+        // Already being walked. Two opens must not become two enumerations, and
+        // the one in flight is still filling the corpus this just adopted.
+        guard !walking else {
             refreshRows()
             return
         }
 
-        // Already being walked. Two opens must not become two enumerations.
-        guard !walksInFlight.contains(canonical) else {
+        // Already walked. Kept as it is, for as long as the process lives.
+        if held?.completedAt != nil {
             refreshRows()
             return
         }
+
+        // Starting over for this root: a fresh walk accumulates from nothing
+        // rather than onto a corpus that may no longer describe the tree.
+        corpora[canonical] = Corpus(
+            root: root, items: [], wasTruncated: false, completedAt: nil
+        )
+        indexedCount = 0
         walksInFlight.insert(canonical)
 
         let target = root
@@ -369,7 +396,7 @@ public final class FilePickerPresenter: ObservableObject {
                     skipping: skipping,
                     onBatch: { batch in
                         Task { @MainActor [weak self] in
-                            self?.absorb(batch, of: target)
+                            self?.absorb(batch, canonical: canonical)
                         }
                     }
                 )
@@ -382,11 +409,10 @@ public final class FilePickerPresenter: ObservableObject {
             // walked, and throwing it away would make the trip back expensive
             // again. Keyed by the walk's own resolved root, which is canonical by
             // construction.
-            remember(built)
+            complete(built, at: canonical)
 
             // Only shown if it is still the tree on screen.
             guard target.path == self.root?.path else { return }
-            index = built
             corpusWasTruncated = built.wasTruncated
             indexedCount = built.items.count
             isIndexing = false
@@ -394,29 +420,60 @@ public final class FilePickerPresenter: ObservableObject {
         }
     }
 
+    /// Drop finished trees, oldest first, until the budget is met.
+    ///
+    /// Partials are never dropped: one is being filled right now, and dropping it
+    /// would restart the walk it belongs to — and never the tree just walked,
+    /// which is the one the reader is most likely to ask for next.
+    private func evictUntilWithinBudget(keeping: String) {
+        func total() -> Int {
+            corpora.values.reduce(0) { $0 + $1.items.count }
+        }
+        while total() > Self.itemBudget {
+            let evictable = corpora.filter {
+                $0.value.completedAt != nil && $0.key != keeping
+            }
+            guard
+                let oldest = evictable.min(by: {
+                    ($0.value.completedAt ?? .distantPast)
+                        < ($1.value.completedAt ?? .distantPast)
+                })
+            else { return }
+            corpora[oldest.key] = nil
+        }
+    }
+
     /// Take one batch from a walk in progress.
     ///
-    /// Appended to whatever is already showing for this root, so the ranked list
-    /// widens as the tree is read. Ignored once the reader has moved to another
-    /// tree — a batch is only meaningful for the root it was walked under, and
-    /// the walk that produced it is finishing into the cache anyway.
-    private func absorb(_ batch: [FileTreeIndex.Item], of target: URL) {
-        guard target.path == root?.path else { return }
+    /// Always written into the corpus for the tree it came from, whatever the
+    /// reader is looking at now. A walk keeps going once started and keeps
+    /// filling its own tree — so a reader who re-roots mid-walk and comes back
+    /// finds it further along rather than starting again, and one who closes the
+    /// picker and reopens it finds the same.
+    ///
+    /// Appended in place, which is why the items live here rather than inside a
+    /// `FileTreeIndex`: handing the array to a struct per batch would copy the
+    /// whole corpus on the next append, and at a hundred batches that is the
+    /// walk's own cost again several times over.
+    private func absorb(_ batch: [FileTreeIndex.Item], canonical: String) {
+        guard corpora[canonical] != nil else { return }
+        corpora[canonical]?.items.append(contentsOf: batch)
 
-        let combined = (index?.items ?? []) + batch
-        index = FileTreeIndex(
-            root: target, items: combined, wasTruncated: false
-        )
-        indexedCount = combined.count
+        // Only what the reader is looking at moves on screen.
+        guard let root, FilePaths.canonical(root) == canonical else { return }
+        indexedCount = corpora[canonical]?.items.count ?? 0
         refreshRows()
     }
 
-    /// Hold a walked tree, evicting the oldest once there are too many.
-    private func remember(_ built: FileTreeIndex) {
-        corpora[built.root.path] = Corpus(index: built, builtAt: Date())
-        guard corpora.count > Self.corpusLimit else { return }
-        let oldest = corpora.min { $0.value.builtAt < $1.value.builtAt }
-        if let key = oldest?.key { corpora[key] = nil }
+    /// A walk finished. Mark its corpus complete and evict the oldest if needed.
+    private func complete(_ built: FileTreeIndex, at canonical: String) {
+        corpora[canonical] = Corpus(
+            root: built.root,
+            items: built.items,
+            wasTruncated: built.wasTruncated,
+            completedAt: Date()
+        )
+        evictUntilWithinBudget(keeping: canonical)
     }
 
     private func refreshRows() {
@@ -441,7 +498,10 @@ public final class FilePickerPresenter: ObservableObject {
             return
         }
 
-        guard let items = index?.items else { return }
+        guard let root,
+            let items = corpora[FilePaths.canonical(root)]?.items,
+            !items.isEmpty
+        else { return }
         // Off the main actor, and cancelled per keystroke: a tree large enough
         // to be worth an index is large enough that scoring it would be felt.
         filterTask = Task {

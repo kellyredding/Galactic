@@ -335,13 +335,38 @@ final class FilePickerPresenterTests: XCTestCase {
 
         presenter.present()
 
-        // The claim is about having nothing to rank against, and there is
-        // something — so it is not made, even though a refresh is running.
-        XCTAssertFalse(
-            presenter.isIndexing, "a refresh behind a usable index is not news"
-        )
+        XCTAssertFalse(presenter.isIndexing, "the tree is already walked")
+        // The count is the bug this pins. Reopening used to adopt nothing and
+        // report zero while the corpus sat in the cache untouched, which read as
+        // the walk restarting.
+        XCTAssertEqual(presenter.indexedCount, 1)
         XCTAssertEqual(
             presenter.rows.count, 0, "an empty query still offers history only"
+        )
+    }
+
+    /// A finished tree is never re-walked, whatever the reader does next. The
+    /// staleness window this replaced meant coming back to a root after ten
+    /// minutes replaced a complete corpus with one counting up from zero.
+    @MainActor
+    func testAFinishedTreeIsNotWalkedAgainOnALaterOpen() async throws {
+        try write("a.swift")
+        let presenter = FilePickerPresenter()
+        presenter.rootProvider = { self.dir }
+
+        presenter.present()
+        try await waitForIndex(presenter)
+        presenter.dismiss()
+
+        // A file appearing after the walk is deliberately not found: noticing
+        // that is its own effort. What matters here is that nothing restarts.
+        try write("b.swift")
+        presenter.present()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertFalse(presenter.isIndexing)
+        XCTAssertEqual(
+            presenter.indexedCount, 1, "the corpus was kept, not rebuilt"
         )
     }
 
