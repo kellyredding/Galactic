@@ -205,6 +205,18 @@ public struct FileTreeIndex: Equatable {
             else { continue }
 
             for entry in entries {
+                // Directory-ness is read from the values the parent's own read
+                // pre-fetched, so this asks nothing of the child: one bulk
+                // request per directory answers for all of its entries. That is
+                // what lets the name check sit *after* this one without a skipped
+                // directory ever being touched — `node_modules` is identified
+                // from its parent's listing and never opened, and neither is a
+                // protected directory the host has excluded.
+                //
+                // The order matters the other way round, too: the skip list names
+                // directories not to descend into, not names to blacklist, so a
+                // *file* called `build` is still a file. Checking the name first
+                // would have quietly dropped it.
                 let values = try? entry.resourceValues(forKeys: [
                     .isDirectoryKey, .isSymbolicLinkKey,
                 ])

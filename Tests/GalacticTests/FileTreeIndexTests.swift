@@ -296,4 +296,5 @@ final class FileTreeIndexTests: XCTestCase {
         XCTAssertEqual(built.items.count, 7)
         XCTAssertEqual(batched, 7)
     }
+
 }
