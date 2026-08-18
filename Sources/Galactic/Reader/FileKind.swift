@@ -263,6 +263,12 @@ public enum FileKind: Equatable, Sendable {
         "yml": "yaml", "yaml": "yaml",
         "json": "json", "jsonl": "json",
         "toml": "ini",
+        // Added once the renderer stopped auto-detecting: markdown is the most
+        // read extension in either app and was falling through to nil, which
+        // used to mean "guess" and now means "leave alone" — so naming it is the
+        // difference between headings and links being marked up and a document
+        // rendering flat.
+        "md": "markdown", "markdown": "markdown",
         "xml": "xml", "html": "xml",
         "htm": "xml", "css": "css",
         "scss": "scss", "less": "less",

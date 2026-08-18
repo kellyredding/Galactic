@@ -36,10 +36,13 @@ public enum SourceRenderer {
                 + "</td></tr>\n"
         }
 
+        // The class the *lines* carry, not the table. See the script below for
+        // why that distinction was the whole bug.
         let langClass =
             language != nil
             ? "language-\(language!)"
             : "nohighlight"
+        let jsLanguage = language ?? ""
 
         return ReaderDocument.render(
             theme: theme,
@@ -115,9 +118,28 @@ public enum SourceRenderer {
             // rows it anchors to, and highlighting rewrites their contents.
             scriptsBeforeCards: """
             \(hjsContent)
-            if (typeof hljs !== 'undefined') {
+            // The language goes on each line before it is highlighted, and that
+            // is the fix rather than a tidy-up: `highlightElement` reads the
+            // language from the element's *own* class and ignores its ancestors.
+            // The class was on the table, so every cell arrived without one and
+            // hljs auto-detected each line independently — guessing per line,
+            // over a table where a line is often three words. A markdown file
+            // came out with "for" and "with" coloured as keywords, and a plain
+            // text file was highlighted as whatever it resembled, because
+            // `nohighlight` on the table was never read either.
+            //
+            // `getLanguage` is the second half. Naming a language the bundle
+            // does not register is worse than naming none, since hljs answers an
+            // unknown name by auto-detecting — the exact behaviour this is
+            // getting away from. No language, or one that is not registered,
+            // means the source is left alone.
+            var galaxyLang = "\(jsLanguage)";
+            if (typeof hljs !== 'undefined'
+                && galaxyLang
+                && hljs.getLanguage(galaxyLang)) {
                 document.querySelectorAll('.line-content')
                     .forEach(function(el) {
+                        el.classList.add('language-' + galaxyLang);
                         hljs.highlightElement(el);
                     });
             }

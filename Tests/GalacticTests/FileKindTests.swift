@@ -403,4 +403,23 @@ final class FileKindTests: XCTestCase {
             )
         }
     }
+
+    /// Markdown is the most-read extension in either app and had no highlight
+    /// language, which used to mean "auto-detect" and now means "leave alone" —
+    /// so its absence went from invisible to visible.
+    func testMarkdownNamesAHighlightLanguage() {
+        XCTAssertEqual(
+            FileKind.highlightLanguage(forFilename: "README.md"), "markdown"
+        )
+        XCTAssertEqual(
+            FileKind.highlightLanguage(forFilename: "notes.markdown"),
+            "markdown"
+        )
+    }
+
+    /// Plain text names none, and that is the answer rather than a gap: the
+    /// renderer leaves an unnamed language alone instead of guessing at one.
+    func testPlainTextNamesNoLanguage() {
+        XCTAssertNil(FileKind.highlightLanguage(forFilename: "prompts.txt"))
+    }
 }
