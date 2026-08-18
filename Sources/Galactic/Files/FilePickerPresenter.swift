@@ -112,8 +112,21 @@ public final class FilePickerPresenter: ObservableObject {
     /// for why each part of it is what it is.
     let focus = ModalFocusCapture()
 
-    /// The corpus, walked once per open.
+    /// The corpus. Kept between opens, and rebuilt in the background.
     private var index: FileTreeIndex?
+
+    /// Which root the held index describes, **canonically**.
+    ///
+    /// The index is only reusable for the tree it was walked under, and comparing
+    /// paths is how that is known — a reader who re-roots must not rank one
+    /// keystroke against the tree they just left.
+    ///
+    /// Canonical on both sides, which is not a formality: the walk resolves its
+    /// root, so an index built for `/var/folders/…` reports itself as
+    /// `/private/var/folders/…`. Compared against the unresolved path a host
+    /// hands over, every single open looked like a new root and threw the index
+    /// away — the same trap `FilePaths` was written for, arriving one layer up.
+    private var indexedRoot: String?
 
     /// Cancelled on every keystroke, so a slow filter over a large tree cannot
     /// land after the query it was answering has been typed past.
@@ -256,13 +269,42 @@ public final class FilePickerPresenter: ObservableObject {
 
     // MARK: - The corpus
 
+    /// Walk the root, reusing what is already held for it.
+    ///
+    /// **The index survives an open**, which a half-million-file ceiling makes
+    /// mandatory rather than merely nice: walking a large tree takes seconds, and
+    /// a reader pressing ⌘T is asking for a field to type into, not for a
+    /// filesystem to be enumerated. So a held index for the same root is shown
+    /// immediately and refreshed underneath — the reader ranks against what was
+    /// there a moment ago while the walk catches up, and a file created since
+    /// appears when it lands.
+    ///
+    /// A *different* root drops the index first. Showing yesterday's tree under
+    /// today's heading would be worse than showing nothing, because nothing is
+    /// obviously nothing.
     private func buildIndex() {
         guard let root else {
             index = nil
+            indexedRoot = nil
             rows = []
             return
         }
-        isIndexing = true
+
+        if indexedRoot != FilePaths.canonical(root) {
+            index = nil
+            indexedRoot = nil
+            // The rows are deliberately left alone. What is showing at this
+            // moment is the closed-and-recent list `present()` offered before
+            // the walk started — the host's own history, which owes the corpus
+            // nothing — and clearing it here made a reader watch a tree be
+            // indexed before they could reopen the file they just closed. That
+            // ordering is the whole reason the empty list is built first.
+        }
+
+        // Only claimed while there is genuinely nothing to rank against. A
+        // refresh behind a usable index is not something to report — it would put
+        // "indexing…" in the corner every time the picker opened.
+        isIndexing = index == nil
         let target = root
         // Resolved here rather than inside the detached task, so the provider is
         // called on the main actor with the rest of the host's state.
@@ -272,7 +314,13 @@ public final class FilePickerPresenter: ObservableObject {
                 FileTreeIndex.build(root: target, skipping: skipping)
             }.value
             guard !Task.isCancelled else { return }
+            // Discarded if the reader has re-rooted while this was walking: it
+            // describes a tree nobody is looking at any more.
+            guard target.path == self.root?.path else { return }
             index = built
+            // The walk's own resolved root, which is the canonical form by
+            // construction.
+            indexedRoot = built.root.path
             corpusWasTruncated = built.wasTruncated
             indexedCount = built.items.count
             isIndexing = false

@@ -298,4 +298,96 @@ final class FilePickerPresenterTests: XCTestCase {
 
         XCTAssertTrue(GalacticModals.isClaimingKeyboard)
     }
+
+    // MARK: - Keeping the index
+
+    /// Poll rather than sleep a fixed time: the walk is a detached task and its
+    /// duration is the filesystem's business, not this test's.
+    @MainActor
+    private func waitForIndex(_ presenter: FilePickerPresenter) async throws {
+        for _ in 0..<400 {
+            if presenter.indexedCount > 0 { return }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTFail("the index never landed")
+    }
+
+    @discardableResult
+    private func write(_ name: String) throws -> URL {
+        let url = dir.appendingPathComponent(name)
+        try Data("x".utf8).write(to: url)
+        return url
+    }
+
+    /// A half-million-file ceiling is only usable if the walk does not happen
+    /// while a reader waits for a field, so a second open of the same root ranks
+    /// against what is already held.
+    @MainActor
+    func testASecondOpenOfTheSameRootDoesNotClaimToBeIndexing() async throws {
+        try write("a.swift")
+        let presenter = FilePickerPresenter()
+        presenter.rootProvider = { self.dir }
+
+        presenter.present()
+        try await waitForIndex(presenter)
+        XCTAssertFalse(presenter.isIndexing)
+        presenter.dismiss()
+
+        presenter.present()
+
+        // The claim is about having nothing to rank against, and there is
+        // something — so it is not made, even though a refresh is running.
+        XCTAssertFalse(
+            presenter.isIndexing, "a refresh behind a usable index is not news"
+        )
+        XCTAssertEqual(
+            presenter.rows.count, 0, "an empty query still offers history only"
+        )
+    }
+
+    /// The held index is only good for the tree it was walked under. Ranking one
+    /// keystroke against the tree just left would be worse than showing nothing,
+    /// because nothing is obviously nothing.
+    @MainActor
+    func testADifferentRootHasNothingHeldForIt() async throws {
+        try write("a.swift")
+        let other = dir.appendingPathComponent("sub")
+        try FileManager.default.createDirectory(
+            at: other, withIntermediateDirectories: true
+        )
+        try Data("x".utf8).write(to: other.appendingPathComponent("inner.rb"))
+
+        let presenter = FilePickerPresenter()
+        presenter.rootProvider = { self.dir }
+        presenter.present()
+        try await waitForIndex(presenter)
+        presenter.dismiss()
+
+        presenter.rootProvider = { other }
+        presenter.present()
+
+        XCTAssertTrue(
+            presenter.isIndexing, "a different root has nothing held for it"
+        )
+    }
+
+    /// What the held index is for: a query answered from it without a walk.
+    @MainActor
+    func testAHeldIndexAnswersAQueryOnTheNextOpen() async throws {
+        try write("user_model.swift")
+        let presenter = FilePickerPresenter()
+        presenter.rootProvider = { self.dir }
+        presenter.present()
+        try await waitForIndex(presenter)
+        presenter.dismiss()
+
+        presenter.present()
+        presenter.query = "usermodel"
+        // One turn for the filter task, which is off the main actor.
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertEqual(
+            presenter.rows.map(\.relativePath), ["user_model.swift"]
+        )
+    }
 }

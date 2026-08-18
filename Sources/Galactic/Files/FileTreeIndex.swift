@@ -15,19 +15,37 @@ import Foundation
 /// one file, so changing it is an edit rather than a redesign.
 public struct FileTreeIndex: Equatable {
 
-    /// One indexed file: its URL, and its path pre-lowercased for matching.
+    /// One indexed file: the part of its path below the root, and that path
+    /// pre-lowercased for matching.
     ///
     /// Lowercased once here rather than per keystroke. `FuzzyMatch` says
     /// outright that a large corpus wants preparation instead of repeated work,
     /// and a repository is a large corpus — this is the half of that preparation
     /// which belongs to whoever owns the files.
+    ///
+    /// ### Two strings, not four
+    ///
+    /// It used to store the URL and the absolute path as well, and they are the
+    /// two largest of the four: the absolute path is the longest string, and a
+    /// `URL` is a heap allocation of its own. At a hundred thousand files that is
+    /// most of the index's memory spent on values derivable from the two that are
+    /// left, so both are computed now and the root is carried instead — a struct
+    /// field sharing one instance across every item rather than an allocation per
+    /// item.
+    ///
+    /// This is what makes a large ceiling affordable; see `defaultResultCap`.
     public struct Item: Equatable {
-        public let url: URL
-        public let path: String
+        /// The root this item was walked under, so an absolute path can be
+        /// rebuilt without storing one. Every item is a descendant of it by
+        /// construction — the walk cannot produce anything else — which is what
+        /// makes the reconstruction below exact rather than a guess.
+        let root: URL
+
         /// Path relative to the index's root, which is what a picker shows and
         /// therefore what it matches against — highlight offsets have to index
         /// the string on screen.
         public let relativePath: String
+
         /// `relativePath`, lowercased once at build time.
         ///
         /// Not for the matcher, which lowercases its own candidate. This is for
@@ -38,9 +56,15 @@ public struct FileTreeIndex: Equatable {
         /// that keeps up with typing and one that does not.
         public let lowercasedRelativePath: String
 
+        /// Rebuilt by concatenation rather than `appendingPathComponent`, which
+        /// treats its argument as one component and would have to be trusted not
+        /// to escape the separators in a multi-segment relative path.
+        public var path: String { root.path + "/" + relativePath }
+
+        public var url: URL { URL(fileURLWithPath: path) }
+
         init(url: URL, root: URL) {
-            self.url = url
-            path = url.path
+            self.root = root
             let relative = FileTabLabel.relativeOrAbbreviated(url, root: root)
             relativePath = relative
             lowercasedRelativePath = relative.lowercased()
@@ -83,6 +107,24 @@ public struct FileTreeIndex: Equatable {
         ".cache", ".parcel-cache", ".turbo", "coverage", ".idea",
     ]
 
+    /// How many files a walk indexes before it stops.
+    ///
+    /// Deliberately far past any real tree. The ceiling exists to bound a
+    /// pathological case — a root pointed at a filesystem, a directory of
+    /// generated files — and not to ration a reader's own home directory, which
+    /// the first ceiling did: fifty thousand was reached by an ordinary home and
+    /// the picker then ranked against a fraction of it, saying so in a corner.
+    ///
+    /// Affordable because an item is two strings and a shared root rather than
+    /// four strings and a URL. At this ceiling the index costs on the order of
+    /// eighty megabytes, and only for someone who actually has half a million
+    /// files under their root; a hundred thousand costs a sixth of that.
+    ///
+    /// A large ceiling is only usable alongside the presenter keeping the index
+    /// between opens — a walk this size is not something to do while a reader
+    /// waits for a field.
+    public static let defaultResultCap = 500_000
+
     /// Walk a root and index what is under it.
     ///
     /// - Parameters:
@@ -94,7 +136,7 @@ public struct FileTreeIndex: Equatable {
         root: URL,
         skipping skipList: Set<String> = defaultSkipList,
         depthCap: Int = 12,
-        resultCap: Int = 50_000
+        resultCap: Int = defaultResultCap
     ) -> FileTreeIndex {
         // Resolved before anything is walked, and `root` here is the resolved
         // one from this point on.
