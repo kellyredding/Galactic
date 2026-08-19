@@ -386,6 +386,163 @@ extension FileIndexLiveTests {
     }
 }
 
+// MARK: - Reuse that does not depend on what was opened first
+
+extension FileIndexLiveTests {
+
+    /// Index a root, then open a subtree of it in a store that has mapped
+    /// nothing — the shape of a launch whose first picker names a subdirectory.
+    ///
+    /// The reuse rule used to consult only what the process had already mapped,
+    /// so the answer depended on which root the host happened to open first.
+    /// Opening the subtree first found nothing above it and walked the whole
+    /// thing again, beside an index on disk that already held every entry.
+    func testASubtreeOpenedBeforeItsRootStillReusesTheIndex() async throws {
+        try touch("projects/deep/nested/target_file.swift")
+        try touch("elsewhere/other.swift")
+        await indexRoot()
+
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        let generationsBefore = catalog.shards(forRoot: canonical)
+            .map { "\($0.name):\($0.generation)" }.sorted()
+
+        // A new process: the index is on disk, nothing is mapped.
+        FileCorpusStore.shared.forgetAll()
+
+        let subroot = root.appendingPathComponent("projects")
+        let subCanonical = FilePaths.canonical(subroot)
+        await indexSubtree(subroot)
+
+        XCTAssertTrue(
+            catalog.shards(forRoot: subCanonical).isEmpty,
+            "the subtree was walked as a root of its own"
+        )
+        XCTAssertEqual(
+            catalog.shards(forRoot: canonical)
+                .map { "\($0.name):\($0.generation)" }.sorted(),
+            generationsBefore,
+            "something was rewalked"
+        )
+        let rows = FilePickerRanking.matches(
+            FileCorpusStore.shared.slices(forCanonicalRoot: subCanonical),
+            query: "targetfile", relativeTo: subCanonical
+        )
+        XCTAssertEqual(
+            rows.map(\.relativePath), ["deep/nested/target_file.swift"],
+            "the subtree is covered but answers nothing"
+        )
+    }
+
+    /// A subtree that already has an index of its own gives it up once a wider
+    /// root is answering for it. Nothing sweeps a root served from above, so
+    /// rows left behind would age without bound while staying the nearest — and
+    /// therefore preferred — match for everything beneath them.
+    func testASubtreeIndexOfItsOwnIsRetiredOnceARootCoversIt() async throws {
+        try touch("projects/deep/target_file.swift")
+        let subroot = root.appendingPathComponent("projects")
+        let subCanonical = FilePaths.canonical(subroot)
+
+        // The duplicate: the subtree indexed alone, then the root above it.
+        await indexSubtree(subroot)
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        XCTAssertFalse(
+            catalog.shards(forRoot: subCanonical).isEmpty,
+            "the subtree never got an index of its own, so there is nothing to retire"
+        )
+        await indexRoot()
+
+        FileCorpusStore.shared.forgetAll()
+        await indexSubtree(subroot)
+
+        XCTAssertTrue(
+            catalog.shards(forRoot: subCanonical).isEmpty,
+            "the redundant shards outlived the root that replaced them"
+        )
+        XCTAssertFalse(
+            catalog.roots().contains(subCanonical),
+            "the retired root is still a candidate to serve its own subtree"
+        )
+    }
+
+    /// Containment is not coverage. A root that skips the subtree contains its
+    /// path and holds none of its entries, and serving from it would answer
+    /// every query with nothing — so the subtree keeps its own index.
+    func testARootThatSkipsTheSubtreeDoesNotCoverIt() async throws {
+        try touch("projects/deep/target_file.swift")
+        try touch("elsewhere/other.swift")
+        let subroot = root.appendingPathComponent("projects")
+        let subCanonical = FilePaths.canonical(subroot)
+
+        await indexSubtree(subroot)
+        await indexRoot(skipping: ["projects"])
+
+        FileCorpusStore.shared.forgetAll()
+        await indexSubtree(subroot)
+
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        XCTAssertFalse(
+            catalog.shards(forRoot: subCanonical).isEmpty,
+            "the only index holding the subtree was discarded"
+        )
+        let rows = FilePickerRanking.matches(
+            FileCorpusStore.shared.slices(forCanonicalRoot: subCanonical),
+            query: "targetfile", relativeTo: subCanonical
+        )
+        XCTAssertEqual(
+            rows.map(\.relativePath), ["deep/target_file.swift"],
+            "the subtree is served by a root that skipped it"
+        )
+    }
+
+    /// The same retirement, reached the other way: the wider root is already
+    /// mapped when the subtree is opened. Left only on the disk-lookup path,
+    /// stale rows would survive every launch that happened to open the wider
+    /// root first, and still be the nearest match for anything below them.
+    func testARedundantSubtreeIndexIsRetiredWhenItsRootIsAlreadyMapped()
+        async throws
+    {
+        try touch("projects/deep/target_file.swift")
+        let subroot = root.appendingPathComponent("projects")
+        let subCanonical = FilePaths.canonical(subroot)
+
+        await indexSubtree(subroot)
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        XCTAssertFalse(
+            catalog.shards(forRoot: subCanonical).isEmpty,
+            "nothing to retire, so the test proves nothing"
+        )
+
+        // A new process that maps the wider root before the subtree is asked
+        // for — the ordering the disk lookup never sees.
+        FileCorpusStore.shared.forgetAll()
+        await indexRoot()
+        await indexSubtree(subroot)
+
+        XCTAssertTrue(
+            catalog.shards(forRoot: subCanonical).isEmpty,
+            "the redundant shards survive whenever the root is mapped first"
+        )
+        XCTAssertFalse(
+            catalog.roots().contains(subCanonical),
+            "the retired root is still a candidate"
+        )
+    }
+
+    private func indexSubtree(_ subroot: URL) async {
+        await withCheckedContinuation { continuation in
+            var resumed = false
+            FileCorpusStore.shared.index(
+                root: subroot, skipping: [],
+                onFinished: {
+                    guard !resumed else { return }
+                    resumed = true
+                    continuation.resume()
+                }
+            )
+        }
+    }
+}
+
 extension FileIndexLiveTests {
 
     /// A directory going away takes everything under it, and the file system

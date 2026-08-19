@@ -221,6 +221,35 @@ public final class FileIndexCatalog: @unchecked Sendable {
         }
     }
 
+    /// Drop a root and every shard recorded under it.
+    ///
+    /// A root that a wider one already contains has to stop being a candidate
+    /// here, not merely stop being walked. Nothing sweeps it once it is served
+    /// from above, so leaving its rows behind leaves an index that ages without
+    /// bound and still answers for the subtree it names — the stalest possible
+    /// source, preferred over the fresh one because it is the nearer match.
+    ///
+    /// The shard files are left on disk. They are unreachable without these
+    /// rows, and reclaiming them is the business of a sweep over the whole
+    /// index rather than of whichever root happened to notice.
+    public func forget(root: String) {
+        queue.sync {
+            for sql in [
+                "DELETE FROM shards WHERE root_path = ?",
+                "DELETE FROM roots WHERE path = ?",
+            ] {
+                var statement: OpaquePointer?
+                guard
+                    sqlite3_prepare_v2(database, sql, -1, &statement, nil)
+                        == SQLITE_OK
+                else { continue }
+                defer { sqlite3_finalize(statement) }
+                bindText(statement, 1, root)
+                sqlite3_step(statement)
+            }
+        }
+    }
+
     // MARK: - Plumbing
 
     private func execute(_ sql: String) {

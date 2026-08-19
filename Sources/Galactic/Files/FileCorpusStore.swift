@@ -142,9 +142,81 @@ public final class FileCorpusStore {
             .filter { candidate in
                 candidate != root
                     && FilePaths.relative(root, under: candidate) != nil
-                    && roots[candidate]?.shards.isEmpty == false
+                    && holdsEntries(under: root, in: candidate)
             }
             .max { $0.count < $1.count }
+    }
+
+    /// Whether a mapped root actually holds entries beneath `root`.
+    ///
+    /// Sitting above a path lexically is not the same as having indexed it. A
+    /// skip list is the everyday way the two come apart: a root that skips
+    /// `projects` contains that path and holds nothing under it, and treating
+    /// it as covering means the subtree is served by an index that will answer
+    /// every query about it with nothing — while looking, from the outside,
+    /// exactly like a subtree that is genuinely empty.
+    private func holdsEntries(under root: String, in candidate: String) -> Bool {
+        guard let state = roots[candidate] else { return false }
+        return state.shards.values.contains {
+            !$0.range(underCanonical: root).isEmpty
+        }
+    }
+
+    /// A root the index on disk already covers, which this process has yet to
+    /// map.
+    ///
+    /// `coveringRoot(for:)` can only answer for roots this process has loaded,
+    /// and a host picks its root before anything is loaded — so whichever root
+    /// was opened first decided whether the index got reused. Opening a subtree
+    /// first found nothing above it, made itself a root, and walked four hundred
+    /// thousand entries that an index of the home directory on disk already
+    /// held: fifteen seconds of walking on the path a keystroke travels, and a
+    /// second copy of those entries kept fresh forever afterwards.
+    ///
+    /// Only unmapped roots are candidates. The loaded ones are the other
+    /// method's answer, and excluding them is also what stops a root whose
+    /// shards turn out to be unreadable from being proposed again on the retry.
+    private func persistedCoveringRoot(for root: String) -> String? {
+        guard let catalog else { return nil }
+        return catalog.roots()
+            .filter { candidate in
+                candidate != root
+                    && roots[candidate] == nil
+                    && FilePaths.relative(root, under: candidate) != nil
+                    && catalog.shards(forRoot: candidate).contains { !$0.dirty }
+            }
+            .max { $0.count < $1.count }
+    }
+
+    /// Drop a subtree's own index once a wider root is answering for it.
+    ///
+    /// Asked after the wider root is mapped rather than before, and only when
+    /// it produced entries for this subtree. A skip list can leave a covering
+    /// root genuinely empty here, and discarding the only index that held the
+    /// subtree on the strength of a containment test alone would answer a
+    /// keystroke with nothing.
+    ///
+    /// Left behind, these rows are worse than redundant. Nothing sweeps a root
+    /// that is served from above, so they age without bound while remaining the
+    /// nearest match for anything beneath them — preferred over the fresh index
+    /// precisely because they are closer.
+    private func retireIfRedundant(coveredRoot root: String, by covering: String) {
+        guard let catalog, servedBy[root] == covering else { return }
+        let shards = catalog.shards(forRoot: root)
+        guard !shards.isEmpty, !slices(forCanonicalRoot: root).isEmpty else {
+            return
+        }
+        catalog.forget(root: root)
+        log.record(
+            "index",
+            [
+                ("root", root),
+                ("event", "retired"),
+                ("by", covering),
+                ("shards", "\(shards.count)"),
+                ("entries", "\(shards.reduce(0) { $0 + $1.entryCount })"),
+            ]
+        )
     }
 
     public func isWalking(_ root: String) -> Bool {
@@ -201,7 +273,42 @@ public final class FileCorpusStore {
                     ("walked", "no"),
                 ]
             )
+            retireIfRedundant(coveredRoot: canonical, by: covering)
             onFinished()
+            return
+        }
+
+        // The same answer, but from the index rather than from what this
+        // process happens to have mapped. Map the wider root and start over:
+        // the branch above then applies, so there is one place that decides
+        // what covering means. Mapping a home directory is milliseconds
+        // against the seconds walking this subtree would cost, and the retry
+        // cannot loop, because the root it just mapped stops being a
+        // candidate whether or not it produced shards.
+        if roots[canonical] == nil,
+            let covering = persistedCoveringRoot(for: canonical)
+        {
+            log.record(
+                "index",
+                [
+                    ("root", canonical),
+                    ("event", "mapping-covering"),
+                    ("by", covering),
+                ]
+            )
+            index(
+                root: URL(fileURLWithPath: covering),
+                skipping: skipList,
+                onProgress: onProgress
+            ) { [self] in
+                index(
+                    root: root,
+                    skipping: skipList,
+                    onProgress: onProgress,
+                    onFinished: onFinished
+                )
+                retireIfRedundant(coveredRoot: canonical, by: covering)
+            }
             return
         }
         if roots[canonical] == nil {
