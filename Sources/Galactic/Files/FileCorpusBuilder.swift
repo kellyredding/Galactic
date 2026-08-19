@@ -180,6 +180,11 @@ public enum FileCorpusBuilder {
         public let corpus: FileCorpus
         /// Directories inside the shard that could not be opened.
         public let refusedDirectories: [String]
+        /// Names from the skip list this walk actually met.
+        ///
+        /// The set is what makes un-skipping precise: a name nothing encountered
+        /// cannot change this shard, so the shard needs no rewalk.
+        public let encounteredSkips: Set<String>
         /// Whether the shard's own top directory was refused.
         ///
         /// The distinction that matters when publishing: a refused subdirectory
@@ -200,6 +205,7 @@ public enum FileCorpusBuilder {
         let rootPath = FilePaths.canonical(root)
         let top = shard.isEmpty ? rootPath : rootPath + "/" + shard
         var refused: [String] = []
+        var skipped: Set<String> = []
         let corpus = build(
             root: root,
             subtree: shard,
@@ -209,11 +215,13 @@ public enum FileCorpusBuilder {
             skipping: skipList,
             isCancelled: isCancelled,
             onProgress: onProgress,
-            onRefused: { refused.append($0) }
+            onRefused: { refused.append($0) },
+            onSkipped: { skipped.insert($0) }
         )
         return ShardWalk(
             corpus: corpus,
             refusedDirectories: refused,
+            encounteredSkips: skipped,
             rootWasRefused: refused.contains(top)
         )
     }
@@ -242,7 +250,8 @@ public enum FileCorpusBuilder {
         skipping skipList: Set<String> = defaultSkipList,
         isCancelled: () -> Bool = { false },
         onProgress: (Int) -> Void = { _ in },
-        onRefused: (String) -> Void = { _ in }
+        onRefused: (String) -> Void = { _ in },
+        onSkipped: (String) -> Void = { _ in }
     ) -> FileCorpus {
         // Per thread, before anything is enumerated. Enumeration itself is a
         // materialisation trigger, so this cannot wait until the first file.
@@ -345,7 +354,15 @@ public enum FileCorpusBuilder {
                     // this size never pay for one.
                     if isDirectory || isLink {
                         if entry.flags & UInt32(SF_FIRMLINK) != 0 { continue }
-                        if skipList.contains(String(decoding: name, as: UTF8.self)) {
+                        let text = String(decoding: name, as: UTF8.self)
+                        if skipList.contains(text) {
+                            // Reported, because un-skipping a name later has to
+                            // know which shards it would change. Without this,
+                            // the only safe answer is "every shard", which for
+                            // one entry means rewalking a whole home directory
+                            // and asking about six protected directories to
+                            // discover that nothing moved.
+                            onSkipped(text)
                             continue
                         }
                     }

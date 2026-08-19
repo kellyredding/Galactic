@@ -56,6 +56,14 @@ public final class FileCorpusStore {
         var shards: [String: FileCorpus] = [:]
         /// Shard name → bitset of entries deleted since it was written.
         var removed: [String: [UInt64]] = [:]
+        /// Shard name → the generation this process has mapped.
+        ///
+        /// The generation is in the shard's filename, so a mapping names one
+        /// immutable version and never has to notice being replaced. That is
+        /// what makes replacement safe and also what makes it invisible: without
+        /// remembering which version is held, there is no way to ask whether a
+        /// newer one exists.
+        var generations: [String: UInt64] = [:]
         /// Files seen created since the last walk, by relative path.
         var added: [String: (modified: Date?, isDirectory: Bool)] = [:]
         /// `added`, encoded as a corpus so the matcher can scan it unchanged.
@@ -317,6 +325,9 @@ public final class FileCorpusStore {
                 ]
             )
             retireIfRedundant(coveredRoot: canonical, by: covering)
+            // Served from the wider root, so it is that root's mappings that
+            // have to be current.
+            revalidate(canonicalRoot: covering)
             onFinished()
             return
         }
@@ -358,6 +369,10 @@ public final class FileCorpusStore {
             roots[canonical] = RootState(url: root, skipListOverride: requestedSkipList)
         }
         guard roots[canonical]?.isLoaded != true else {
+            // Opening is the moment to ask whether what is mapped is still
+            // current. Another application may have published since, and a
+            // mapping never learns that on its own.
+            revalidate(canonicalRoot: canonical)
             onFinished()
             return
         }
@@ -375,6 +390,7 @@ public final class FileCorpusStore {
         )
 
         catalog?.adopt(root: canonical)
+        reclaimOrphanedShardDirectories()
         let mapped = loadPersistedShards(canonical: canonical)
         log.record(
             "load",
@@ -435,9 +451,80 @@ public final class FileCorpusStore {
                 continue
             }
             mapped[shard.name] = corpus
+            roots[canonical]?.generations[shard.name] = shard.generation
         }
         roots[canonical]?.shards = mapped
         return mapped
+    }
+
+    /// Bring mapped shards up to whatever the index now holds.
+    ///
+    /// A published generation is immutable and replacement is a rename, so a
+    /// reader mid-search is never disturbed — the inode outlives the unlink. That
+    /// is what makes two applications safe, and also what makes them diverge: if
+    /// one publishes generation five, the other keeps answering from four for the
+    /// life of its process. Not wrong, but two applications giving different
+    /// answers to the same query is what a user reports as a bug in one of them.
+    ///
+    /// Asked when a picker opens rather than on a timer or a notification. Per
+    /// keystroke would be absurd, and a push mechanism is machinery for something
+    /// a question at the right moment already answers.
+    ///
+    /// **Removal bits are dropped rather than carried.** They are indices into
+    /// the generation they were gathered against, and the same index means a
+    /// different entry in the next one — transferring them would mark unrelated
+    /// files deleted. So a deletion this process observed and the newer
+    /// generation predates can reappear until an event or a walk settles it. That
+    /// is a narrow window, and the alternative is silent corruption of results.
+    ///
+    /// **The shard is deliberately not marked dirty.** Two applications each
+    /// remapping and then requesting a rewalk is a loop: one publishes, the other
+    /// rebuilds and publishes, and so on without end. Remapping is the whole
+    /// response.
+    @discardableResult
+    public func revalidate(canonicalRoot root: String) -> [String] {
+        guard let catalog, roots[root] != nil else { return [] }
+        let directory = FileIndexPaths.shardDirectory(forCanonicalRoot: root)
+        let recorded = catalog.shards(forRoot: root)
+        var remapped: [String] = []
+
+        for shard in recorded where !shard.dirty {
+            guard roots[root]?.generations[shard.name] != shard.generation else {
+                continue
+            }
+            let url = FileCorpusFile.url(
+                shardDirectory: directory,
+                shard: FileIndexPaths.rootIdentifier(shard.name),
+                generation: shard.generation
+            )
+            guard let corpus = FileCorpus.load(from: url) else { continue }
+            roots[root]?.shards[shard.name] = corpus
+            roots[root]?.generations[shard.name] = shard.generation
+            roots[root]?.removed[shard.name] = nil
+            remapped.append(shard.name)
+        }
+
+        // A shard another application pruned has to go here too, or this process
+        // keeps offering files from a directory the index has stopped covering.
+        let live = Set(recorded.map(\.name))
+        for held in roots[root]?.shards.keys.filter({ !live.contains($0) }) ?? [] {
+            roots[root]?.shards[held] = nil
+            roots[root]?.removed[held] = nil
+            roots[root]?.generations[held] = nil
+            remapped.append(held)
+        }
+
+        if !remapped.isEmpty {
+            log.record(
+                "revalidate",
+                [
+                    ("root", root),
+                    ("shards", "\(remapped.count)"),
+                    ("names", remapped.sorted().prefix(6).joined(separator: ",")),
+                ]
+            )
+        }
+        return remapped
     }
 
     private func walkMissingShards(
@@ -529,6 +616,53 @@ public final class FileCorpusStore {
         if let resolved = state.resolvedSkipList { return resolved }
         return state.skipListOverride
             ?? FileCorpusBuilder.skipList(forRoot: state.url)
+    }
+
+    /// Delete shard directories no root in the catalog answers for.
+    ///
+    /// A root that is retired — because a wider one now covers it — keeps its
+    /// files: the rows are what make them reachable, and the root that noticed is
+    /// the wrong place to decide what another root still needs. So the decision
+    /// is made here instead, once, against the whole index, where every root is
+    /// visible at the same time.
+    ///
+    /// Runs at load. Not under the lease: a directory no row names cannot be
+    /// opened by anything, since opening one requires reading the generation out
+    /// of the catalog first.
+    @discardableResult
+    func reclaimOrphanedShardDirectories() -> Int {
+        guard let catalog else { return 0 }
+        let index = FileIndexPaths.indexDirectory
+        guard
+            let entries = try? FileManager.default.contentsOfDirectory(
+                atPath: index.path
+            )
+        else { return 0 }
+        let live = Set(catalog.roots().map(FileIndexPaths.rootIdentifier))
+        var reclaimed = 0
+        for entry in entries where !live.contains(entry) {
+            let candidate = index.appendingPathComponent(entry)
+            var isDirectory: ObjCBool = false
+            guard
+                FileManager.default.fileExists(
+                    atPath: candidate.path, isDirectory: &isDirectory
+                ), isDirectory.boolValue
+            else { continue }
+            let bytes =
+                (try? FileManager.default.contentsOfDirectory(
+                    atPath: candidate.path
+                ).count) ?? 0
+            try? FileManager.default.removeItem(at: candidate)
+            reclaimed += 1
+            log.record(
+                "reclaim",
+                [
+                    ("directory", entry), ("result", "removed"),
+                    ("files", "\(bytes)"),
+                ]
+            )
+        }
+        return reclaimed
     }
 
     /// Remove a shard from the index entirely.
@@ -657,7 +791,10 @@ public final class FileCorpusStore {
         dropOverlayEntries(under: shard, canonical: canonical)
 
         let elapsed = Date().timeIntervalSince(started)
-        publish(corpus, shard: shard, canonical: canonical, walkStartedAt: started)
+        publish(
+            corpus, shard: shard, canonical: canonical, walkStartedAt: started,
+            encounteredSkips: walked.encounteredSkips
+        )
 
         // The root's shard names all the others, so walking it is also how a
         // directory created *since* the last walk acquires a shard of its own.
@@ -712,7 +849,7 @@ public final class FileCorpusStore {
     /// Write a shard and record the new generation.
     private func publish(
         _ corpus: FileCorpus, shard: String, canonical: String,
-        walkStartedAt: Date
+        walkStartedAt: Date, encounteredSkips: Set<String>
     ) {
         guard let catalog else { return }
         // Held for the write and released immediately after, rather than for
@@ -758,6 +895,12 @@ public final class FileCorpusStore {
                 eventsUUID: FileIndexWatcher.volumeUUID(for: canonical),
                 eventsID: FileIndexWatcher.currentEventID()
             )
+            catalog.recordEncounteredSkips(
+                root: canonical, shard: shard, names: encounteredSkips
+            )
+            // Recorded so a later revalidation knows this process is already
+            // holding what it just wrote, rather than remapping its own work.
+            roots[canonical]?.generations[shard] = generation
             FileCorpusFile.removeSupersededGenerations(
                 shardDirectory: directory, shard: identifier, keeping: generation
             )

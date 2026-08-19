@@ -82,6 +82,16 @@ public final class FileIndexCatalog: @unchecked Sendable {
         // whatever the default happened to be the day they first changed it.
         execute(
             """
+            CREATE TABLE IF NOT EXISTS shard_skips (
+                root_path TEXT NOT NULL,
+                shard     TEXT NOT NULL,
+                name      TEXT NOT NULL,
+                PRIMARY KEY (root_path, shard, name)
+            )
+            """
+        )
+        execute(
+            """
             CREATE TABLE IF NOT EXISTS skip_list (
                 root_path TEXT    NOT NULL,
                 name      TEXT    NOT NULL,
@@ -189,6 +199,63 @@ public final class FileIndexCatalog: @unchecked Sendable {
             bindText(statement, 1, root)
             bindText(statement, 2, name)
             step(statement, "clearSkipListEntry")
+        }
+    }
+
+    /// Replace the set of skipped names a shard's walk met.
+    ///
+    /// Written with the publish, under the same lease, because it describes the
+    /// generation being published and would otherwise disagree with it.
+    public func recordEncounteredSkips(
+        root: String, shard: String, names: Set<String>
+    ) {
+        queue.sync {
+            var clear: OpaquePointer?
+            let clearSQL = "DELETE FROM shard_skips WHERE root_path = ? AND shard = ?"
+            if sqlite3_prepare_v2(database, clearSQL, -1, &clear, nil) == SQLITE_OK {
+                bindText(clear, 1, root)
+                bindText(clear, 2, shard)
+                step(clear, "recordEncounteredSkips")
+            }
+            sqlite3_finalize(clear)
+
+            for name in names {
+                var insert: OpaquePointer?
+                let sql = """
+                    INSERT OR IGNORE INTO shard_skips (root_path, shard, name)
+                    VALUES (?, ?, ?)
+                    """
+                guard sqlite3_prepare_v2(database, sql, -1, &insert, nil) == SQLITE_OK
+                else { continue }
+                bindText(insert, 1, root)
+                bindText(insert, 2, shard)
+                bindText(insert, 3, name)
+                step(insert, "recordEncounteredSkips")
+                sqlite3_finalize(insert)
+            }
+        }
+    }
+
+    /// Which shards of a root met this skipped name when they were walked.
+    ///
+    /// The answer to "what would un-skipping this change". Empty means nothing,
+    /// which is the common case and the point.
+    public func shardsEncountering(skip name: String, root: String) -> [String] {
+        queue.sync {
+            var found: [String] = []
+            var statement: OpaquePointer?
+            let sql = """
+                SELECT shard FROM shard_skips WHERE root_path = ? AND name = ?
+                """
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK
+            else { return found }
+            defer { sqlite3_finalize(statement) }
+            bindText(statement, 1, root)
+            bindText(statement, 2, name)
+            while sqlite3_step(statement) == SQLITE_ROW {
+                found.append(text(statement, 0))
+            }
+            return found
         }
     }
 
