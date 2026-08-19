@@ -3,7 +3,7 @@ import XCTest
 @testable import Galactic
 
 /// Keeping the index true after the walk: files appearing, disappearing, being
-/// renamed, and the rotation that catches whatever the file system did not
+/// renamed, and the sweep that catches whatever the file system did not
 /// tell us about.
 @MainActor
 final class FileIndexLiveTests: XCTestCase {
@@ -27,7 +27,7 @@ final class FileIndexLiveTests: XCTestCase {
 
     override func tearDown() async throws {
         FileCorpusStore.shared.forgetAll()
-        FileIndexRefreshRotation.shared.stop()
+        FileIndexRefreshSweep.shared.stop()
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)
         try? FileManager.default.removeItem(at: root)
@@ -164,13 +164,13 @@ final class FileIndexLiveTests: XCTestCase {
         XCTAssertEqual(found("flapping"), ["src/flapping.swift"])
     }
 
-    // MARK: - The rotation
+    // MARK: - The sweep
 
     /// The backstop. A file created while nothing was watching is invisible
     /// until the shard it belongs to is walked again — which is exactly what
-    /// the rotation is for, so this proves it recovers rather than waiting an
+    /// the sweep is for, so this proves it recovers rather than waiting an
     /// hour to find out.
-    func testTheRotationPicksUpAChangeNothingReported() async throws {
+    func testTheSweepPicksUpAChangeNothingReported() async throws {
         try touch("src/original.swift")
         await indexRoot()
 
@@ -178,13 +178,13 @@ final class FileIndexLiveTests: XCTestCase {
         try touch("src/unreported.swift")
         XCTAssertTrue(found("unreported").isEmpty, "the fixture proved nothing")
 
-        FileIndexRefreshRotation.targetAge = 0
-        defer { FileIndexRefreshRotation.targetAge = 3_600 }
-        FileIndexRefreshRotation.shared.add(canonicalRoot: canonical)
+        FileIndexRefreshSweep.targetAge = 0
+        defer { FileIndexRefreshSweep.targetAge = 3_600 }
+        FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
 
         var refreshed: Set<String> = []
         for _ in 0..<8 {
-            if let shard = await FileIndexRefreshRotation.shared.tick() {
+            if let shard = await FileIndexRefreshSweep.shared.tick() {
                 refreshed.insert(shard)
             }
             if !found("unreported").isEmpty { break }
@@ -192,7 +192,7 @@ final class FileIndexLiveTests: XCTestCase {
 
         XCTAssertEqual(
             found("unreported"), ["src/unreported.swift"],
-            "the rotation never reached the stale shard; it refreshed \(refreshed)"
+            "the sweep never reached the stale shard; it refreshed \(refreshed)"
         )
     }
 
@@ -207,10 +207,10 @@ final class FileIndexLiveTests: XCTestCase {
         FileCorpusStore.shared.noteCreated([created.path], canonicalRoot: canonical)
         XCTAssertEqual(found("second"), ["src/second.swift"])
 
-        FileIndexRefreshRotation.targetAge = 0
-        defer { FileIndexRefreshRotation.targetAge = 3_600 }
-        FileIndexRefreshRotation.shared.add(canonicalRoot: canonical)
-        for _ in 0..<8 { _ = await FileIndexRefreshRotation.shared.tick() }
+        FileIndexRefreshSweep.targetAge = 0
+        defer { FileIndexRefreshSweep.targetAge = 3_600 }
+        FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
+        for _ in 0..<8 { _ = await FileIndexRefreshSweep.shared.tick() }
 
         XCTAssertEqual(
             found("second"), ["src/second.swift"],
@@ -269,10 +269,10 @@ extension FileIndexLiveTests {
 
         try touch("arrived_later/deep/file.swift")
 
-        FileIndexRefreshRotation.targetAge = 0
-        defer { FileIndexRefreshRotation.targetAge = 3_600 }
-        FileIndexRefreshRotation.shared.add(canonicalRoot: canonical)
-        for _ in 0..<10 { _ = await FileIndexRefreshRotation.shared.tick() }
+        FileIndexRefreshSweep.targetAge = 0
+        defer { FileIndexRefreshSweep.targetAge = 3_600 }
+        FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
+        for _ in 0..<10 { _ = await FileIndexRefreshSweep.shared.tick() }
 
         XCTAssertNotNil(
             catalog.shards(forRoot: canonical).first { $0.name == "arrived_later" },
@@ -406,11 +406,11 @@ extension FileIndexLiveTests {
         // Only the directory is reported, which is what the file system does.
         FileCorpusStore.shared.noteRemoved([directory.path], canonicalRoot: canonical)
 
-        FileIndexRefreshRotation.targetAge = 0
-        defer { FileIndexRefreshRotation.targetAge = 3_600 }
-        FileIndexRefreshRotation.shared.add(canonicalRoot: canonical)
+        FileIndexRefreshSweep.targetAge = 0
+        defer { FileIndexRefreshSweep.targetAge = 3_600 }
+        FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
         for _ in 0..<10 {
-            _ = await FileIndexRefreshRotation.shared.tick()
+            _ = await FileIndexRefreshSweep.shared.tick()
             if found("leaffile").isEmpty { break }
         }
 
@@ -424,7 +424,7 @@ extension FileIndexLiveTests {
     }
 
     /// The overlay used to be bounded only by time — it drained when the
-    /// rotation reached a shard, an hour away at the earliest — so an active
+    /// sweep reached a shard, an hour away at the earliest — so an active
     /// hour grew it without limit while every batch of events re-encoded the
     /// whole thing. Size has to provoke compaction too.
     func testALargeOverlayMarksItsShardForRewalk() async throws {
@@ -517,10 +517,10 @@ extension FileIndexLiveTests {
             target, canonicalRoot: canonical, reason: "first"
         )
 
-        FileIndexRefreshRotation.targetAge = 0
-        defer { FileIndexRefreshRotation.targetAge = 3_600 }
-        FileIndexRefreshRotation.shared.add(canonicalRoot: canonical)
-        for _ in 0..<10 { _ = await FileIndexRefreshRotation.shared.tick() }
+        FileIndexRefreshSweep.targetAge = 0
+        defer { FileIndexRefreshSweep.targetAge = 3_600 }
+        FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
+        for _ in 0..<10 { _ = await FileIndexRefreshSweep.shared.tick() }
 
         FileCorpusStore.shared.markSubtreeDirty(
             target, canonicalRoot: canonical, reason: "second"

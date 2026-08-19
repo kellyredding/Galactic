@@ -19,9 +19,9 @@ import Foundation
 /// the same work across the hour, and it self-corrects: a shard marked dirty
 /// by a dropped event jumps the queue.
 @MainActor
-public final class FileIndexRefreshRotation {
+public final class FileIndexRefreshSweep {
 
-    public static let shared = FileIndexRefreshRotation()
+    public static let shared = FileIndexRefreshSweep()
 
     /// How stale a shard may be before it is worth rewalking.
     public static var targetAge: TimeInterval = 3_600
@@ -57,7 +57,7 @@ public final class FileIndexRefreshRotation {
             Task { @MainActor in await self?.tick() }
         }
         log.record(
-            "rotation",
+            "sweep",
             [
                 ("event", "started"),
                 ("tick", "\(Int(Self.tickInterval))s"),
@@ -80,7 +80,7 @@ public final class FileIndexRefreshRotation {
             let age = now.timeIntervalSince(stalest.walkedAt)
             guard stalest.dirty || age >= Self.targetAge else { continue }
             log.record(
-                "rotation",
+                "sweep",
                 [
                     ("event", "refreshing"),
                     ("root", root),

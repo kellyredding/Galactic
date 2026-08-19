@@ -21,7 +21,7 @@ import Foundation
 /// 3. **A delta corpus in memory** for files created since the last walk,
 ///    scanned alongside the shards as though it were one of them.
 ///
-/// The shards are rewritten on a slow rotation, which folds the other two back
+/// The shards are rewritten on a slow sweep, which folds the other two back
 /// in and is also the backstop for events the file system dropped.
 @MainActor
 public final class FileCorpusStore {
@@ -160,7 +160,7 @@ public final class FileCorpusStore {
 
     /// How many entries the overlay is carrying — files seen created since
     /// their shard was written. A number that only grows is the symptom of a
-    /// rotation that is not reaching them.
+    /// sweep that is not reaching them.
     public func pendingOverlayCount(forCanonicalRoot root: String) -> Int {
         roots[root]?.added.count ?? 0
     }
@@ -294,7 +294,7 @@ public final class FileCorpusStore {
         // replay would be answering questions about a corpus that does not
         // exist yet.
         watch(canonicalRoot: canonical)
-        FileIndexRefreshRotation.shared.add(canonicalRoot: canonical)
+        FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
 
         log.record(
             "index",
@@ -568,7 +568,7 @@ public final class FileCorpusStore {
         // every path beneath it resolving to nothing.
         //
         // The honest response is the same one a dropped event gets — mark the
-        // subtree for a rewalk and let the rotation take it on the next tick,
+        // subtree for a rewalk and let the sweep take it on the next tick,
         // rather than pretending a bitset can express "and all descendants".
         // A renamed directory arrives as exactly this, plus a create.
         for directory in vanishedDirectories {
@@ -612,7 +612,7 @@ public final class FileCorpusStore {
 
     /// How many pending entries one shard may accumulate before it is rewritten.
     ///
-    /// The overlay was bounded only by time: it drained when the rotation got
+    /// The overlay was bounded only by time: it drained when the sweep got
     /// around to a shard, which is an hour at the earliest. So an active hour
     /// grew it without limit, and `rebuildDelta` re-encodes the whole thing on
     /// every batch of events — an O(n) rebuild arriving every half second, which
@@ -626,9 +626,9 @@ public final class FileCorpusStore {
 
     /// Mark any shard carrying too much overlay for a rewalk.
     ///
-    /// Dirty shards already jump the rotation queue, so this needs no scheduler
+    /// Dirty shards already jump the sweep queue, so this needs no scheduler
     /// of its own: it converts "the overlay is large" into "this subtree is
-    /// stale", which is a thing the rotation already knows how to fix.
+    /// stale", which is a thing the sweep already knows how to fix.
     private func applyCompactionPressure(root: String) {
         for (shard, count) in overlayByShard(forCanonicalRoot: root)
         where count >= Self.overlayCompactionThreshold {
@@ -776,7 +776,7 @@ public final class FileCorpusStore {
     /// The backstop for events the file system dropped, which it will: the
     /// kernel discards a non-Apple watcher's whole queue under load, and a
     /// large checkout is exactly that load. Oldest first, one at a time, so
-    /// nothing is ever much more than a rotation stale and no single moment
+    /// nothing is ever much more than a sweep stale and no single moment
     /// costs a whole tree.
     @discardableResult
     public func refreshStalestShard(canonicalRoot root: String) async -> String? {

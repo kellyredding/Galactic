@@ -166,7 +166,7 @@ final class FileIndexPersistenceTests: XCTestCase {
         XCTAssertFalse(shard.dirty)
     }
 
-    /// The rotation asks one question — what is stalest — and a shard the file
+    /// The sweep asks one question — what is stalest — and a shard the file
     /// system already told us is wrong must come first.
     func testTheStalestShardPrefersDirtyOverMerelyOld() throws {
         let catalog = try XCTUnwrap(FileIndexCatalog())
