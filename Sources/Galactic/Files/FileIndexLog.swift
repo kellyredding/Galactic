@@ -32,7 +32,11 @@ public final class FileIndexLog: @unchecked Sendable {
     /// thousands of lines in a minute, and an unbounded log would be the one
     /// part of this effort that grows without limit — which is the failure it
     /// exists to help diagnose.
-    public static let rotateAtBytes = 4 * 1024 * 1024
+    ///
+    /// Settable rather than constant so rotation can be exercised without
+    /// writing four megabytes, the same reason `FileIndexRefreshSweep.targetAge`
+    /// is settable.
+    public static var rotateAtBytes = 4 * 1024 * 1024
     public static let generationsKept = 5
 
     /// Serial, and asynchronous to the caller.
@@ -45,6 +49,27 @@ public final class FileIndexLog: @unchecked Sendable {
     )
     private var handle: FileHandle?
     private var bytesWritten = 0
+    /// The inode `handle` is attached to, so another process's rotation can be
+    /// noticed. A path comparison cannot see it: the path never changes.
+    private var openInode: ino_t?
+    /// Serialises rotation against the other applications sharing this index.
+    private let rotationLease = FileIndexLock()
+    /// Writes since `bytesWritten` was last reconciled with the file.
+    private var writesSinceSizeCheck = 0
+
+    /// How often to ask the file how big it actually is.
+    ///
+    /// `bytesWritten` counts what *this* process wrote, which was the whole
+    /// truth while one process wrote. With two, the file grows at the combined
+    /// rate and neither counter reaches the threshold until it has written the
+    /// threshold itself — so the log settles at roughly the bound times the
+    /// number of applications, which is precisely the unbounded growth the
+    /// rotation exists to prevent.
+    ///
+    /// One `fstat` per this many lines is the cost of the counter meaning the
+    /// file rather than the writer. Rotation re-checks the size under the lease
+    /// anyway, so an eager trigger costs a stat and never a lost generation.
+    private static let writesPerSizeCheck = 128
     /// The path `handle` was opened for.
     ///
     /// A cached handle that never re-checks its own path will happily keep
@@ -99,25 +124,77 @@ public final class FileIndexLog: @unchecked Sendable {
     private func append(_ line: String) {
         queue.async { [self] in
             guard let data = line.data(using: .utf8) else { return }
-            if handle == nil || openPath != fileURL.path { openFile() }
+            if handle == nil || !handleStillPointsAtTheLiveLog() { openFile() }
             guard let handle else { return }
             handle.write(data)
             bytesWritten += data.count
+            writesSinceSizeCheck += 1
+            if writesSinceSizeCheck >= Self.writesPerSizeCheck {
+                resyncBytesWritten()
+            }
             if bytesWritten >= Self.rotateAtBytes { rotate() }
         }
     }
 
+    /// Open the log for appending.
+    ///
+    /// `O_APPEND` rather than a seek to the end, because the end is not a fact a
+    /// process can cache once. Two applications share this index, and each held
+    /// its own file offset established at open: every write landed where *that*
+    /// process believed the end was, so the second writer overwrote the first
+    /// rather than following it. Nothing detected it — the file stayed
+    /// well-formed and simply held fewer lines than were written. With
+    /// `O_APPEND` the kernel places each write at the true end atomically, which
+    /// is the only version of this that survives a second writer.
     private func openFile() {
         try? handle?.close()
         handle = nil
         FileIndexPaths.prepare()
-        let manager = FileManager.default
-        if !manager.fileExists(atPath: fileURL.path) {
-            manager.createFile(atPath: fileURL.path, contents: nil)
+        let descriptor = open(
+            fileURL.path, O_WRONLY | O_APPEND | O_CREAT, 0o600
+        )
+        guard descriptor >= 0 else {
+            openPath = nil
+            openInode = nil
+            bytesWritten = 0
+            return
         }
-        handle = try? FileHandle(forWritingTo: fileURL)
+        handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         openPath = fileURL.path
-        bytesWritten = (try? handle?.seekToEnd()).flatMap { Int($0) } ?? 0
+        writesSinceSizeCheck = 0
+        var status = stat()
+        if fstat(descriptor, &status) == 0 {
+            openInode = status.st_ino
+            bytesWritten = Int(status.st_size)
+        } else {
+            openInode = nil
+            bytesWritten = 0
+        }
+    }
+
+    /// Replace this process's tally with the file's real size.
+    private func resyncBytesWritten() {
+        writesSinceSizeCheck = 0
+        guard let handle else { return }
+        var status = stat()
+        guard fstat(handle.fileDescriptor, &status) == 0 else { return }
+        bytesWritten = Int(status.st_size)
+    }
+
+    /// Whether the file this handle is attached to is still the one at
+    /// `fileURL`.
+    ///
+    /// Rotation renames, and a rename moves the name rather than the file. A
+    /// handle held across another process's rotation stays bound to the inode
+    /// that is now `index.log.1`, so it keeps writing into a rotated generation
+    /// while every reader tails the new `index.log`. The path is unchanged
+    /// throughout, which is why comparing paths cannot see it and comparing
+    /// inodes can.
+    private func handleStillPointsAtTheLiveLog() -> Bool {
+        guard openPath == fileURL.path, let openInode else { return false }
+        var status = stat()
+        guard stat(fileURL.path, &status) == 0 else { return false }
+        return status.st_ino == openInode
     }
 
     /// Shift `index.log` down the numbered generations and start a new one.
@@ -125,7 +202,39 @@ public final class FileIndexLog: @unchecked Sendable {
     /// Oldest is deleted rather than compressed: the value of an index log
     /// falls off sharply with age, and a compressed tail nobody can `grep`
     /// without decompressing first is worse than no tail.
+    /// Only one process may shift the generations.
+    ///
+    /// Unguarded, two rotations interleave and a generation is lost outright:
+    /// both rename `index.log.1` to `.2`, and the second finds nothing there
+    /// because the first already moved it — so `.1` ends up holding what `.2`
+    /// should, and one file's worth of history is unlinked with nothing
+    /// recording that it went.
+    ///
+    /// Losing the lease is not a failure. It means another process is rotating
+    /// right now, so the work is being done; this one only has to stop believing
+    /// its own byte count and pick the new file up, which the inode check does
+    /// on the next line.
     private func rotate() {
+        guard rotationLease.acquire() else {
+            try? handle?.close()
+            handle = nil
+            bytesWritten = 0
+            return
+        }
+        defer { rotationLease.release() }
+
+        // Between reaching the threshold and taking the lease, the winner may
+        // have already rotated — in which case this file is new and small, and
+        // rotating it again would discard a generation for nothing.
+        var status = stat()
+        if stat(fileURL.path, &status) == 0,
+            Int(status.st_size) < Self.rotateAtBytes
+        {
+            try? handle?.close()
+            handle = nil
+            return
+        }
+
         try? handle?.close()
         handle = nil
         let manager = FileManager.default
