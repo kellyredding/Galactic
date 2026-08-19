@@ -266,13 +266,22 @@ public final class FileCorpusStore {
 
     /// Ensure a root is indexed: map whatever is already on disk, then walk
     /// whatever is missing.
+    /// - Parameter skipList: what not to descend into, or `nil` to let the root
+    ///   decide. Passing it is for tests that want an unfiltered walk; a host
+    ///   should not, because the answer is a property of the root and supplying
+    ///   one per application is what let two of them describe a shared corpus
+    ///   differently. It is also easy to get wrong from here: this method
+    ///   recurses to index a wider root, and handing that root the list derived
+    ///   for the subtree would walk a home directory under a repository's rules.
     public func index(
         root: URL,
-        skipping skipList: Set<String>,
+        skipping requestedSkipList: Set<String>? = nil,
         onProgress: @escaping (Int) -> Void = { _ in },
         onFinished: @escaping () -> Void = {}
     ) {
         let canonical = FilePaths.canonical(root)
+        let skipList =
+            requestedSkipList ?? FileCorpusBuilder.skipList(forRoot: root)
 
         // Already covered by a root above this one, so there is nothing to
         // walk and nothing to store: the entries are already indexed, and
@@ -313,12 +322,12 @@ public final class FileCorpusStore {
             )
             index(
                 root: URL(fileURLWithPath: covering),
-                skipping: skipList,
+                skipping: requestedSkipList.map { _ in [] },
                 onProgress: onProgress
             ) { [self] in
                 index(
                     root: root,
-                    skipping: skipList,
+                    skipping: requestedSkipList,
                     onProgress: onProgress,
                     onFinished: onFinished
                 )

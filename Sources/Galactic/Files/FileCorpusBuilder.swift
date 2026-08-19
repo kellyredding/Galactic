@@ -60,6 +60,44 @@ public enum FileCorpusBuilder {
         ".galactic",
     ]
 
+    /// Also skipped when the root takes in the user's home directory.
+    ///
+    /// Not merged into the list above, because these are wrong for a repository:
+    /// a project may legitimately hold a directory called `Library`, and
+    /// skipping it there would hide real source. They belong to the home
+    /// directory specifically — a container the walk cannot afford to enter,
+    /// since the walk caps and reports truncation, and one enormous directory
+    /// otherwise spends the whole corpus before reaching anything a reader
+    /// wanted.
+    public static let homeSkipList: Set<String> = defaultSkipList.union([
+        "Library",
+        "Photos Library.photoslibrary",
+        "OrbStack",
+    ])
+
+    /// The list for a root, decided by what the root is.
+    ///
+    /// A property of the index rather than of whichever application opened it.
+    /// Every host used to supply its own, which made the same corpus mean two
+    /// different things depending on who built it: two applications sharing a
+    /// root would publish the same shard with different contents and each
+    /// rewalk would replace the other's, forever, with nothing recording that
+    /// they disagreed. Deriving it here means they cannot disagree — the answer
+    /// is a function of the root, and both compute it from the same code.
+    public static func skipList(forRoot root: URL) -> Set<String> {
+        coversHomeDirectory(FilePaths.canonical(root))
+            ? homeSkipList : defaultSkipList
+    }
+
+    /// Whether a root is the home directory or something containing it.
+    static func coversHomeDirectory(_ canonicalRoot: String) -> Bool {
+        let home = FilePaths.canonical(
+            URL(fileURLWithPath: NSHomeDirectory())
+        )
+        return canonicalRoot == home
+            || FilePaths.relative(home, under: canonicalRoot) != nil
+    }
+
     /// How deep to descend.
     ///
     /// A guard against a pathological tree rather than a policy — nothing a

@@ -422,10 +422,15 @@ final class GalacticPublicSurfaceTests: XCTestCase {
         }
         presenter.rootProvider = { nil }
 
-        // The host answers what counts as noise, because the right answer
-        // depends on what its root is.
+        // What counts as noise is no longer among the things a host answers.
+        // The right answer still depends on what the root is, but it is derived
+        // from the root rather than supplied, so two hosts sharing an index
+        // cannot describe the same corpus differently.
         XCTAssertEqual(
-            presenter.skipListProvider(), FileCorpusBuilder.defaultSkipList
+            FileCorpusBuilder.skipList(
+                forRoot: URL(fileURLWithPath: "/tmp/some-checkout")
+            ),
+            FileCorpusBuilder.defaultSkipList
         )
 
         presenter.toggle()
