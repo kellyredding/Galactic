@@ -113,4 +113,29 @@ public enum FileCorpusFile {
             )
         }
     }
+
+    /// Delete every generation of a shard, and any temporary file left behind.
+    ///
+    /// For a shard that should no longer exist rather than one being replaced.
+    /// The `.tmp` sweep is here because nothing else does it: a process that
+    /// died between writing and renaming leaves a file that
+    /// `removeSupersededGenerations` filters out by suffix and never reclaims.
+    public static func removeAllGenerations(
+        shardDirectory: URL, shard: String
+    ) {
+        let manager = FileManager.default
+        guard
+            let entries = try? manager.contentsOfDirectory(
+                atPath: shardDirectory.path
+            )
+        else { return }
+        for entry in entries
+        where entry.hasPrefix("\(shard)-")
+            && (entry.hasSuffix(".gfsi") || entry.hasSuffix(".gfsi.tmp"))
+        {
+            try? manager.removeItem(
+                at: shardDirectory.appendingPathComponent(entry)
+            )
+        }
+    }
 }

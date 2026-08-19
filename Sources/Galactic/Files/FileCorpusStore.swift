@@ -395,6 +395,32 @@ public final class FileCorpusStore {
         guard let catalog else { return [:] }
         let directory = FileIndexPaths.shardDirectory(forCanonicalRoot: canonical)
         var mapped: [String: FileCorpus] = [:]
+
+        // Reconcile before mapping. A row for a directory the list now excludes
+        // would otherwise be mapped on every launch forever: pruning is an
+        // action some process takes, and nothing guarantees it ran — an edit
+        // interrupted between storing the entry and pruning, or made by an
+        // application that is no longer running, leaves the row behind. This is
+        // the one place every launch passes through, which makes it the place
+        // the index can put itself right.
+        let excluded = effectiveSkipList(forCanonicalRoot: canonical)
+        for shard in catalog.shards(forRoot: canonical)
+        where !shard.name.isEmpty && excluded.contains(shard.name) {
+            log.record(
+                "prune",
+                [
+                    ("root", canonical), ("shard", shard.name),
+                    ("result", "removed"), ("reason", "skipped-on-load"),
+                    ("entries", "\(shard.entryCount)"),
+                ]
+            )
+            catalog.remove(root: canonical, name: shard.name)
+            FileCorpusFile.removeAllGenerations(
+                shardDirectory: directory,
+                shard: FileIndexPaths.rootIdentifier(shard.name)
+            )
+        }
+
         for shard in catalog.shards(forRoot: canonical) where !shard.dirty {
             let url = FileCorpusFile.url(
                 shardDirectory: directory,
@@ -431,9 +457,18 @@ public final class FileCorpusStore {
             onFinished()
             return
         }
+        // Filtered here as well as during the walk, because these names come
+        // from the root shard rather than from the file system — and that shard
+        // was written under whatever list applied when it was last walked. A
+        // name the list now excludes would otherwise be handed straight back to
+        // `walk`, which opens a shard's own top directory unconditionally: the
+        // shard is rebuilt, and pruning it achieves nothing that survives a
+        // launch.
         var names: [String] = []
         for index in 0..<rootShard.entryCount where rootShard.isDirectory(at: index) {
-            names.append(rootShard.relativePath(at: index))
+            let name = rootShard.relativePath(at: index)
+            guard !skipList.contains(name) else { continue }
+            names.append(name)
         }
 
         for name in names where roots[canonical]?.shards[name] == nil {
@@ -494,6 +529,60 @@ public final class FileCorpusStore {
         if let resolved = state.resolvedSkipList { return resolved }
         return state.skipListOverride
             ?? FileCorpusBuilder.skipList(forRoot: state.url)
+    }
+
+    /// Remove a shard from the index entirely.
+    ///
+    /// For a top-level directory the skip list now excludes. Rewalking such a
+    /// shard rebuilds it: the skip check applies when the walk *descends* into a
+    /// directory, so it governs what a shard contains and never whether the
+    /// shard exists. Marking it dirty would therefore be a no-op dressed as an
+    /// action — the panel's most obvious edit doing nothing at all.
+    ///
+    /// Takes the writer lease, because unlinking a generation another process is
+    /// about to open is the one part of this that is not merely bookkeeping. A
+    /// reader already holding a mapping is unharmed either way: the inode
+    /// survives unlink until the last mapping drops.
+    @discardableResult
+    public func prune(shard: String, canonicalRoot root: String) -> Bool {
+        guard !shard.isEmpty else { return false }
+        guard writerLease.acquire() else {
+            log.record(
+                "prune",
+                [
+                    ("shard", shard), ("result", "deferred"),
+                    ("reason", "another-writer"),
+                ]
+            )
+            return false
+        }
+        defer { writerLease.release() }
+
+        let held = roots[root]?.shards[shard]?.entryCount ?? 0
+        roots[root]?.shards[shard] = nil
+        roots[root]?.removed[shard] = nil
+        roots[root]?.dirtyShards.remove(shard)
+        dropOverlayEntries(under: shard, canonical: root)
+        catalog?.remove(root: root, name: shard)
+        // The root shard still lists this directory as an entry of its own, so
+        // it is now stale by exactly one row. Nothing depends on that being
+        // corrected promptly — the guards in `walkMissingShards` and
+        // `adoptNewShards` stop the name becoming a shard again — but leaving it
+        // would offer a reader a directory the index has stopped covering.
+        catalog?.markDirty(root: root, name: "")
+        roots[root]?.dirtyShards.insert("")
+        FileCorpusFile.removeAllGenerations(
+            shardDirectory: FileIndexPaths.shardDirectory(forCanonicalRoot: root),
+            shard: FileIndexPaths.rootIdentifier(shard)
+        )
+        log.record(
+            "prune",
+            [
+                ("root", root), ("shard", shard), ("result", "removed"),
+                ("entries", "\(held)"),
+            ]
+        )
+        return true
     }
 
     /// Walk one shard, publish it, and record it.
@@ -603,6 +692,7 @@ public final class FileCorpusStore {
         var names: [String] = []
         for index in 0..<rootShard.entryCount where rootShard.isDirectory(at: index) {
             let name = rootShard.relativePath(at: index)
+            guard !skipList.contains(name) else { continue }
             if roots[canonical]?.shards[name] == nil { names.append(name) }
         }
         guard !names.isEmpty else { return }
