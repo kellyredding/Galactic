@@ -6,10 +6,15 @@ import Foundation
 ///
 /// File-system events are not a log that can be replayed to arrive at the
 /// truth — Apple's own header says so outright. The kernel drops a non-Apple
-/// watcher's entire queue under load, a large checkout is exactly that load,
-/// and a dropped batch leaves no trace that anything was missed. So the
-/// watcher keeps the index current *most* of the time, and this makes sure
-/// that being wrong is temporary rather than permanent.
+/// watcher's entire queue under load, and a large checkout is exactly that
+/// load. So the watcher keeps the index current *most* of the time, and this
+/// makes sure that being wrong is temporary rather than permanent.
+///
+/// An overflow does usually announce itself: `FileIndexWatcher` handles the
+/// kernel's own must-scan-subdirs flag and marks the shard dirty, and a
+/// discarded event store shows up as a changed volume identifier. This is the
+/// backstop for whatever gets past both — which is why a dirty shard and a
+/// merely old one are not treated as the same thing.
 ///
 /// ### Why one shard at a time
 ///
@@ -18,6 +23,10 @@ import Foundation
 /// instead for whichever shard has gone longest without being walked spreads
 /// the same work across the hour, and it self-corrects: a shard marked dirty
 /// by a dropped event jumps the queue.
+///
+/// A second refresh may overlap the first, and only for one reason: a walk that
+/// blocks would otherwise stop every other shard from being refreshed at all.
+/// The cap is deliberately small — see `maxConcurrentRefreshes`.
 ///
 /// ### A re-walk is not free, and not only in time
 ///
@@ -51,8 +60,27 @@ public final class FileIndexRefreshSweep {
 
     private var timer: Timer?
     private var roots: Set<String> = []
-    private var isRefreshing = false
+    /// Which shards are being refreshed right now, as `root` and name.
+    ///
+    /// This was a single flag, which meant one slow walk stopped the sweep
+    /// entirely rather than stopping itself: a consent dialog left unanswered
+    /// held a walk for twenty minutes, and in those twenty minutes no shard of
+    /// any root was refreshed, because every tick saw the flag and returned.
+    /// Tracking which shard is busy lets the rest of the index keep moving past
+    /// one that is stuck.
+    ///
+    /// Internal so a test can hold a shard busy and watch the sweep route past
+    /// it, which is the behaviour rather than an implementation detail.
+    var inFlight: Set<String> = []
     private let log = FileIndexLog.shared
+
+    /// How many refreshes may overlap.
+    ///
+    /// More than one so a stuck shard cannot block the others, and few, because
+    /// the reason this refreshes one shard at a time is that walking is
+    /// expensive. Two is enough to route around a blockage without turning a
+    /// backstop into a second indexing pass.
+    public static var maxConcurrentRefreshes = 2
 
     init() {}
 
@@ -88,28 +116,81 @@ public final class FileIndexRefreshSweep {
     /// waiting an hour for it.
     @discardableResult
     public func tick(now: Date = Date()) async -> String? {
-        guard !isRefreshing else { return nil }
-        isRefreshing = true
-        defer { isRefreshing = false }
+        guard inFlight.count < Self.maxConcurrentRefreshes else { return nil }
+        guard let catalog = FileIndexCatalog() else { return nil }
 
-        let catalog = FileIndexCatalog()
-        for root in roots {
-            guard let stalest = catalog?.stalestShard(forRoot: root) else { continue }
-            let age = now.timeIntervalSince(stalest.walkedAt)
-            guard stalest.dirty || age >= Self.targetAge else { continue }
+        for root in roots.sorted() {
+            guard
+                let chosen = nextShard(in: root, from: catalog, now: now)
+            else { continue }
+
+            let key = Self.inFlightKey(root: root, shard: chosen.name)
+            inFlight.insert(key)
+            defer { inFlight.remove(key) }
+
+            let age = now.timeIntervalSince(chosen.walkedAt)
             log.record(
                 "sweep",
                 [
                     ("event", "refreshing"),
                     ("root", root),
-                    ("shard", stalest.name.isEmpty ? "(root)" : stalest.name),
+                    ("shard", chosen.name.isEmpty ? "(root)" : chosen.name),
                     ("age", String(format: "%.0f", age)),
-                    ("reason", stalest.dirty ? "dirty" : "stale"),
+                    ("reason", chosen.dirty ? "dirty" : "stale"),
+                    (
+                        "consent",
+                        FileCorpusBuilder.isConsentProtected(
+                            shard: chosen.name, underCanonicalRoot: root
+                        ) ? "protected" : "open"
+                    ),
                 ]
             )
-            await FileCorpusStore.shared.refreshStalestShard(canonicalRoot: root)
-            return stalest.name
+            await FileCorpusStore.shared.refresh(
+                shard: chosen.name, canonicalRoot: root
+            )
+            return chosen.name
         }
         return nil
+    }
+
+    /// How an in-flight shard is named. Shared with tests so neither side has to
+    /// know the other's string format.
+    static func inFlightKey(root: String, shard: String) -> String {
+        "\(root)\u{0}\(shard)"
+    }
+
+    /// The shard this root most needs refreshed, or none.
+    ///
+    /// Dirty first, then oldest — dirty means something reported the shard
+    /// wrong, which outranks any amount of merely elapsed time.
+    ///
+    /// A directory the user is asked about is eligible only when something
+    /// reported it wrong. Age alone does not qualify it, because re-reading it
+    /// costs a consent dialog and buys very little: it is watched like everything
+    /// else, and the dropped-event load this backstop exists for happens in trees
+    /// being built in, not in a Pictures folder. The trade the skip list accepted
+    /// was being asked once; a timer turns that into being asked hourly.
+    func nextShard(
+        in root: String, from catalog: FileIndexCatalog, now: Date
+    ) -> FileIndexCatalog.Shard? {
+        catalog.shards(forRoot: root)
+            .filter { shard in
+                guard
+                    !inFlight.contains(
+                        Self.inFlightKey(root: root, shard: shard.name)
+                    )
+                else { return false }
+                if shard.dirty { return true }
+                guard now.timeIntervalSince(shard.walkedAt) >= Self.targetAge
+                else { return false }
+                return !FileCorpusBuilder.isConsentProtected(
+                    shard: shard.name, underCanonicalRoot: root
+                )
+            }
+            .sorted {
+                if $0.dirty != $1.dirty { return $0.dirty }
+                return $0.walkedAt < $1.walkedAt
+            }
+            .first
     }
 }

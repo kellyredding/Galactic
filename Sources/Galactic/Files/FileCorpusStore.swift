@@ -916,30 +916,36 @@ public final class FileCorpusStore {
 
     // MARK: - Refresh
 
-    /// Rewalk the shard that has gone longest without being walked.
+    /// Rewalk one named shard.
     ///
-    /// The backstop for events the file system dropped, which it will: the
-    /// kernel discards a non-Apple watcher's whole queue under load, and a
-    /// large checkout is exactly that load. Oldest first, one at a time, so
-    /// nothing is ever much more than a sweep stale and no single moment
-    /// costs a whole tree.
+    /// Named by the caller rather than chosen here. This used to pick the stalest
+    /// shard itself, which meant the sweep asked the catalog what needed doing,
+    /// decided it was worth doing, and then this asked again and was free to
+    /// answer differently — two independent selections against a table either of
+    /// them could have changed in between. It also left no way to express a
+    /// policy about *which* shard, which is the whole of the sweep's job.
     @discardableResult
-    public func refreshStalestShard(canonicalRoot root: String) async -> String? {
+    public func refresh(shard: String, canonicalRoot root: String) async -> String? {
         guard let state = roots[root] else { return nil }
-        guard let stalest = catalog?.stalestShard(forRoot: root) else { return nil }
+        let recorded = catalog?.shards(forRoot: root).first { $0.name == shard }
         log.record(
             "refresh",
             [
-                ("shard", stalest.name.isEmpty ? "(root)" : stalest.name),
-                ("age", String(format: "%.0f", Date().timeIntervalSince(stalest.walkedAt))),
-                ("dirty", "\(stalest.dirty)"),
+                ("shard", shard.isEmpty ? "(root)" : shard),
+                (
+                    "age",
+                    recorded.map {
+                        String(format: "%.0f", Date().timeIntervalSince($0.walkedAt))
+                    } ?? "unknown"
+                ),
+                ("dirty", "\(recorded?.dirty ?? false)"),
             ]
         )
         await walk(
-            shard: stalest.name, canonical: root, root: state.url,
+            shard: shard, canonical: root, root: state.url,
             skipping: state.skipList, onProgress: { _ in }
         )
-        return stalest.name
+        return shard
     }
 
     /// Mark the shard a path belongs to as needing a rewalk. Used when the

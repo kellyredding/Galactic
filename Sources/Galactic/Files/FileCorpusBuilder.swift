@@ -98,6 +98,34 @@ public enum FileCorpusBuilder {
         "OrbStack",
     ])
 
+    /// Directories macOS asks the user about before letting anything read them.
+    ///
+    /// Indexed, not skipped — they are exactly what a reader opens. But reading
+    /// one costs a consent dialog, so re-reading one on a schedule asks the user
+    /// for permission on a schedule, and an unanswered dialog blocks the walk
+    /// that raised it for as long as it goes unanswered.
+    ///
+    /// Names only, resolved against a root by `isConsentProtected` — a
+    /// repository containing a `Documents` directory is not this, and treating
+    /// it as though it were would exempt ordinary source from being kept fresh.
+    public static let consentProtectedNames: Set<String> = [
+        "Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures",
+    ]
+
+    /// Whether a shard covers a directory the user is asked about.
+    ///
+    /// Compared as a whole path rather than by name, because the name alone is
+    /// meaningless without knowing what it hangs off: `Downloads` under the home
+    /// directory raises a dialog and `Downloads` inside a checkout does not.
+    public static func isConsentProtected(
+        shard: String, underCanonicalRoot root: String
+    ) -> Bool {
+        guard !shard.isEmpty else { return false }
+        let home = FilePaths.canonical(URL(fileURLWithPath: NSHomeDirectory()))
+        return consentProtectedNames.contains(shard)
+            && root + "/" + shard == home + "/" + shard
+    }
+
     /// The list for a root, decided by what the root is.
     ///
     /// A property of the index rather than of whichever application opened it.
