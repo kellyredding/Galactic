@@ -76,6 +76,46 @@ final class FileIndexSweepPolicyTests: XCTestCase {
         )
     }
 
+    // MARK: - Fairness across roots
+
+    /// Every root is reached before any root is reached twice.
+    ///
+    /// Sorted order plus returning after the first eligible shard made position
+    /// in the alphabet into policy: one home directory never noticed, but an
+    /// application with a session per tab would refresh early roots forever and
+    /// late ones never.
+    func testTheRotationReachesEveryRootBeforeRepeatingOne() {
+        let roots = ["/a", "/b", "/c", "/d"]
+        var served: [String] = []
+        var last: String?
+        for _ in roots {
+            let next = try! XCTUnwrap(
+                FileIndexRefreshSweep.rotated(roots, after: last).first
+            )
+            served.append(next)
+            last = next
+        }
+        XCTAssertEqual(
+            served.sorted(), roots,
+            "a root was served twice before another was served at all: \(served)"
+        )
+    }
+
+    func testTheRotationStartsAtTheTopWhenNothingHasBeenServed() {
+        XCTAssertEqual(
+            FileIndexRefreshSweep.rotated(["/a", "/b"], after: nil), ["/a", "/b"]
+        )
+    }
+
+    /// A root that has gone away since it was last served must not strand the
+    /// rotation at a position that no longer exists.
+    func testARootThatDisappearedDoesNotStallTheRotation() {
+        XCTAssertEqual(
+            FileIndexRefreshSweep.rotated(["/a", "/b"], after: "/gone"),
+            ["/a", "/b"]
+        )
+    }
+
     // MARK: - What the sweep will act on
 
     /// Age alone does not qualify a protected directory. Everything else, it does.

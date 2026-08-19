@@ -35,7 +35,17 @@ public enum FileCorpusFile {
             at: directory, withIntermediateDirectories: true
         )
 
-        let temporary = url.appendingPathExtension("tmp")
+        // Unique per process and per attempt. A fixed name meant two writers
+        // publishing the same shard at the same generation opened the same file
+        // with O_TRUNC and interleaved into it — and since the image header
+        // carries no checksum, two writes of equal length would then validate
+        // clean and yield garbage paths. The writer lease prevents that today,
+        // which is exactly the problem: the whole guarantee rested on one lock
+        // being correct with nothing behind it.
+        let temporary = url.deletingLastPathComponent()
+            .appendingPathComponent(
+                "\(url.lastPathComponent).\(getpid()).\(UUID().uuidString).tmp"
+            )
         let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
         guard descriptor >= 0 else {
             throw WriteError.couldNotCreate(temporary.path)
@@ -105,9 +115,14 @@ public enum FileCorpusFile {
         else { return }
         let keep = "\(shard)-\(generation).gfsi"
         for entry in entries
-        where entry.hasPrefix("\(shard)-") && entry.hasSuffix(".gfsi")
+        where entry.hasPrefix("\(shard)-")
+            && (entry.hasSuffix(".gfsi") || entry.hasSuffix(".tmp"))
             && entry != keep
         {
+            // Temporary files are reaped here rather than only when a shard is
+            // pruned. A process that died between writing and renaming leaves
+            // one behind, and nothing else would ever look: this runs under the
+            // writer lease, so no other process can be mid-write on this shard.
             try? manager.removeItem(
                 at: shardDirectory.appendingPathComponent(entry)
             )
@@ -131,7 +146,7 @@ public enum FileCorpusFile {
         else { return }
         for entry in entries
         where entry.hasPrefix("\(shard)-")
-            && (entry.hasSuffix(".gfsi") || entry.hasSuffix(".gfsi.tmp"))
+            && (entry.hasSuffix(".gfsi") || entry.hasSuffix(".tmp"))
         {
             try? manager.removeItem(
                 at: shardDirectory.appendingPathComponent(entry)

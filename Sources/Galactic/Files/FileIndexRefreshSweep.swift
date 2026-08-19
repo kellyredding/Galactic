@@ -74,6 +74,14 @@ public final class FileIndexRefreshSweep {
     var inFlight: Set<String> = []
     private let log = FileIndexLog.shared
 
+    /// The root served last, so the next pass starts after it.
+    ///
+    /// Sorted order plus returning after the first eligible shard made position
+    /// in the alphabet into policy. One home directory never noticed; an
+    /// application with a session per tab would have early roots refreshed
+    /// indefinitely and late ones never, with nothing in the log to say why.
+    private var lastServedRoot: String?
+
     /// How many refreshes may overlap.
     ///
     /// More than one so a stuck shard cannot block the others, and few, because
@@ -119,7 +127,7 @@ public final class FileIndexRefreshSweep {
         guard inFlight.count < Self.maxConcurrentRefreshes else { return nil }
         guard let catalog = FileIndexCatalog() else { return nil }
 
-        for root in roots.sorted() {
+        for root in Self.rotated(roots.sorted(), after: lastServedRoot) {
             guard
                 let chosen = nextShard(in: root, from: catalog, now: now)
             else { continue }
@@ -145,12 +153,25 @@ public final class FileIndexRefreshSweep {
                     ),
                 ]
             )
+            lastServedRoot = root
             await FileCorpusStore.shared.refresh(
                 shard: chosen.name, canonicalRoot: root
             )
             return chosen.name
         }
         return nil
+    }
+
+    /// The same roots, rotated so the one after `previous` comes first.
+    ///
+    /// Round-robin rather than random: the order stays stable and readable in
+    /// the log, and every root is reached before any is reached twice.
+    static func rotated(_ roots: [String], after previous: String?) -> [String] {
+        guard let previous, let index = roots.firstIndex(of: previous) else {
+            return roots
+        }
+        let next = roots.index(after: index)
+        return Array(roots[next...]) + Array(roots[..<next])
     }
 
     /// How an in-flight shard is named. Shared with tests so neither side has to

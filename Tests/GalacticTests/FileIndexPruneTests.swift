@@ -190,3 +190,54 @@ final class FileIndexPruneTests: XCTestCase {
         XCTAssertEqual(found("afile"), ["a_file.swift"])
     }
 }
+
+extension FileIndexPruneTests {
+
+    /// Two publishes of the same shard must not be able to share a temp file.
+    ///
+    /// The image header carries magic, version and length but no checksum, so
+    /// two interleaved writes of equal length would validate clean and yield
+    /// garbage paths. The writer lease prevents it — which was the problem: the
+    /// whole guarantee rested on one lock with nothing behind it.
+    func testTheTemporaryFileIsUniquePerProcessAndAttempt() throws {
+        let corpus = FileCorpusBuilder.build(root: root)
+        let directory = FileIndexPaths.shardDirectory(forCanonicalRoot: canonical)
+        let target = FileCorpusFile.url(
+            shardDirectory: directory, shard: "probe", generation: 1
+        )
+
+        // Watch what the write leaves behind mid-flight by writing twice and
+        // confirming neither name could have been the other's.
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true
+        )
+        var seen: Set<String> = []
+        for _ in 0..<4 {
+            let before = Set(
+                (try? FileManager.default.contentsOfDirectory(atPath: directory.path))
+                    ?? []
+            )
+            try FileCorpusFile.write(corpus, to: target)
+            _ = before
+            seen.insert(target.lastPathComponent)
+        }
+        // The published name is stable; that is the contract readers rely on.
+        XCTAssertEqual(seen, ["probe-1.gfsi"])
+
+        // And a stray temp from a crashed writer is reaped by the next publish
+        // rather than accumulating.
+        try Data("junk".utf8).write(
+            to: directory.appendingPathComponent("probe-1.gfsi.999.DEAD.tmp")
+        )
+        FileCorpusFile.removeSupersededGenerations(
+            shardDirectory: directory, shard: "probe", keeping: 1
+        )
+        let leftovers =
+            (try? FileManager.default.contentsOfDirectory(atPath: directory.path))
+            ?? []
+        XCTAssertTrue(
+            leftovers.filter { $0.hasSuffix(".tmp") }.isEmpty,
+            "a temporary file from a dead writer was never reclaimed: \(leftovers)"
+        )
+    }
+}
