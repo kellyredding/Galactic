@@ -458,16 +458,58 @@ public final class FileCorpusStore {
 
     /// Record files that appeared. Cheap: they go into a small in-memory
     /// corpus scanned alongside the shards, rather than provoking a rewalk.
+    /// One path the file system says exists, with what a `stat` already said
+    /// about it.
+    ///
+    /// The kind and the modification time are carried rather than looked up
+    /// again. Measured: `stat` was **213 ms of a 218 ms** burst of nine hundred
+    /// paths — ninety-eight percent of the cost, on the main actor, at a quarter
+    /// of a millisecond each because the paths are scattered across a
+    /// 877,000-file tree and each one is a cold metadata read. The watcher has
+    /// already paid for that off the main actor to decide whether the path still
+    /// exists, so paying again here was pure duplication.
+    public struct Appearance {
+        public let path: String
+        public let modified: Date?
+        public let isDirectory: Bool
+
+        public init(path: String, modified: Date?, isDirectory: Bool) {
+            self.path = path
+            self.modified = modified
+            self.isDirectory = isDirectory
+        }
+    }
+
+    /// Convenience for a caller holding only paths — it stats them itself.
+    ///
+    /// Fine for a handful. The watcher does not use it, because a burst is not
+    /// a handful.
     public func noteCreated(_ paths: [String], canonicalRoot root: String) {
+        noteCreated(
+            paths.compactMap { path in
+                var info = stat()
+                guard stat(path, &info) == 0 else { return nil }
+                return Appearance(
+                    path: path,
+                    modified: Date(
+                        timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec)
+                    ),
+                    isDirectory: info.st_mode & S_IFMT == S_IFDIR
+                )
+            },
+            canonicalRoot: root
+        )
+    }
+
+    public func noteCreated(_ appearances: [Appearance], canonicalRoot root: String) {
         guard var state = roots[root] else { return }
         var changed = 0
-        for path in paths {
+        for appearance in appearances {
+            let path = appearance.path
             guard
                 let relative = FilePaths.relativeEntry(of: path, underCanonical: root)
             else { continue }
-            var info = stat()
-            guard stat(path, &info) == 0 else { continue }
-            let isDirectory = info.st_mode & S_IFMT == S_IFDIR
+            let isDirectory = appearance.isDirectory
             // A path that a shard already holds and that was merely marked
             // deleted comes back by clearing the bit — it must NOT also join
             // the delta, or the file is offered twice, once from each. This is
@@ -489,10 +531,7 @@ public final class FileCorpusStore {
                 continue
             }
             if state.added[relative] == nil { changed += 1 }
-            state.added[relative] = (
-                Date(timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec)),
-                isDirectory
-            )
+            state.added[relative] = (appearance.modified, isDirectory)
         }
         roots[root] = state
         if changed > 0 {
@@ -630,23 +669,42 @@ public final class FileCorpusStore {
     ///
     /// The kind matters to the caller: a bitset can hide one entry, and a
     /// directory standing for everything beneath it is not one entry.
+    /// Which shard could hold this path, without looking.
+    ///
+    /// A shard is a top-level subtree and every entry in it is prefixed with
+    /// that name, so the first path component *is* the shard — and a path with
+    /// no separator is a top-level entry, which lives in the root's own shard.
+    ///
+    /// This is not a micro-optimisation. Both callers used to ask every shard
+    /// in turn, and each question is a binary search that replays a
+    /// front-coded block per probe. Measured on this machine: eighty-four event
+    /// batches arrived in one second after a relaunch, and searching
+    /// forty-five shards per path in each of them put roughly fifty million
+    /// decode steps on the main thread inside that second. That is a beach
+    /// ball, and it is what the arithmetic predicts rather than what a profiler
+    /// found afterwards.
+    private static func shardName(covering relative: String) -> String {
+        guard let separator = relative.firstIndex(of: "/") else { return "" }
+        return String(relative[relative.startIndex..<separator])
+    }
+
     private func markRemoved(_ relative: String, in state: inout RootState)
         -> (removed: Bool, wasDirectory: Bool)
     {
+        let name = Self.shardName(covering: relative)
+        guard let corpus = state.shards[name] else { return (false, false) }
         let needle = Array(relative.utf8)
-        for (name, corpus) in state.shards {
-            let index = corpus.firstIndex(atOrAfter: needle)
-            guard index < corpus.entryCount,
-                corpus.relativePath(at: index) == relative
-            else { continue }
-            var bits =
-                state.removed[name]
-                ?? [UInt64](repeating: 0, count: (corpus.entryCount + 63) / 64)
-            bits[index >> 6] |= 1 << UInt64(index & 63)
-            state.removed[name] = bits
-            return (true, corpus.isDirectory(at: index))
-        }
-        return (false, false)
+        let index = corpus.firstIndex(atOrAfter: needle)
+        guard index < corpus.entryCount,
+            corpus.relativePath(at: index) == relative
+        else { return (false, false) }
+
+        var bits =
+            state.removed[name]
+            ?? [UInt64](repeating: 0, count: (corpus.entryCount + 63) / 64)
+        bits[index >> 6] |= 1 << UInt64(index & 63)
+        state.removed[name] = bits
+        return (true, corpus.isDirectory(at: index))
     }
 
     /// Un-delete a path a shard already holds.
@@ -657,18 +715,18 @@ public final class FileCorpusStore {
     private func clearRemoval(of relative: String, in state: inout RootState)
         -> Bool
     {
+        let name = Self.shardName(covering: relative)
+        guard let corpus = state.shards[name] else { return false }
         let needle = Array(relative.utf8)
-        for (name, corpus) in state.shards {
-            let index = corpus.firstIndex(atOrAfter: needle)
-            guard index < corpus.entryCount,
-                corpus.relativePath(at: index) == relative
-            else { continue }
-            if state.removed[name] != nil {
-                state.removed[name]?[index >> 6] &= ~(1 << UInt64(index & 63))
-            }
-            return true
+        let index = corpus.firstIndex(atOrAfter: needle)
+        guard index < corpus.entryCount,
+            corpus.relativePath(at: index) == relative
+        else { return false }
+
+        if state.removed[name] != nil {
+            state.removed[name]?[index >> 6] &= ~(1 << UInt64(index & 63))
         }
-        return false
+        return true
     }
 
     /// Anything the overlay was carrying for a shard is now in the shard.
@@ -684,10 +742,17 @@ public final class FileCorpusStore {
 
     /// Re-encode the pending additions as a corpus.
     ///
-    /// Rebuilt whole rather than appended to, because it is small by
-    /// construction — the shards absorb it on every rotation — and a corpus is
-    /// immutable once built, which is what lets a scan hold one without
-    /// synchronisation.
+    /// Rebuilt whole rather than appended to, because a corpus is immutable
+    /// once built, which is what lets a scan hold one without synchronisation.
+    ///
+    /// Deliberately **not** coalesced across event batches, though it looked
+    /// like the obvious companion fix to the one above. Eighty-four batches in
+    /// a second do mean eighty-four rebuilds, but the overlay is a few hundred
+    /// entries — thousands of appends and a sort of a two-hundred-element array,
+    /// which is microseconds. Deferring it to the next turn of the loop would
+    /// buy that back and make a created file asynchronously visible, so a
+    /// caller reading straight after being told about one could miss it. The
+    /// cost was the forty-five-shard search, not this.
     private func rebuildDelta(root: String) {
         guard let state = roots[root] else { return }
         guard !state.added.isEmpty else {
@@ -768,19 +833,51 @@ public final class FileCorpusStore {
     /// exists and a new one that does, and this gets both right without having
     /// to reconstruct which event meant which.
     public func apply(touched: [String], rescan: [String], canonicalRoot root: String) {
-        guard roots[root] != nil else { return }
-        for path in rescan { markSubtreeDirty(path, canonicalRoot: root) }
+        let classified = Self.classify(touched)
+        apply(
+            created: classified.created, removed: classified.removed,
+            rescan: rescan, canonicalRoot: root
+        )
+    }
 
-        var created: [String] = []
+    /// Split paths into those that still exist and those that do not, reading
+    /// what the existing ones are while asking.
+    ///
+    /// `nonisolated static` on purpose: this is the expensive half and none of
+    /// it touches store state, so the watcher runs it on its own queue and hands
+    /// over the answers. It used to run on the main actor, where a burst of nine
+    /// hundred paths spent 213 ms in `stat` alone.
+    public nonisolated static func classify(_ paths: [String])
+        -> (created: [Appearance], removed: [String])
+    {
+        var created: [Appearance] = []
         var removed: [String] = []
-        for path in touched {
+        created.reserveCapacity(paths.count)
+        for path in paths {
             var info = stat()
             if lstat(path, &info) == 0 {
-                created.append(path)
+                created.append(
+                    Appearance(
+                        path: path,
+                        modified: Date(
+                            timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec)
+                        ),
+                        isDirectory: info.st_mode & S_IFMT == S_IFDIR
+                    )
+                )
             } else {
                 removed.append(path)
             }
         }
+        return (created, removed)
+    }
+
+    public func apply(
+        created: [Appearance], removed: [String], rescan: [String],
+        canonicalRoot root: String
+    ) {
+        guard roots[root] != nil else { return }
+        for path in rescan { markSubtreeDirty(path, canonicalRoot: root) }
         if !removed.isEmpty { noteRemoved(removed, canonicalRoot: root) }
         if !created.isEmpty { noteCreated(created, canonicalRoot: root) }
     }

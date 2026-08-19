@@ -533,3 +533,54 @@ extension FileIndexLiveTests {
         )
     }
 }
+
+extension FileIndexLiveTests {
+
+    /// The watcher classifies paths on its own queue and hands over the answers,
+    /// so the store must trust what it was told rather than asking again.
+    ///
+    /// Proved by describing a path that does not exist on disk: a store that
+    /// still stats would find nothing and drop it, and one that uses what it was
+    /// given indexes it. That distinction is worth 213 ms of `stat` per nine
+    /// hundred paths, which is what it cost on the main actor before.
+    func testACarriedAppearanceIsTrustedWithoutRestatting() async throws {
+        try touch("src/real.swift")
+        await indexRoot()
+
+        let imaginary = root.appendingPathComponent("src/never_written.swift")
+        FileCorpusStore.shared.noteCreated(
+            [
+                FileCorpusStore.Appearance(
+                    path: imaginary.path, modified: Date(), isDirectory: false
+                )
+            ],
+            canonicalRoot: canonical
+        )
+
+        XCTAssertEqual(
+            found("neverwritten"), ["src/never_written.swift"],
+            "the store re-statted instead of trusting the classification"
+        )
+    }
+
+    /// And the classification itself: existence decides, which is what makes a
+    /// rename fall out as one path leaving and another arriving.
+    func testClassifySplitsByWhatStillExists() throws {
+        let present = try touch("src/here.swift")
+        let absent = root.appendingPathComponent("src/gone.swift")
+
+        let classified = FileCorpusStore.classify([present.path, absent.path])
+
+        XCTAssertEqual(classified.created.map(\.path), [present.path])
+        XCTAssertEqual(classified.removed, [absent.path])
+        XCTAssertNotNil(classified.created.first?.modified)
+        XCTAssertEqual(classified.created.first?.isDirectory, false)
+    }
+
+    func testClassifyReportsDirectoriesAsSuch() throws {
+        _ = try touch("adir/inner.swift")
+        let directory = root.appendingPathComponent("adir")
+        let classified = FileCorpusStore.classify([directory.path])
+        XCTAssertEqual(classified.created.first?.isDirectory, true)
+    }
+}
