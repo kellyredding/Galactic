@@ -59,7 +59,14 @@ public enum FilePaths {
         return relative(url.path, under: root.path)
     }
 
-    private static func relative(_ path: String, under base: String) -> String? {
+    /// The lexical answer alone, for a caller that has already canonicalised
+    /// both sides and does not want the work repeated.
+    ///
+    /// Internal rather than private because `FileCorpus` asks it per subtree
+    /// query against a root it resolved once at build time — going back
+    /// through `relativePath(of:under:)` would `realpath` both sides again on
+    /// every keystroke that re-roots.
+    static func relative(_ path: String, under base: String) -> String? {
         let child = path.split(separator: "/").map(String.init)
         let root = base.split(separator: "/").map(String.init)
         guard child.count > root.count, Array(child.prefix(root.count)) == root

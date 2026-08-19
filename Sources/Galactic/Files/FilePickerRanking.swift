@@ -32,68 +32,51 @@ public enum FilePickerRanking {
     /// than an approximation of it.
     ///
     /// Kept literal, a space was worse than useless: it went into the
-    /// necessary-condition set below, no path contained one, and every single
-    /// candidate was rejected before it was ever scored. A query with a space
-    /// answered "no file matches" over a tree full of matches.
+    /// necessary-condition set of a prefilter, no path contained one, and
+    /// every single candidate was rejected before it was ever scored. A query
+    /// with a space answered "no file matches" over a tree full of matches.
+    ///
+    /// The scan itself lives in `FileMatcher`. What stays here is the shape a
+    /// picker row wants — a URL, a display path, and the offsets to
+    /// highlight — because that is a view's vocabulary rather than a
+    /// matcher's.
     ///
     /// This also does the right thing by the filenames that *do* contain
     /// spaces — `Desktop/AI prompts.txt` still answers to `ai prompts`, because
     /// the space in the path is simply one of the gaps the subsequence skips.
     public static func matches(
-        _ items: [FileTreeIndex.Item],
+        _ corpus: FileCorpus,
+        range: Range<Int>? = nil,
         query: String,
-        limit: Int = resultLimit
+        limit: Int = resultLimit,
+        includingDirectories: Bool = false,
+        cancellation: FileMatcher.Cancellation? = nil
     ) -> [FilePickerItem] {
-        let condensed = query.filter { !$0.isWhitespace }
-        guard !condensed.isEmpty else { return [] }
+        let prepared = FileMatcher.PreparedQuery(query)
+        guard !prepared.needle.isEmpty else { return [] }
 
-        let prepared = FuzzyMatch.PreparedQuery(condensed, scope: .subsequence)
-        // A necessary condition, checked before anything is scored: a
-        // subsequence match needs every query character to appear somewhere.
-        // Rejecting on that is a set lookup against a string lowercased once at
-        // index time, where scoring is an allocation and a walk — and over tens
-        // of thousands of files the difference is whether the picker keeps up
-        // with typing.
-        let required = Set(condensed.lowercased())
+        let matched = FileMatcher.matches(
+            in: corpus,
+            range: range,
+            query: query,
+            limit: limit,
+            includingDirectories: includingDirectories,
+            cancellation: cancellation
+        )
 
-        var scored: [(item: FileTreeIndex.Item, result: FuzzyMatch.Result)] = []
-        for item in items {
-            let candidate = item.lowercasedRelativePath
-            guard required.allSatisfy({ candidate.contains($0) }) else {
-                continue
-            }
-            guard
-                let result = FuzzyMatch.result(
-                    item.relativePath, prepared: prepared
-                )
-            else { continue }
-            scored.append((item, result))
+        // Offsets are computed here, for the hundred rows that survived,
+        // rather than in the scan that considered four hundred thousand.
+        return matched.map { match in
+            let relative = corpus.relativePath(at: match.index)
+            return FilePickerItem(
+                url: URL(fileURLWithPath: corpus.path(at: match.index)),
+                relativePath: relative,
+                matchedOffsets: FileMatcher.highlightOffsets(
+                    in: relative, query: prepared
+                ),
+                source: .matched
+            )
         }
-
-        return
-            scored
-            .sorted {
-                // Score first; then the shorter path, because a match in a
-                // short path is more often the one meant; then alphabetically,
-                // so the order does not shuffle between identical queries.
-                if $0.result.score != $1.result.score {
-                    return $0.result.score > $1.result.score
-                }
-                if $0.item.relativePath.count != $1.item.relativePath.count {
-                    return $0.item.relativePath.count
-                        < $1.item.relativePath.count
-                }
-                return $0.item.relativePath < $1.item.relativePath
-            }
-            .prefix(limit)
-            .map {
-                FilePickerItem(
-                    url: $0.item.url,
-                    relativePath: $0.item.relativePath,
-                    matchedOffsets: $0.result.matchedOffsets,
-                    source: .matched
-                )
-            }
     }
 
     /// What an empty query offers: files closed in this set, then files opened

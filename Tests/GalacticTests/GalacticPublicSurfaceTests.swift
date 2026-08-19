@@ -402,7 +402,7 @@ final class GalacticPublicSurfaceTests: XCTestCase {
         closed.push(url: url, row: 0)
         XCTAssertEqual(closed.presented().count, 1)
 
-        XCTAssertFalse(FileTreeIndex.build(root: dir).items.isEmpty)
+        XCTAssertFalse(FileCorpusBuilder.build(root: dir).isEmpty)
         XCTAssertFalse(FileTabLabel.tiers(for: url, root: dir).isEmpty)
         XCTAssertFalse(
             FileReviewComposer.compose(
@@ -425,7 +425,7 @@ final class GalacticPublicSurfaceTests: XCTestCase {
         // The host answers what counts as noise, because the right answer
         // depends on what its root is.
         XCTAssertEqual(
-            presenter.skipListProvider(), FileTreeIndex.defaultSkipList
+            presenter.skipListProvider(), FileCorpusBuilder.defaultSkipList
         )
 
         presenter.toggle()

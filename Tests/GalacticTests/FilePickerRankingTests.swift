@@ -26,7 +26,7 @@ final class FilePickerRankingTests: XCTestCase {
     }
 
     /// Build a real index, since `Item` computes its own relative path.
-    private func index(_ relatives: [String]) throws -> [FileTreeIndex.Item] {
+    private func index(_ relatives: [String]) throws -> FileCorpus {
         for relative in relatives {
             let url = dir.appendingPathComponent(relative)
             try FileManager.default.createDirectory(
@@ -35,7 +35,7 @@ final class FilePickerRankingTests: XCTestCase {
             )
             try Data("x".utf8).write(to: url)
         }
-        return FileTreeIndex.build(root: dir).items
+        return FileCorpusBuilder.build(root: dir)
     }
 
     private func paths(_ rows: [FilePickerItem]) -> [String] {
