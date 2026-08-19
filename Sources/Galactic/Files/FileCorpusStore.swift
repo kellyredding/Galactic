@@ -30,7 +30,28 @@ public final class FileCorpusStore {
 
     private struct RootState {
         var url: URL
-        var skipList: Set<String>
+        /// A list supplied instead of the index's own, or none.
+        ///
+        /// Absent for a host, which is the point: the list is a property of the
+        /// index, and a captured copy is how one application comes to walk under
+        /// rules another has since changed. Present only for a caller that wants
+        /// a specific walk — a test asking for an unfiltered one.
+        var skipListOverride: Set<String>?
+        /// The list the last walk resolved, for the event path to filter against.
+        ///
+        /// The walk reads the list through from the index every time, because a
+        /// walk happens at most once a minute and the durable shard it publishes
+        /// must be built under current rules. Events are the opposite: dozens of
+        /// batches a second during a build, and a query per batch on the main
+        /// actor is the shape of stall this store has already been fixed for
+        /// once.
+        ///
+        /// So the overlay filters against whatever the last walk resolved. The
+        /// cost of being briefly behind is an overlay entry that should have
+        /// been skipped, or one that should not have been — and the next walk of
+        /// that shard corrects it either way, because the walk is the thing that
+        /// decides what the shard contains.
+        var resolvedSkipList: Set<String>?
         /// Shard name → its corpus. The empty name is the root's own entries.
         var shards: [String: FileCorpus] = [:]
         /// Shard name → bitset of entries deleted since it was written.
@@ -280,8 +301,6 @@ public final class FileCorpusStore {
         onFinished: @escaping () -> Void = {}
     ) {
         let canonical = FilePaths.canonical(root)
-        let skipList =
-            requestedSkipList ?? FileCorpusBuilder.skipList(forRoot: root)
 
         // Already covered by a root above this one, so there is nothing to
         // walk and nothing to store: the entries are already indexed, and
@@ -336,7 +355,7 @@ public final class FileCorpusStore {
             return
         }
         if roots[canonical] == nil {
-            roots[canonical] = RootState(url: root, skipList: skipList)
+            roots[canonical] = RootState(url: root, skipListOverride: requestedSkipList)
         }
         guard roots[canonical]?.isLoaded != true else {
             onFinished()
@@ -402,7 +421,7 @@ public final class FileCorpusStore {
     ) async {
         guard let state = roots[canonical] else { return }
         let root = state.url
-        let skipList = state.skipList
+        let skipList = effectiveSkipList(forCanonicalRoot: canonical)
 
         // The root's own shard first: it is what names all the others.
         if state.shards[""] == nil {
@@ -437,6 +456,44 @@ public final class FileCorpusStore {
             ]
         )
         onFinished()
+    }
+
+    /// The list to walk a root under, resolved now rather than remembered.
+    ///
+    /// Derived from what the root is, then adjusted by whatever this index has
+    /// been told. Read on every walk, which costs one query and is what lets a
+    /// change made in one application take effect in another without either of
+    /// them being told: there is no cached copy to go stale.
+    ///
+    /// A walk already in flight finishes under the list it started with. That is
+    /// the same shape as a dirty mark raised mid-walk, and it has the same
+    /// answer — changing the list marks the affected shards dirty, so anything
+    /// published under superseded rules gets walked again.
+    func effectiveSkipList(forCanonicalRoot root: String) -> Set<String> {
+        guard let state = roots[root] else { return [] }
+        let list: Set<String>
+        if let override = state.skipListOverride {
+            list = override
+        } else {
+            var derived = FileCorpusBuilder.skipList(forRoot: state.url)
+            if let delta = catalog?.skipListDelta(forRoot: root) {
+                derived.formUnion(delta.added)
+                derived.subtract(delta.removed)
+            }
+            list = derived
+        }
+        roots[root]?.resolvedSkipList = list
+        return list
+    }
+
+    /// The list the event path filters against — the last one a walk resolved.
+    ///
+    /// Deliberately not a read-through: see `RootState.resolvedSkipList`.
+    private func skipListForEvents(canonicalRoot root: String) -> Set<String> {
+        guard let state = roots[root] else { return [] }
+        if let resolved = state.resolvedSkipList { return resolved }
+        return state.skipListOverride
+            ?? FileCorpusBuilder.skipList(forRoot: state.url)
     }
 
     /// Walk one shard, publish it, and record it.
@@ -684,6 +741,8 @@ public final class FileCorpusStore {
 
     public func noteCreated(_ appearances: [Appearance], canonicalRoot root: String) {
         guard var state = roots[root] else { return }
+        // Once per batch, not once per path.
+        let eventSkipList = skipListForEvents(canonicalRoot: root)
         var changed = 0
         for appearance in appearances {
             let path = appearance.path
@@ -704,7 +763,7 @@ public final class FileCorpusStore {
             // put eleven thousand entries into the overlay — precisely the
             // noise the skip list exists to keep out, arriving through the
             // other door.
-            guard Self.isIndexable(relative, skipping: state.skipList) else {
+            guard Self.isIndexable(relative, skipping: eventSkipList) else {
                 continue
             }
             if clearRemoval(of: relative, in: &state) {
@@ -979,7 +1038,8 @@ public final class FileCorpusStore {
         )
         await walk(
             shard: shard, canonical: root, root: state.url,
-            skipping: state.skipList, onProgress: { _ in }
+            skipping: effectiveSkipList(forCanonicalRoot: root),
+            onProgress: { _ in }
         )
         return shard
     }

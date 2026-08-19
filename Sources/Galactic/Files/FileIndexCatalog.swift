@@ -76,6 +76,20 @@ public final class FileIndexCatalog: @unchecked Sendable {
             )
             """
         )
+        // A delta against the derived list rather than the list itself, so an
+        // improvement to the built-in one still reaches a reader who has
+        // customised theirs. Storing the whole list would freeze them on
+        // whatever the default happened to be the day they first changed it.
+        execute(
+            """
+            CREATE TABLE IF NOT EXISTS skip_list (
+                root_path TEXT    NOT NULL,
+                name      TEXT    NOT NULL,
+                skipped   INTEGER NOT NULL,
+                PRIMARY KEY (root_path, name)
+            )
+            """
+        )
     }
 
     deinit { if let database { sqlite3_close(database) } }
@@ -109,6 +123,72 @@ public final class FileIndexCatalog: @unchecked Sendable {
                 found.append(text(statement, 0))
             }
             return found
+        }
+    }
+
+    // MARK: - The skip list
+
+    /// What this index has been told to skip, or not to skip, for a root.
+    ///
+    /// Lives here rather than in an application because two applications share
+    /// one index: a list held per app made the same corpus mean different things
+    /// depending on which built it, with nothing recording that they disagreed.
+    /// Read through on every walk rather than captured, which is what makes a
+    /// change in one application visible to the other without either notifying
+    /// anything.
+    public func skipListDelta(forRoot root: String) -> (added: Set<String>, removed: Set<String>) {
+        queue.sync {
+            var added: Set<String> = []
+            var removed: Set<String> = []
+            var statement: OpaquePointer?
+            let sql = "SELECT name, skipped FROM skip_list WHERE root_path = ?"
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK
+            else { return (added, removed) }
+            defer { sqlite3_finalize(statement) }
+            bindText(statement, 1, root)
+            while sqlite3_step(statement) == SQLITE_ROW {
+                let name = text(statement, 0)
+                if sqlite3_column_int64(statement, 1) == 1 {
+                    added.insert(name)
+                } else {
+                    removed.insert(name)
+                }
+            }
+            return (added, removed)
+        }
+    }
+
+    /// Record that a name should, or should not, be skipped under a root.
+    public func setSkipListEntry(root: String, name: String, skipped: Bool) {
+        queue.sync {
+            let sql = """
+                INSERT INTO skip_list (root_path, name, skipped)
+                VALUES (?, ?, ?)
+                ON CONFLICT(root_path, name) DO UPDATE SET
+                    skipped = excluded.skipped
+                """
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK
+            else { return }
+            defer { sqlite3_finalize(statement) }
+            bindText(statement, 1, root)
+            bindText(statement, 2, name)
+            sqlite3_bind_int64(statement, 3, skipped ? 1 : 0)
+            step(statement, "setSkipListEntry")
+        }
+    }
+
+    /// Forget an override, returning the name to whatever the derived list says.
+    public func clearSkipListEntry(root: String, name: String) {
+        queue.sync {
+            let sql = "DELETE FROM skip_list WHERE root_path = ? AND name = ?"
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK
+            else { return }
+            defer { sqlite3_finalize(statement) }
+            bindText(statement, 1, root)
+            bindText(statement, 2, name)
+            step(statement, "clearSkipListEntry")
         }
     }
 
