@@ -71,6 +71,14 @@ final class FilePickerEmptyStateTests: XCTestCase {
                 "\(word) describes the implementation, not the reader"
             )
         }
+
+        // The space is fed by closed tabs and by recents-minus-open, so a file
+        // open right now is in neither. The wording must not promise otherwise:
+        // it did, and a reader with two files open watched them not appear.
+        XCTAssertTrue(
+            text.contains("previously opened"),
+            "the copy has to say when a file shows up, not just that it will"
+        )
     }
 
     func testATypedQueryWithNoMatchesSaysSo() {

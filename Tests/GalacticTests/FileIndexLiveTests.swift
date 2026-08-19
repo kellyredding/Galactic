@@ -385,3 +385,96 @@ extension FileIndexLiveTests {
         )
     }
 }
+
+extension FileIndexLiveTests {
+
+    /// A directory going away takes everything under it, and the file system
+    /// says nothing about the children — they never changed. Clearing one bit
+    /// for the directory itself would leave every path beneath it resolving to
+    /// a file that is gone.
+    func testRemovingADirectoryEventuallyClearsItsChildren() async throws {
+        try touch("doomed_dir/inner/leaf_file.swift")
+        try touch("keeper/other.swift")
+        await indexRoot()
+        XCTAssertEqual(
+            found("leaffile"), ["doomed_dir/inner/leaf_file.swift"],
+            "precondition: the child was indexed"
+        )
+
+        let directory = root.appendingPathComponent("doomed_dir")
+        try FileManager.default.removeItem(at: directory)
+        // Only the directory is reported, which is what the file system does.
+        FileCorpusStore.shared.noteRemoved([directory.path], canonicalRoot: canonical)
+
+        FileIndexRefreshRotation.targetAge = 0
+        defer { FileIndexRefreshRotation.targetAge = 3_600 }
+        FileIndexRefreshRotation.shared.add(canonicalRoot: canonical)
+        for _ in 0..<10 {
+            _ = await FileIndexRefreshRotation.shared.tick()
+            if found("leaffile").isEmpty { break }
+        }
+
+        XCTAssertTrue(
+            found("leaffile").isEmpty,
+            "a child of a removed directory still resolves"
+        )
+        XCTAssertEqual(
+            found("other"), ["keeper/other.swift"], "an unrelated subtree was harmed"
+        )
+    }
+
+    /// The overlay used to be bounded only by time — it drained when the
+    /// rotation reached a shard, an hour away at the earliest — so an active
+    /// hour grew it without limit while every batch of events re-encoded the
+    /// whole thing. Size has to provoke compaction too.
+    func testALargeOverlayMarksItsShardForRewalk() async throws {
+        try touch("busy/seed.swift")
+        await indexRoot()
+
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        XCTAssertFalse(
+            catalog.shards(forRoot: canonical).first { $0.name == "busy" }?.dirty
+                ?? true,
+            "precondition: the shard starts clean"
+        )
+
+        var created: [String] = []
+        for index in 0..<(FileCorpusStore.overlayCompactionThreshold + 10) {
+            let url = root.appendingPathComponent("busy/generated_\(index).swift")
+            try Data("x".utf8).write(to: url)
+            created.append(url.path)
+        }
+        FileCorpusStore.shared.noteCreated(created, canonicalRoot: canonical)
+
+        XCTAssertTrue(
+            catalog.shards(forRoot: canonical).first { $0.name == "busy" }?.dirty
+                ?? false,
+            "the overlay passed the threshold and nothing asked for a rewalk"
+        )
+    }
+
+    /// `pending=306` with no attribution cannot answer "where is it coming
+    /// from", which is the only question worth asking of that number.
+    func testTheOverlayCanSayWhichSubtreeItIsAccumulatingIn() async throws {
+        try touch("alpha/seed.swift")
+        try touch("beta/seed.swift")
+        await indexRoot()
+
+        var created: [String] = []
+        for index in 0..<5 {
+            let url = root.appendingPathComponent("alpha/new_\(index).swift")
+            try Data("x".utf8).write(to: url)
+            created.append(url.path)
+        }
+        let single = root.appendingPathComponent("beta/new.swift")
+        try Data("x".utf8).write(to: single)
+        created.append(single.path)
+        FileCorpusStore.shared.noteCreated(created, canonicalRoot: canonical)
+
+        let breakdown = FileCorpusStore.shared.overlayByShard(
+            forCanonicalRoot: canonical
+        )
+        XCTAssertEqual(breakdown["alpha"], 5)
+        XCTAssertEqual(breakdown["beta"], 1)
+    }
+}

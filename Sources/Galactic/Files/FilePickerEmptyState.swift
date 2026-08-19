@@ -51,6 +51,13 @@ enum FilePickerEmptyState {
     ///
     /// So: the action first, because that is what the reader needs, and then what
     /// the space is for, because that is what stops them wondering next time.
+    ///
+    /// **"previously opened", not "you open".** The two lists behind this space
+    /// are closed tabs and `presentedRecents`, and that second one subtracts
+    /// whatever currently has a tab — deliberately, since a file already on
+    /// screen is not a suggestion. So a file open right now appears in neither,
+    /// and the earlier wording promised a reader with two files open that they
+    /// would be listed here. They only arrive once closed.
     static let emptyQuery =
-        "Type to search. Files you open will be listed here."
+        "Type to search. Files you've previously opened will be listed here."
 }

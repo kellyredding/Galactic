@@ -472,10 +472,8 @@ public final class FileCorpusStore {
         roots[root] = state
         if changed > 0 {
             rebuildDelta(root: root)
-            log.record(
-                "watch",
-                [("event", "created"), ("count", "\(changed)"), ("pending", "\(roots[root]?.added.count ?? 0)")]
-            )
+            log.record("watch", watchFields("created", changed: changed, root: root))
+            applyCompactionPressure(root: root)
         }
     }
 
@@ -484,18 +482,101 @@ public final class FileCorpusStore {
     public func noteRemoved(_ paths: [String], canonicalRoot root: String) {
         guard var state = roots[root] else { return }
         var changed = 0
+        var vanishedDirectories: [String] = []
         for path in paths {
             guard
                 let relative = FilePaths.relativeEntry(of: path, underCanonical: root)
             else { continue }
             if state.added.removeValue(forKey: relative) != nil { changed += 1 }
-            if markRemoved(relative, in: &state) { changed += 1 }
+            let outcome = markRemoved(relative, in: &state)
+            if outcome.removed { changed += 1 }
+            if outcome.wasDirectory { vanishedDirectories.append(relative) }
         }
         roots[root] = state
         if changed > 0 {
             rebuildDelta(root: root)
+            log.record("watch", watchFields("removed", changed: changed, root: root))
+        }
+
+        // A directory that went away takes everything under it, and the file
+        // system does not say so: its children never changed, so no event
+        // mentions them. Clearing one bit for the directory itself would leave
+        // every path beneath it resolving to nothing.
+        //
+        // The honest response is the same one a dropped event gets — mark the
+        // subtree for a rewalk and let the rotation take it on the next tick,
+        // rather than pretending a bitset can express "and all descendants".
+        // A renamed directory arrives as exactly this, plus a create.
+        for directory in vanishedDirectories {
+            markSubtreeDirty(
+                root + "/" + directory, canonicalRoot: root, reason: "directory-removed"
+            )
+        }
+    }
+
+    /// The overlay, broken down by the shard each entry belongs to.
+    ///
+    /// Also the answer to "why is `pending` three hundred", which the log could
+    /// not give before: a count with no attribution says something is
+    /// accumulating without saying where.
+    public func overlayByShard(forCanonicalRoot root: String) -> [String: Int] {
+        guard let state = roots[root] else { return [:] }
+        var counts: [String: Int] = [:]
+        for path in state.added.keys {
+            let shard = path.contains("/")
+                ? String(path.split(separator: "/")[0]) : ""
+            counts[shard, default: 0] += 1
+        }
+        return counts
+    }
+
+    private func watchFields(
+        _ event: String, changed: Int, root: String
+    ) -> [(String, String)] {
+        var fields = [
+            ("event", event),
+            ("count", "\(changed)"),
+            ("pending", "\(roots[root]?.added.count ?? 0)"),
+        ]
+        if let top = overlayByShard(forCanonicalRoot: root)
+            .max(by: { $0.value < $1.value })
+        {
+            fields.append(("top", "\(top.key.isEmpty ? "(root)" : top.key):\(top.value)"))
+        }
+        return fields
+    }
+
+    /// How many pending entries one shard may accumulate before it is rewritten.
+    ///
+    /// The overlay was bounded only by time: it drained when the rotation got
+    /// around to a shard, which is an hour at the earliest. So an active hour
+    /// grew it without limit, and `rebuildDelta` re-encodes the whole thing on
+    /// every batch of events — an O(n) rebuild arriving every half second, which
+    /// is the same shape as the re-rank storm this effort began by removing.
+    ///
+    /// Bounding it by size as well turns the overlay into what it should have
+    /// been from the start: a buffer that provokes its own compaction. The
+    /// number is deliberately well above ordinary editing and well below the
+    /// point where the rebuild is felt.
+    static let overlayCompactionThreshold = 500
+
+    /// Mark any shard carrying too much overlay for a rewalk.
+    ///
+    /// Dirty shards already jump the rotation queue, so this needs no scheduler
+    /// of its own: it converts "the overlay is large" into "this subtree is
+    /// stale", which is a thing the rotation already knows how to fix.
+    private func applyCompactionPressure(root: String) {
+        for (shard, count) in overlayByShard(forCanonicalRoot: root)
+        where count >= Self.overlayCompactionThreshold {
+            catalog?.markDirty(root: root, name: shard)
             log.record(
-                "watch", [("event", "removed"), ("count", "\(changed)")]
+                "refresh",
+                [
+                    ("event", "compaction-due"),
+                    ("shard", shard.isEmpty ? "(root)" : shard),
+                    ("pending", "\(count)"),
+                    ("threshold", "\(Self.overlayCompactionThreshold)"),
+                ]
             )
         }
     }
@@ -515,7 +596,13 @@ public final class FileCorpusStore {
         return true
     }
 
-    private func markRemoved(_ relative: String, in state: inout RootState) -> Bool {
+    /// Mark one entry deleted, and say whether it was a directory.
+    ///
+    /// The kind matters to the caller: a bitset can hide one entry, and a
+    /// directory standing for everything beneath it is not one entry.
+    private func markRemoved(_ relative: String, in state: inout RootState)
+        -> (removed: Bool, wasDirectory: Bool)
+    {
         let needle = Array(relative.utf8)
         for (name, corpus) in state.shards {
             let index = corpus.firstIndex(atOrAfter: needle)
@@ -527,9 +614,9 @@ public final class FileCorpusStore {
                 ?? [UInt64](repeating: 0, count: (corpus.entryCount + 63) / 64)
             bits[index >> 6] |= 1 << UInt64(index & 63)
             state.removed[name] = bits
-            return true
+            return (true, corpus.isDirectory(at: index))
         }
-        return false
+        return (false, false)
     }
 
     /// Un-delete a path a shard already holds.
@@ -618,13 +705,23 @@ public final class FileCorpusStore {
     /// Mark the shard a path belongs to as needing a rewalk. Used when the
     /// file system says it lost track — the only honest response is to redo
     /// that subtree.
-    public func markSubtreeDirty(_ path: String, canonicalRoot root: String) {
+    public func markSubtreeDirty(
+        _ path: String, canonicalRoot root: String,
+        reason: String = "must-scan-subdirs"
+    ) {
         guard
             let relative = FilePaths.relativeEntry(of: path, underCanonical: root)
         else { return }
         let shard = relative.split(separator: "/").first.map(String.init) ?? ""
         catalog?.markDirty(root: root, name: shard)
-        log.record("refresh", [("shard", shard), ("event", "marked-dirty")])
+        log.record(
+            "refresh",
+            [
+                ("shard", shard.isEmpty ? "(root)" : shard),
+                ("event", "marked-dirty"),
+                ("reason", reason),
+            ]
+        )
     }
 
     /// Take a batch of file-system events.
