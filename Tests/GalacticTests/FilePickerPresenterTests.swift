@@ -14,6 +14,7 @@ import XCTest
 final class FilePickerPresenterTests: XCTestCase {
 
     private var dir: URL!
+    private var siblings: [URL] = []
 
     override func setUpWithError() throws {
         try super.setUpWithError()
@@ -29,7 +30,26 @@ final class FilePickerPresenterTests: XCTestCase {
 
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: dir)
+        for sibling in siblings { try? FileManager.default.removeItem(at: sibling) }
+        siblings = []
         try super.tearDownWithError()
+    }
+
+    /// A root that is genuinely elsewhere, rather than inside `dir`.
+    ///
+    /// The distinction is load-bearing now that a directory *inside* an
+    /// indexed root is served from that root's shards rather than walked
+    /// again. A test that means "a different tree" has to say so with a tree
+    /// that is actually different, or it is testing the nesting behaviour by
+    /// accident.
+    private func sibling(_ name: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("picker-sibling-\(name)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: url, withIntermediateDirectories: true
+        )
+        siblings.append(url)
+        return url
     }
 
     // MARK: - Opening and closing
@@ -400,10 +420,7 @@ final class FilePickerPresenterTests: XCTestCase {
     @MainActor
     func testATreeWalkedEarlierIsStillHeldAfterVisitingAnother() async throws {
         try write("a.swift")
-        let other = dir.appendingPathComponent("sub")
-        try FileManager.default.createDirectory(
-            at: other, withIntermediateDirectories: true
-        )
+        let other = try sibling("other")
         try Data("x".utf8).write(to: other.appendingPathComponent("inner.rb"))
 
         let presenter = FilePickerPresenter()
@@ -431,10 +448,7 @@ final class FilePickerPresenterTests: XCTestCase {
     @MainActor
     func testADifferentRootHasNothingHeldForIt() async throws {
         try write("a.swift")
-        let other = dir.appendingPathComponent("sub")
-        try FileManager.default.createDirectory(
-            at: other, withIntermediateDirectories: true
-        )
+        let other = try sibling("unrelated")
         try Data("x".utf8).write(to: other.appendingPathComponent("inner.rb"))
 
         let presenter = FilePickerPresenter()

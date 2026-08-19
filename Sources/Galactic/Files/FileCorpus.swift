@@ -226,7 +226,15 @@ public struct FileCorpus: @unchecked Sendable {
     /// Returns an empty range when `subroot` is outside this corpus, and the
     /// whole corpus when it *is* the root.
     public func range(under subroot: String) -> Range<Int> {
-        let canonical = FilePaths.canonical(URL(fileURLWithPath: subroot))
+        range(underCanonical: FilePaths.canonical(URL(fileURLWithPath: subroot)))
+    }
+
+    /// The same, for a caller that has already resolved the path.
+    ///
+    /// Separate because the resolving form calls `realpath`, and this is asked
+    /// once per shard on every keystroke that browses inside a covered root —
+    /// forty-odd syscalls to answer a question whose input never changed.
+    public func range(underCanonical canonical: String) -> Range<Int> {
         if canonical == root { return 0..<entryCount }
         guard let relative = FilePaths.relative(canonical, under: root) else {
             return 0..<0

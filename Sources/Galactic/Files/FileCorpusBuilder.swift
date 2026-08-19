@@ -53,6 +53,11 @@ public enum FileCorpusBuilder {
         "target", ".gradle", ".terraform", ".dart_tool",
         // Caches and tooling
         ".cache", ".parcel-cache", ".turbo", "coverage", ".idea",
+        // The index's own storage. Without this it indexes itself — thirty
+        // megabytes of its own shards — and worse, every publish writes there,
+        // which the watcher then reports as file-system activity, which churns
+        // the overlay. A loop that costs a little on every pass.
+        ".galactic",
     ]
 
     /// How deep to descend.

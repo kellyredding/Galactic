@@ -50,6 +50,13 @@ public enum FilePickerRanking {
         query: String,
         limit: Int = resultLimit,
         includingDirectories: Bool = false,
+        /// The root being browsed, when it is not the corpus's own.
+        ///
+        /// A subtree of an indexed root is served from that root's shards, so
+        /// the stored path is relative to the root *above* the one on screen —
+        /// browsing `~/projects` out of an index of `~` would otherwise show
+        /// every row prefixed `projects/`.
+        relativeTo browseRoot: String? = nil,
         cancellation: FileMatcher.Cancellation? = nil
     ) -> [FilePickerItem] {
         let prepared = FileMatcher.PreparedQuery(query)
@@ -68,9 +75,15 @@ public enum FilePickerRanking {
         // rather than in the scan that considered four hundred thousand.
         return matched.map { match in
             let corpus = slices[match.slice].corpus
-            let relative = corpus.relativePath(at: match.index)
+            let absolute = corpus.path(at: match.index)
+            var relative = corpus.relativePath(at: match.index)
+            if let browseRoot, browseRoot != corpus.root,
+                let trimmed = FilePaths.relative(absolute, under: browseRoot)
+            {
+                relative = trimmed
+            }
             return FilePickerItem(
-                url: URL(fileURLWithPath: corpus.path(at: match.index)),
+                url: URL(fileURLWithPath: absolute),
                 relativePath: relative,
                 matchedOffsets: FileMatcher.highlightOffsets(
                     in: relative, query: prepared
@@ -126,6 +139,7 @@ extension FilePickerRanking {
         query: String,
         limit: Int = resultLimit,
         includingDirectories: Bool = false,
+        relativeTo browseRoot: String? = nil,
         cancellation: FileMatcher.Cancellation? = nil
     ) -> [FilePickerItem] {
         matches(
@@ -134,6 +148,7 @@ extension FilePickerRanking {
             query: query,
             limit: limit,
             includingDirectories: includingDirectories,
+            relativeTo: browseRoot,
             cancellation: cancellation
         )
     }

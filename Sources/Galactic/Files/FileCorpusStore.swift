@@ -45,6 +45,14 @@ public final class FileCorpusStore {
     }
 
     private var roots: [String: RootState] = [:]
+
+    /// A root being browsed → the indexed root that already contains it.
+    ///
+    /// Sorted order makes a subtree a contiguous range, which is what was
+    /// supposed to make nesting free. Without this the store keyed everything
+    /// by exact path and re-walked `~/projects` in full while an index of `~`
+    /// containing every one of those entries sat beside it.
+    private var servedBy: [String: String] = [:]
     /// Opened per use rather than held.
     ///
     /// A held connection binds to whatever `~/.galactic` resolved to when this
@@ -64,6 +72,33 @@ public final class FileCorpusStore {
     /// Everything the matcher should scan for a root: each shard with its
     /// removals, plus the delta of files created since.
     public func slices(forCanonicalRoot root: String) -> [FileMatcher.Slice] {
+        // Served by a root above this one: scan that index, restricted to the
+        // range this subtree occupies in each of its shards. A shard that does
+        // not contain the subtree answers with an empty range and is dropped,
+        // so browsing `~/projects` inside an index of `~` scans one shard
+        // rather than forty-six.
+        if let covering = servedBy[root], let state = roots[covering] {
+            var slices: [FileMatcher.Slice] = []
+            for name in state.shards.keys.sorted() {
+                guard let corpus = state.shards[name] else { continue }
+                let range = corpus.range(underCanonical: root)
+                guard !range.isEmpty else { continue }
+                slices.append(
+                    FileMatcher.Slice(
+                        corpus: corpus, removed: state.removed[name],
+                        range: range
+                    )
+                )
+            }
+            if let delta = state.delta {
+                let range = delta.range(underCanonical: root)
+                if !range.isEmpty {
+                    slices.append(FileMatcher.Slice(corpus: delta, range: range))
+                }
+            }
+            return slices
+        }
+
         guard let state = roots[root] else { return [] }
         var slices = state.shards.keys.sorted().compactMap { name in
             state.shards[name].map {
@@ -76,12 +111,29 @@ public final class FileCorpusStore {
         return slices
     }
 
+    /// An already-indexed root that contains `root`, if there is one.
+    ///
+    /// The longest match wins, so browsing deep inside two nested covered
+    /// roots uses the nearer one and scans less.
+    private func coveringRoot(for root: String) -> String? {
+        roots.keys
+            .filter { candidate in
+                candidate != root
+                    && FilePaths.relative(root, under: candidate) != nil
+                    && roots[candidate]?.shards.isEmpty == false
+            }
+            .max { $0.count < $1.count }
+    }
+
     public func isWalking(_ root: String) -> Bool {
         !(roots[root]?.walkingShards.isEmpty ?? true)
     }
 
     public func hasCorpus(forCanonicalRoot root: String) -> Bool {
-        !(roots[root]?.shards.isEmpty ?? true)
+        if let covering = servedBy[root] {
+            return !(roots[covering]?.shards.isEmpty ?? true)
+        }
+        return !(roots[root]?.shards.isEmpty ?? true)
     }
 
     /// How many entries the overlay is carrying — files seen created since
@@ -92,6 +144,10 @@ public final class FileCorpusStore {
     }
 
     public func indexedCount(forCanonicalRoot root: String) -> Int {
+        if servedBy[root] != nil {
+            return slices(forCanonicalRoot: root)
+                .reduce(0) { $0 + ($1.range?.count ?? $1.corpus.entryCount) }
+        }
         guard let state = roots[root] else { return 0 }
         let live = state.shards.values.reduce(0) { $0 + $1.entryCount }
         return live > 0 ? live + state.added.count : state.progress
@@ -108,6 +164,24 @@ public final class FileCorpusStore {
         onFinished: @escaping () -> Void = {}
     ) {
         let canonical = FilePaths.canonical(root)
+
+        // Already covered by a root above this one, so there is nothing to
+        // walk and nothing to store: the entries are already indexed, and
+        // `slices(forCanonicalRoot:)` will restrict to the range they occupy.
+        if roots[canonical] == nil, let covering = coveringRoot(for: canonical) {
+            servedBy[canonical] = covering
+            log.record(
+                "index",
+                [
+                    ("root", canonical),
+                    ("event", "covered"),
+                    ("by", covering),
+                    ("walked", "no"),
+                ]
+            )
+            onFinished()
+            return
+        }
         if roots[canonical] == nil {
             roots[canonical] = RootState(url: root, skipList: skipList)
         }
@@ -253,7 +327,12 @@ public final class FileCorpusStore {
         // results stay correct, but the delta grows without bound and nothing
         // ever folds it in, because folding happens when a shard is walked and
         // there is no shard.
-        if shard.isEmpty { await adoptNewShards(canonical: canonical, root: root, skipping: skipList) }
+        if shard.isEmpty {
+            await adoptNewShards(
+                canonical: canonical, root: root, skipping: skipList,
+                onProgress: onProgress
+            )
+        }
         log.record(
             "walk",
             [
@@ -268,7 +347,8 @@ public final class FileCorpusStore {
     /// Walk any top-level directory that has appeared since the last time the
     /// root's own shard was written.
     private func adoptNewShards(
-        canonical: String, root: URL, skipping skipList: Set<String>
+        canonical: String, root: URL, skipping skipList: Set<String>,
+        onProgress: @escaping (Int) -> Void = { _ in }
     ) async {
         guard let rootShard = roots[canonical]?.shards[""] else { return }
         var names: [String] = []
@@ -285,7 +365,7 @@ public final class FileCorpusStore {
         for name in names {
             await walk(
                 shard: name, canonical: canonical, root: root,
-                skipping: skipList, onProgress: { _ in }
+                skipping: skipList, onProgress: onProgress
             )
         }
     }
@@ -603,5 +683,6 @@ public final class FileCorpusStore {
     public func forgetAll() {
         stopWatching()
         roots.removeAll()
+        servedBy.removeAll()
     }
 }

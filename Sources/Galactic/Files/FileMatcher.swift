@@ -32,10 +32,22 @@ public enum FileMatcher {
         /// One bit per entry; set means the entry has been deleted since the
         /// shard was written. Nil when nothing has been removed.
         public let removed: [UInt64]?
+        /// The entries worth scanning, when only part of this corpus is in
+        /// scope — browsing a directory inside an already-indexed root.
+        ///
+        /// Per slice rather than one range for all of them, because the shards
+        /// of a root are separate corpora: a subtree lands wholly inside one
+        /// of them and is absent from every other, so a single range applied
+        /// to all would be meaningless.
+        public let range: Range<Int>?
 
-        public init(corpus: FileCorpus, removed: [UInt64]? = nil) {
+        public init(
+            corpus: FileCorpus, removed: [UInt64]? = nil,
+            range: Range<Int>? = nil
+        ) {
             self.corpus = corpus
             self.removed = removed
+            self.range = range
         }
 
         @inline(__always)
@@ -157,7 +169,7 @@ public enum FileMatcher {
 
         var chunks: [(slice: Int, range: Range<Int>)] = []
         for (position, slice) in slices.enumerated() {
-            let scope = range ?? 0..<slice.corpus.entryCount
+            let scope = slice.range ?? range ?? 0..<slice.corpus.entryCount
             let bounded = scope.clamped(to: 0..<slice.corpus.entryCount)
             guard !bounded.isEmpty else { continue }
             for piece in chunkRanges(of: bounded, in: slice.corpus) {

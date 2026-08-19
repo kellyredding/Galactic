@@ -319,3 +319,69 @@ extension FileIndexLiveTests {
         XCTAssertTrue(FileCorpusStore.isIndexable("src/main.swift", skipping: skip))
     }
 }
+
+extension FileIndexLiveTests {
+
+    /// Sorted order makes a subtree a contiguous range, which is what is
+    /// supposed to make nesting free. Before this, browsing a directory inside
+    /// an indexed root walked it again from scratch — on a real machine that
+    /// was fifteen seconds to rebuild four hundred thousand entries the index
+    /// already held.
+    func testASubtreeOfAnIndexedRootIsNotWalkedAgain() async throws {
+        try touch("projects/deep/nested/target_file.swift")
+        try touch("elsewhere/other.swift")
+        await indexRoot()
+
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        let generationsBefore = catalog.shards(forRoot: canonical)
+            .map { "\($0.name):\($0.generation)" }.sorted()
+
+        let subroot = root.appendingPathComponent("projects")
+        let subCanonical = FilePaths.canonical(subroot)
+        await withCheckedContinuation { continuation in
+            var done = false
+            FileCorpusStore.shared.index(
+                root: subroot, skipping: [],
+                onFinished: { if !done { done = true; continuation.resume() } }
+            )
+        }
+
+        XCTAssertTrue(
+            catalog.shards(forRoot: subCanonical).isEmpty,
+            "the subtree was indexed as a root of its own"
+        )
+        XCTAssertEqual(
+            catalog.shards(forRoot: canonical)
+                .map { "\($0.name):\($0.generation)" }.sorted(),
+            generationsBefore,
+            "something was rewalked"
+        )
+    }
+
+    /// And what it finds is scoped to that subtree, with paths shown relative
+    /// to it rather than to the root it is actually served from.
+    func testBrowsingASubtreeSeesOnlyItAndNamesItCorrectly() async throws {
+        try touch("projects/inside/target_file.swift")
+        try touch("elsewhere/target_file.swift")
+        await indexRoot()
+
+        let subroot = root.appendingPathComponent("projects")
+        let subCanonical = FilePaths.canonical(subroot)
+        await withCheckedContinuation { continuation in
+            var done = false
+            FileCorpusStore.shared.index(
+                root: subroot, skipping: [],
+                onFinished: { if !done { done = true; continuation.resume() } }
+            )
+        }
+
+        let slices = FileCorpusStore.shared.slices(forCanonicalRoot: subCanonical)
+        let rows = FilePickerRanking.matches(
+            slices, query: "targetfile", relativeTo: subCanonical
+        )
+        XCTAssertEqual(
+            rows.map(\.relativePath), ["inside/target_file.swift"],
+            "the sibling subtree leaked in, or the path is named from the wrong root"
+        )
+    }
+}

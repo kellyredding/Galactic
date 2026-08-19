@@ -374,6 +374,7 @@ public final class FilePickerPresenter: ObservableObject {
         // The flag is *swapped*, not merely set: the outgoing scan is poisoned
         // and the incoming one gets a fresh flag, so a pass that finishes late
         // cannot land its rows on a query typed past it.
+        let browseRoot = FilePaths.canonical(root)
         filterCancellation.cancel()
         let cancellation = FileMatcher.Cancellation()
         filterCancellation = cancellation
@@ -384,7 +385,8 @@ public final class FilePickerPresenter: ObservableObject {
         filterTask = Task {
             let matched = await Task.detached(priority: .userInitiated) {
                 FilePickerRanking.matches(
-                    slices, query: trimmed, cancellation: cancellation
+                    slices, query: trimmed, relativeTo: browseRoot,
+                    cancellation: cancellation
                 )
             }.value
             guard !Task.isCancelled, !cancellation.isCancelled else { return }
