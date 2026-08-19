@@ -71,8 +71,51 @@ public enum FileCorpusBuilder {
     /// count. It is a *count* and nothing more: the index it replaced handed
     /// back batches of files, and every batch triggered a full re-rank, which
     /// is how one walk became sixty-three overlapping ranking passes.
+    /// Walk one shard of a root.
+    ///
+    /// A shard is a top-level subtree, and the empty name means the entries
+    /// sitting directly in the root. Splitting a walk this way is what makes
+    /// the index refreshable in pieces: a change under one subtree rewrites
+    /// that subtree's bytes and leaves the rest of the index untouched, and
+    /// the staggered rescan has something smaller than "everything" to redo.
+    ///
+    /// Paths stay relative to `root` in every shard, so shards of one root
+    /// concatenate into one corpus without rewriting a single byte.
+    public static func buildShard(
+        root: URL,
+        shard: String,
+        skipping skipList: Set<String> = defaultSkipList,
+        isCancelled: () -> Bool = { false },
+        onProgress: (Int) -> Void = { _ in }
+    ) -> FileCorpus {
+        build(
+            root: root,
+            subtree: shard,
+            // The root's own shard records the top-level entries and descends
+            // into none of them: everything below belongs to another shard.
+            depthCap: shard.isEmpty ? 0 : depthCap,
+            skipping: skipList,
+            isCancelled: isCancelled,
+            onProgress: onProgress
+        )
+    }
+
+    /// The top-level names a root divides into, plus the root's own shard.
+    public static func shardNames(
+        of root: URL, skipping skipList: Set<String> = defaultSkipList
+    ) -> [String] {
+        var names = [""]
+        let corpus = buildShard(root: root, shard: "", skipping: skipList)
+        for index in 0..<corpus.entryCount where corpus.isDirectory(at: index) {
+            names.append(corpus.relativePath(at: index))
+        }
+        return names
+    }
+
     public static func build(
         root: URL,
+        subtree: String = "",
+        depthCap: Int = depthCap,
         skipping skipList: Set<String> = defaultSkipList,
         isCancelled: () -> Bool = { false },
         onProgress: (Int) -> Void = { _ in }
@@ -110,8 +153,10 @@ public enum FileCorpusBuilder {
         var visited: Set<DeviceInode> = []
         if let identity = DeviceInode(path: rootPath) { visited.insert(identity) }
 
+        let start =
+            subtree.isEmpty ? rootPath : rootPath + "/" + subtree
         var queue: [(path: String, relative: [UInt8], depth: Int)] = [
-            (rootPath, [], 0)
+            (start, Array(subtree.utf8), 0)
         ]
         var head = 0
         var count = 0

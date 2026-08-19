@@ -45,7 +45,7 @@ public enum FilePickerRanking {
     /// spaces — `Desktop/AI prompts.txt` still answers to `ai prompts`, because
     /// the space in the path is simply one of the gaps the subsequence skips.
     public static func matches(
-        _ corpus: FileCorpus,
+        _ slices: [FileMatcher.Slice],
         range: Range<Int>? = nil,
         query: String,
         limit: Int = resultLimit,
@@ -56,7 +56,7 @@ public enum FilePickerRanking {
         guard !prepared.needle.isEmpty else { return [] }
 
         let matched = FileMatcher.matches(
-            in: corpus,
+            in: slices,
             range: range,
             query: query,
             limit: limit,
@@ -67,6 +67,7 @@ public enum FilePickerRanking {
         // Offsets are computed here, for the hundred rows that survived,
         // rather than in the scan that considered four hundred thousand.
         return matched.map { match in
+            let corpus = slices[match.slice].corpus
             let relative = corpus.relativePath(at: match.index)
             return FilePickerItem(
                 url: URL(fileURLWithPath: corpus.path(at: match.index)),
@@ -112,5 +113,28 @@ public enum FilePickerRanking {
         for entry in closed { offer(entry.url, .closed) }
         for url in recent { offer(url, .recent) }
         return Array(rows.prefix(max(0, limit)))
+    }
+}
+
+
+extension FilePickerRanking {
+
+    /// Convenience for a single corpus, which is what a test usually has.
+    public static func matches(
+        _ corpus: FileCorpus,
+        range: Range<Int>? = nil,
+        query: String,
+        limit: Int = resultLimit,
+        includingDirectories: Bool = false,
+        cancellation: FileMatcher.Cancellation? = nil
+    ) -> [FilePickerItem] {
+        matches(
+            [FileMatcher.Slice(corpus: corpus)],
+            range: range,
+            query: query,
+            limit: limit,
+            includingDirectories: includingDirectories,
+            cancellation: cancellation
+        )
     }
 }

@@ -31,7 +31,7 @@ import Foundation
 /// loading is an `mmap`, and two applications mapping the same file share one
 /// copy in the page cache. There is deliberately no second representation and
 /// no parse step to go wrong.
-public struct FileCorpus {
+public struct FileCorpus: @unchecked Sendable {
 
     /// How many entries sit between restart points.
     ///
@@ -42,23 +42,29 @@ public struct FileCorpus {
     /// a range, and clean boundaries for parallel scanning.
     static let restartInterval = 64
 
+    /// The bytes, and what keeps them alive.
+    ///
+    /// Everything below is a typed view into this one block. A walk allocates
+    /// it; a load maps it; nothing copies it. See `FileCorpusImage`.
+    let image: FileCorpusImage
+
     /// `[shared: UInt8][suffixLength: UInt16][suffix bytes]` per entry, in
     /// sorted order. Paths are relative to `root`.
-    let blob: [UInt8]
+    let blob: UnsafeBufferPointer<UInt8>
 
     /// Byte offset into `blob` of every `restartInterval`-th entry. Entries at
     /// these offsets always have `shared == 0`.
-    let restarts: [UInt32]
+    let restarts: UnsafeBufferPointer<UInt32>
 
     /// `FileCharBag` per entry, in entry order.
-    let bags: [UInt64]
+    let bags: UnsafeBufferPointer<UInt64>
 
     /// Modification time per entry, in days since `dayZero`, saturating.
     ///
     /// Two bytes, not eight. Ranking asks whether a file was touched recently,
     /// never at what second, and day resolution answers that for 800 KB where
     /// a `Date` would cost 2.5 MB.
-    let modifiedDays: [UInt16]
+    let modifiedDays: UnsafeBufferPointer<UInt16>
 
     /// One bit per entry, set when the entry is a directory.
     ///
@@ -68,7 +74,7 @@ public struct FileCorpus {
     /// entries beneath it, so front-coding stores it in a few bytes. What they
     /// buy is re-rooting and path completion answered from memory rather than
     /// from the disk.
-    let directoryBits: [UInt64]
+    let directoryBits: UnsafeBufferPointer<UInt64>
 
     /// The longest entry, so a decoder can size its buffer once.
     let maxEntryLength: Int
@@ -77,6 +83,54 @@ public struct FileCorpus {
 
     /// The root every entry is relative to, canonical.
     public let root: String
+
+    /// Build a corpus from an image, which is the only way one is made.
+    init(image: FileCorpusImage) {
+        self.image = image
+        let header = image.header
+        entryCount = Int(header.entryCount)
+        maxEntryLength = max(1, Int(header.maxEntryLength))
+        blob = UnsafeBufferPointer(
+            start: (image.base + Int(header.blobOffset))
+                .assumingMemoryBound(to: UInt8.self),
+            count: Int(header.blobByteCount)
+        )
+        restarts = UnsafeBufferPointer(
+            start: (image.base + Int(header.restartsOffset))
+                .assumingMemoryBound(to: UInt32.self),
+            count: Int(header.restartCount)
+        )
+        bags = UnsafeBufferPointer(
+            start: (image.base + Int(header.bagsOffset))
+                .assumingMemoryBound(to: UInt64.self),
+            count: entryCount
+        )
+        modifiedDays = UnsafeBufferPointer(
+            start: (image.base + Int(header.modifiedOffset))
+                .assumingMemoryBound(to: UInt16.self),
+            count: entryCount
+        )
+        directoryBits = UnsafeBufferPointer(
+            start: (image.base + Int(header.directoryBitsOffset))
+                .assumingMemoryBound(to: UInt64.self),
+            count: (entryCount + 63) / 64
+        )
+        root = String(
+            decoding: UnsafeRawBufferPointer(
+                start: image.base + Int(header.rootOffset),
+                count: Int(header.rootByteCount)
+            ),
+            as: UTF8.self
+        )
+    }
+
+    /// Load a corpus previously written to disk, or nil if it is absent or
+    /// unreadable. An unreadable corpus is always rebuildable, so a caller's
+    /// correct response to nil is to walk again rather than to fail.
+    public static func load(from url: URL) -> FileCorpus? {
+        guard let image = FileCorpusImage.map(url) else { return nil }
+        return FileCorpus(image: image)
+    }
 
     /// Days are counted from 2020-01-01, which keeps a `UInt16` good until
     /// 2199 and puts every plausible file comfortably inside it.
@@ -117,8 +171,8 @@ public struct FileCorpus {
         var length = 0
         var index = block * Self.restartInterval
 
-        blob.withUnsafeBufferPointer { source in
-            buffer.withUnsafeMutableBufferPointer { scratch in
+        let source = blob
+        buffer.withUnsafeMutableBufferPointer { scratch in
                 while index < range.upperBound {
                     let shared = Int(source[offset])
                     let suffix =
@@ -137,8 +191,7 @@ public struct FileCorpus {
                         )
                         if !body(index, view) { return }
                     }
-                    index += 1
-                }
+                index += 1
             }
         }
     }

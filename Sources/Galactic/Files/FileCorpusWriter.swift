@@ -146,14 +146,16 @@ struct FileCorpusWriter {
         }
 
         return FileCorpus(
-            blob: blob,
-            restarts: restarts,
-            bags: bags,
-            modifiedDays: modifiedDays,
-            directoryBits: directoryBits,
-            maxEntryLength: longest,
-            entryCount: order.count,
-            root: root
+            image: FileCorpusImage.build(
+                blob: blob,
+                restarts: restarts,
+                bags: bags,
+                modifiedDays: modifiedDays,
+                directoryBits: directoryBits,
+                maxEntryLength: longest,
+                entryCount: order.count,
+                root: root
+            )
         )
     }
 

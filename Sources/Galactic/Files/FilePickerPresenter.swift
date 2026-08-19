@@ -298,7 +298,7 @@ public final class FilePickerPresenter: ObservableObject {
 
         let canonical = FilePaths.canonical(root)
         let store = FileCorpusStore.shared
-        let held = store.corpus(forCanonicalRoot: canonical)
+        let held = store.hasCorpus(forCanonicalRoot: canonical) ? true : false
 
         // The rows are deliberately left alone when there is nothing held. What
         // is showing at this moment is the closed-and-recent list `present()`
@@ -310,7 +310,7 @@ public final class FilePickerPresenter: ObservableObject {
 
         // Said while there is nothing at all to rank against. A root already
         // walked is never re-walked, so it never says "indexing…" twice.
-        isIndexing = held == nil
+        isIndexing = !held
 
         store.index(
             root: root,
@@ -365,10 +365,10 @@ public final class FilePickerPresenter: ObservableObject {
         }
 
         guard let root,
-            let corpus = FileCorpusStore.shared.corpus(
+            case let slices = FileCorpusStore.shared.slices(
                 forCanonicalRoot: FilePaths.canonical(root)
             ),
-            !corpus.isEmpty
+            !slices.isEmpty
         else { return }
 
         // The flag is *swapped*, not merely set: the outgoing scan is poisoned
@@ -384,7 +384,7 @@ public final class FilePickerPresenter: ObservableObject {
         filterTask = Task {
             let matched = await Task.detached(priority: .userInitiated) {
                 FilePickerRanking.matches(
-                    corpus, query: trimmed, cancellation: cancellation
+                    slices, query: trimmed, cancellation: cancellation
                 )
             }.value
             guard !Task.isCancelled, !cancellation.isCancelled else { return }

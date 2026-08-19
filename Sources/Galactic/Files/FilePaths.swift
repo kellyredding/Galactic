@@ -66,6 +66,26 @@ public enum FilePaths {
     /// query against a root it resolved once at build time — going back
     /// through `relativePath(of:under:)` would `realpath` both sides again on
     /// every keystroke that re-roots.
+    /// The relative path of an entry the file system just mentioned, against
+    /// an already-canonical root.
+    ///
+    /// Three attempts, because the caller cannot know which applies. A path
+    /// from FSEvents is already resolved and matches on the first. A path from
+    /// somewhere else may still contain a symlinked prefix — `/var` against
+    /// `/private/var` is the everyday case — and needs resolving. And a path
+    /// that has just been **deleted** cannot be resolved at all, since
+    /// `realpath` requires the file to exist; its parent still does, which is
+    /// enough.
+    static func relativeEntry(of path: String, underCanonical root: String)
+        -> String?
+    {
+        if let direct = relative(path, under: root) { return direct }
+        let url = URL(fileURLWithPath: path)
+        if let resolved = relative(canonical(url), under: root) { return resolved }
+        let parent = canonical(url.deletingLastPathComponent())
+        return relative(parent + "/" + url.lastPathComponent, under: root)
+    }
+
     static func relative(_ path: String, under base: String) -> String? {
         let child = path.split(separator: "/").map(String.init)
         let root = base.split(separator: "/").map(String.init)

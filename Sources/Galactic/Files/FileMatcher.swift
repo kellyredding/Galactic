@@ -20,7 +20,36 @@ import os
 /// Measured against the same corpus: 443–827 ms becomes 4–8 ms.
 public enum FileMatcher {
 
+    /// One corpus to scan, and the entries in it that no longer exist.
+    ///
+    /// The index is several shards plus a small in-memory corpus of files
+    /// created since the last walk, and removals are recorded as a bitset per
+    /// shard rather than by rewriting one. That keeps a delete O(log n) — find
+    /// the entry, set a bit — instead of rewriting twenty megabytes because
+    /// one file went away.
+    public struct Slice {
+        public let corpus: FileCorpus
+        /// One bit per entry; set means the entry has been deleted since the
+        /// shard was written. Nil when nothing has been removed.
+        public let removed: [UInt64]?
+
+        public init(corpus: FileCorpus, removed: [UInt64]? = nil) {
+            self.corpus = corpus
+            self.removed = removed
+        }
+
+        @inline(__always)
+        func isRemoved(_ index: Int) -> Bool {
+            guard let removed else { return false }
+            let word = index >> 6
+            guard word < removed.count else { return false }
+            return removed[word] & (1 << UInt64(index & 63)) != 0
+        }
+    }
+
     public struct Match {
+        /// Which slice the entry came from.
+        public let slice: Int
         public let index: Int
         public let score: Int
         /// The candidate's byte length, carried rather than looked up.
@@ -98,12 +127,44 @@ public enum FileMatcher {
         includingDirectories: Bool = false,
         cancellation: Cancellation? = nil
     ) -> [Match] {
-        let prepared = PreparedQuery(query)
-        guard !prepared.needle.isEmpty else { return [] }
-        let scope = range ?? 0..<corpus.entryCount
-        guard !scope.isEmpty else { return [] }
+        matches(
+            in: [Slice(corpus: corpus)],
+            range: range,
+            query: query,
+            limit: limit,
+            includingDirectories: includingDirectories,
+            cancellation: cancellation
+        )
+    }
 
-        let chunks = chunkRanges(of: scope, in: corpus)
+    /// Scan several corpora as one.
+    ///
+    /// Work is flattened into chunks across *all* slices before it is handed
+    /// out, rather than a slice at a time. A root divides into shards of wildly
+    /// different sizes — one holding four hundred thousand entries next to one
+    /// holding nine — and scheduling per slice would leave most workers idle
+    /// waiting for the largest.
+    public static func matches(
+        in slices: [Slice],
+        range: Range<Int>? = nil,
+        query: String,
+        limit: Int,
+        includingDirectories: Bool = false,
+        cancellation: Cancellation? = nil
+    ) -> [Match] {
+        let prepared = PreparedQuery(query)
+        guard !prepared.needle.isEmpty, !slices.isEmpty else { return [] }
+
+        var chunks: [(slice: Int, range: Range<Int>)] = []
+        for (position, slice) in slices.enumerated() {
+            let scope = range ?? 0..<slice.corpus.entryCount
+            let bounded = scope.clamped(to: 0..<slice.corpus.entryCount)
+            guard !bounded.isEmpty else { continue }
+            for piece in chunkRanges(of: bounded, in: slice.corpus) {
+                chunks.append((position, piece))
+            }
+        }
+        guard !chunks.isEmpty else { return [] }
         var perChunk = [[Match]](repeating: [], count: chunks.count)
 
         perChunk.withUnsafeMutableBufferPointer { results in
@@ -114,9 +175,11 @@ public enum FileMatcher {
             // is the compiler's concern rather than a real one.
             let slots = results.baseAddress!
             let work: (Int) -> Void = { position in
+                let work = chunks[position]
                 slots[position] = scan(
-                    corpus: corpus,
-                    range: chunks[position],
+                    slice: work.slice,
+                    in: slices[work.slice],
+                    range: work.range,
                     query: prepared,
                     limit: limit,
                     includingDirectories: includingDirectories,
@@ -151,6 +214,7 @@ public enum FileMatcher {
     private static func better(_ left: Match, than right: Match) -> Bool {
         if left.score != right.score { return left.score > right.score }
         if left.length != right.length { return left.length < right.length }
+        if left.slice != right.slice { return left.slice < right.slice }
         return left.index < right.index
     }
 
@@ -188,13 +252,15 @@ public enum FileMatcher {
     // MARK: - The scan
 
     private static func scan(
-        corpus: FileCorpus,
+        slice: Int,
+        in target: Slice,
         range: Range<Int>,
         query: PreparedQuery,
         limit: Int,
         includingDirectories: Bool,
         cancellation: Cancellation?
     ) -> [Match] {
+        let corpus = target.corpus
         var best = BoundedSelection(limit: limit)
         let today = FileCorpus.today
         var sinceCheck = 0
@@ -210,6 +276,10 @@ public enum FileMatcher {
             }
             sinceCheck += 1
 
+            // Deleted since the shard was written. Checked before anything
+            // else, because a removed entry must be invisible rather than
+            // merely ranked low.
+            if target.isRemoved(index) { return true }
             if !includingDirectories, corpus.isDirectory(at: index) {
                 return true
             }
@@ -229,7 +299,10 @@ public enum FileMatcher {
                 days: corpus.modifiedDays[index], today: today
             )
             best.offer(
-                Match(index: index, score: total, length: bytes.count)
+                Match(
+                    slice: slice, index: index, score: total,
+                    length: bytes.count
+                )
             )
             return true
         }
