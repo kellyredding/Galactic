@@ -478,3 +478,58 @@ extension FileIndexLiveTests {
         XCTAssertEqual(breakdown["beta"], 1)
     }
 }
+
+extension FileIndexLiveTests {
+
+    /// Marking a subtree dirty is idempotent, and during build churn the same
+    /// one is marked over and over. Each repetition used to cost a database
+    /// write and a log line on the main thread — dozens a second, which is
+    /// what a beach ball looks like from the inside.
+    func testRepeatedDirtyMarksCostNothingAfterTheFirst() async throws {
+        try touch("churn/seed.swift")
+        await indexRoot()
+
+        let target = root.appendingPathComponent("churn/whatever").path
+        for _ in 0..<50 {
+            FileCorpusStore.shared.markSubtreeDirty(
+                target, canonicalRoot: canonical, reason: "test"
+            )
+        }
+        FileIndexLog.shared.drain()
+
+        let marks = FileIndexLog.shared.tail(200)
+            .filter { $0.contains("event=marked-dirty") && $0.contains("reason=test") }
+        XCTAssertEqual(
+            marks.count, 1,
+            "fifty identical marks produced \(marks.count) writes"
+        )
+    }
+
+    /// And once the shard has actually been walked, a fresh mark is allowed
+    /// through again — otherwise the first dirty flag of the process would be
+    /// the last one it ever recorded.
+    func testADirtyMarkIsAllowedAgainAfterTheRewalk() async throws {
+        try touch("churn/seed.swift")
+        await indexRoot()
+
+        let target = root.appendingPathComponent("churn/whatever").path
+        FileCorpusStore.shared.markSubtreeDirty(
+            target, canonicalRoot: canonical, reason: "first"
+        )
+
+        FileIndexRefreshRotation.targetAge = 0
+        defer { FileIndexRefreshRotation.targetAge = 3_600 }
+        FileIndexRefreshRotation.shared.add(canonicalRoot: canonical)
+        for _ in 0..<10 { _ = await FileIndexRefreshRotation.shared.tick() }
+
+        FileCorpusStore.shared.markSubtreeDirty(
+            target, canonicalRoot: canonical, reason: "second"
+        )
+        FileIndexLog.shared.drain()
+
+        XCTAssertTrue(
+            FileIndexLog.shared.tail(400).contains { $0.contains("reason=second") },
+            "the shard was rewalked but a later mark was still suppressed"
+        )
+    }
+}

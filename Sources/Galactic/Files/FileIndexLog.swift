@@ -45,6 +45,15 @@ public final class FileIndexLog: @unchecked Sendable {
     )
     private var handle: FileHandle?
     private var bytesWritten = 0
+    /// The path `handle` was opened for.
+    ///
+    /// A cached handle that never re-checks its own path will happily keep
+    /// writing to a file nobody is reading: `fileURL` is computed from
+    /// `FileIndexPaths`, so if the index location moves, the reader and the
+    /// writer end up looking at two different files and the log appears empty.
+    /// In a shipping app the location never moves; a test pointing it elsewhere
+    /// found this immediately.
+    private var openPath: String?
 
     private lazy var formatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -90,7 +99,7 @@ public final class FileIndexLog: @unchecked Sendable {
     private func append(_ line: String) {
         queue.async { [self] in
             guard let data = line.data(using: .utf8) else { return }
-            if handle == nil { openFile() }
+            if handle == nil || openPath != fileURL.path { openFile() }
             guard let handle else { return }
             handle.write(data)
             bytesWritten += data.count
@@ -99,12 +108,15 @@ public final class FileIndexLog: @unchecked Sendable {
     }
 
     private func openFile() {
+        try? handle?.close()
+        handle = nil
         FileIndexPaths.prepare()
         let manager = FileManager.default
         if !manager.fileExists(atPath: fileURL.path) {
             manager.createFile(atPath: fileURL.path, contents: nil)
         }
         handle = try? FileHandle(forWritingTo: fileURL)
+        openPath = fileURL.path
         bytesWritten = (try? handle?.seekToEnd()).flatMap { Int($0) } ?? 0
     }
 

@@ -42,6 +42,13 @@ public final class FileCorpusStore {
         var walkingShards: Set<String> = []
         var progress = 0
         var isLoaded = false
+        /// Shards already known to need a rewalk.
+        ///
+        /// Marking dirty is idempotent, and during build churn the same subtree
+        /// is marked over and over — so without this the store wrote the same
+        /// row and logged the same line dozens of times a second. Held in memory
+        /// so the transition is what costs, not the condition.
+        var dirtyShards: Set<String> = []
     }
 
     private var roots: [String: RootState] = [:]
@@ -53,15 +60,30 @@ public final class FileCorpusStore {
     /// by exact path and re-walked `~/projects` in full while an index of `~`
     /// containing every one of those entries sat beside it.
     private var servedBy: [String: String] = [:]
-    /// Opened per use rather than held.
+    /// Held, but re-opened when the index location changes.
     ///
-    /// A held connection binds to whatever `~/.galactic` resolved to when this
-    /// singleton was first touched, which is before a host has necessarily
-    /// created it — and permanently, so a test pointing the index elsewhere
-    /// would still be writing to the first location it ever saw. Opening is
-    /// cheap and these calls are rare: publishing a shard, loading at launch,
-    /// and one rotation tick a minute.
-    private var catalog: FileIndexCatalog? { FileIndexCatalog() }
+    /// This was a computed property returning a fresh connection on every
+    /// access, on the theory that opening is cheap and the calls are rare. The
+    /// first half is true; the second stopped being true the moment a caller
+    /// appeared in the event path, and then every removed directory paid
+    /// `sqlite3_open` plus a schema check plus a write **on the main thread**.
+    /// During ordinary build churn that is dozens a second, which is a beach
+    /// ball.
+    ///
+    /// Keyed on the resolved path rather than opened once, because that is what
+    /// the per-use version was really protecting: a connection bound for the
+    /// life of the process would ignore a host — or a test — pointing the index
+    /// somewhere else.
+    private var openCatalog: FileIndexCatalog?
+    private var openCatalogPath: String?
+
+    private var catalog: FileIndexCatalog? {
+        let path = FileIndexPaths.catalogFile.path
+        if let openCatalog, openCatalogPath == path { return openCatalog }
+        openCatalog = FileIndexCatalog()
+        openCatalogPath = path
+        return openCatalog
+    }
     private let writerLease = FileIndexLock()
     private let log = FileIndexLog.shared
 
@@ -316,6 +338,9 @@ public final class FileCorpusStore {
         roots[canonical]?.shards[shard] = corpus
         roots[canonical]?.removed[shard] = nil
         roots[canonical]?.walkingShards.remove(shard)
+        // Whatever made it dirty has now been answered by walking it, so the
+        // next event that would mark it dirty should be allowed to say so.
+        roots[canonical]?.dirtyShards.remove(shard)
         dropOverlayEntries(under: shard, canonical: canonical)
 
         let elapsed = Date().timeIntervalSince(started)
@@ -568,6 +593,11 @@ public final class FileCorpusStore {
     private func applyCompactionPressure(root: String) {
         for (shard, count) in overlayByShard(forCanonicalRoot: root)
         where count >= Self.overlayCompactionThreshold {
+            // Once is enough, for the same reason as `markSubtreeDirty`: the
+            // overlay stays over the threshold until the rewalk happens, so
+            // every subsequent batch would re-mark and re-log a standing fact.
+            guard roots[root]?.dirtyShards.contains(shard) != true else { continue }
+            roots[root]?.dirtyShards.insert(shard)
             catalog?.markDirty(root: root, name: shard)
             log.record(
                 "refresh",
@@ -713,6 +743,13 @@ public final class FileCorpusStore {
             let relative = FilePaths.relativeEntry(of: path, underCanonical: root)
         else { return }
         let shard = relative.split(separator: "/").first.map(String.init) ?? ""
+
+        // Already known. The condition is cheap to re-derive and the response
+        // is not: a database write and a log line per repetition, on the main
+        // thread, for a fact that has not changed.
+        guard roots[root]?.dirtyShards.contains(shard) != true else { return }
+        roots[root]?.dirtyShards.insert(shard)
+
         catalog?.markDirty(root: root, name: shard)
         log.record(
             "refresh",
