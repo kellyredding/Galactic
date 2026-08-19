@@ -515,9 +515,20 @@ public final class FileCorpusStore {
         // first paid none. Per-publish is short enough that two applications
         // interleave without either waiting.
         guard writerLease.acquire() else {
+            // Deferred is only survivable if something comes back for it. The
+            // lease does not wait, this runs on the main actor so it must not
+            // wait either, and the corpus that was just walked lives only in
+            // this process's memory — so the shard is recorded as owed, and the
+            // sweep, which takes dirty shards first, is what returns to it.
+            // Without this the shard is absent from the index for the life of
+            // the installation, rewalked every launch and published by nobody.
+            catalog.markPending(root: canonical, name: shard)
             log.record(
                 "publish",
-                [("shard", shard), ("result", "deferred"), ("reason", "another-writer")]
+                [
+                    ("shard", shard), ("result", "deferred"),
+                    ("reason", "another-writer"), ("action", "marked-pending"),
+                ]
             )
             return
         }

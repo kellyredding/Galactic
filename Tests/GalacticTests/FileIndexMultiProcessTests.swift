@@ -472,6 +472,85 @@ final class FileIndexMultiProcessTests: XCTestCase {
         )
     }
 
+    /// Two processes building the same index lose publishes to each other, and
+    /// the index must still converge.
+    ///
+    /// The lease is a try-lock: whoever asks second is told no, and told once.
+    /// What must not happen is a shard that no mechanism ever returns to — so
+    /// this contends hard, then drives the sweep and requires a complete index
+    /// at the end of it.
+    func testShardsLostToContentionAreRecoveredByTheSweep() async throws {
+        try Self.requireParentRole()
+        let subtrees = 14
+        for subtree in 0..<subtrees {
+            try touch("shard\(subtree)/file.swift")
+        }
+
+        let builder = try launch("testChildIndexesTheTree", role: "builder")
+        try Data("go".utf8).write(to: gate)
+        await indexRoot()
+        verify(collect(builder))
+
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+
+        // Contention has to have actually happened, or this proves nothing about
+        // recovery — it would just be a second walk of an uncontended index.
+        XCTAssertGreaterThan(
+            deferredPublishCount(), 0,
+            "no publish was ever deferred, so no loss was there to recover from"
+        )
+
+        // Every shard is either published or recorded as owed. A shard in
+        // neither state is the permanent loss this exists to rule out.
+        let known = Set(catalog.shards(forRoot: canonical).map(\.name))
+        var untracked: [String] = []
+        for subtree in 0..<subtrees where !known.contains("shard\(subtree)") {
+            untracked.append("shard\(subtree)")
+        }
+        XCTAssertTrue(
+            untracked.isEmpty,
+            """
+            \(untracked.count) shard(s) are absent from the index with nothing \
+            recorded to bring them back: \(untracked.joined(separator: ", "))
+            """
+        )
+
+        // Then the promise itself: the sweep closes the gap.
+        FileIndexRefreshSweep.targetAge = 0
+        FileCorpusStore.shared.forgetAll()
+        await indexRoot()
+        for _ in 0..<(subtrees * 3) {
+            let dirty = catalog.shards(forRoot: canonical).filter(\.dirty)
+            if dirty.isEmpty { break }
+            await FileIndexRefreshSweep.shared.tick()
+        }
+
+        let settled = catalog.shards(forRoot: canonical)
+        XCTAssertTrue(
+            settled.allSatisfy { !$0.dirty },
+            "the sweep did not clear: \(settled.filter(\.dirty).map(\.name))"
+        )
+        for subtree in 0..<subtrees {
+            let name = "shard\(subtree)"
+            guard let shard = settled.first(where: { $0.name == name }) else {
+                XCTFail("\(name) never reached the index at all")
+                continue
+            }
+            XCTAssertGreaterThan(
+                shard.generation, 0, "\(name) is still only a placeholder"
+            )
+            XCTAssertGreaterThan(
+                shard.entryCount, 0, "\(name) was published empty"
+            )
+        }
+    }
+
+    func testChildIndexesTheTree() async throws {
+        _ = try Self.requireChildRole()
+        Self.waitForGate()
+        await indexRoot()
+    }
+
     private func indexRoot() async {
         await withCheckedContinuation { continuation in
             var resumed = false

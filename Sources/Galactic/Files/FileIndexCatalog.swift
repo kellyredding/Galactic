@@ -144,6 +144,37 @@ public final class FileIndexCatalog: @unchecked Sendable {
         }
     }
 
+    /// Record that a shard is owed a walk, whether or not it has ever had one.
+    ///
+    /// `markDirty` updates a row, so it does nothing at all for a shard that was
+    /// never published — which is exactly the shard a lost lease leaves behind.
+    /// A publish that cannot take the lease writes nothing and never retries, so
+    /// without a row saying otherwise the shard is simply missing from the index
+    /// and no mechanism is looking for it.
+    ///
+    /// A placeholder at generation zero is never mapped, because loading skips
+    /// dirty rows, and it sorts first for the sweep, because dirty rows do. The
+    /// walk timestamp is the epoch rather than now: the shard has genuinely
+    /// never been walked to completion, and saying so keeps it at the front of
+    /// the queue if the dirty flag is ever cleared by something else.
+    public func markPending(root: String, name: String) {
+        queue.sync {
+            let sql = """
+                INSERT INTO shards
+                    (root_path, name, generation, entry_count, walked_at, dirty)
+                VALUES (?, ?, 0, 0, 0, 1)
+                ON CONFLICT(root_path, name) DO UPDATE SET dirty = 1
+                """
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK
+            else { return }
+            defer { sqlite3_finalize(statement) }
+            bindText(statement, 1, root)
+            bindText(statement, 2, name)
+            sqlite3_step(statement)
+        }
+    }
+
     public func shards(forRoot root: String) -> [Shard] {
         queue.sync {
             var found: [Shard] = []
