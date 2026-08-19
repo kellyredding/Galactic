@@ -60,12 +60,14 @@ public final class FileIndexCatalog: @unchecked Sendable {
                 entry_count INTEGER NOT NULL,
                 walked_at   REAL    NOT NULL,
                 dirty       INTEGER NOT NULL DEFAULT 0,
+                dirtied_at  REAL    NOT NULL DEFAULT 0,
                 events_uuid TEXT,
                 events_id   INTEGER,
                 PRIMARY KEY (root_path, name)
             )
             """
         )
+        addDirtiedAtIfMissing()
         execute(
             """
             CREATE TABLE IF NOT EXISTS roots (
@@ -112,9 +114,19 @@ public final class FileIndexCatalog: @unchecked Sendable {
 
     // MARK: - Shards
 
+    /// Record a completed walk.
+    ///
+    /// - Parameter walkStartedAt: when the walk that produced this corpus began.
+    ///   A dirty mark raised *after* that instant describes a change the corpus
+    ///   cannot contain, so publishing must not clear it. Without this the
+    ///   window between a walk starting and its publish landing was a hole:
+    ///   marking is not lease-guarded, so an event arriving inside it set a flag
+    ///   that the publish then erased, and the rewalk it asked for never
+    ///   happened.
     public func record(
         root: String, name: String, generation: UInt64, entryCount: Int,
-        walkedAt: Date = Date(), eventsUUID: String?, eventsID: UInt64?
+        walkedAt: Date = Date(), walkStartedAt: Date? = nil,
+        eventsUUID: String?, eventsID: UInt64?
     ) {
         queue.sync {
             let sql = """
@@ -126,7 +138,7 @@ public final class FileIndexCatalog: @unchecked Sendable {
                     generation = excluded.generation,
                     entry_count = excluded.entry_count,
                     walked_at = excluded.walked_at,
-                    dirty = 0,
+                    dirty = CASE WHEN shards.dirtied_at > ?8 THEN 1 ELSE 0 END,
                     events_uuid = excluded.events_uuid,
                     events_id = excluded.events_id
                 """
@@ -147,6 +159,13 @@ public final class FileIndexCatalog: @unchecked Sendable {
             } else {
                 sqlite3_bind_null(statement, 7)
             }
+            // Absent, every mark counts as predating the walk, which is the old
+            // unconditional clear — chosen deliberately so a caller that cannot
+            // say when it started does not silently start keeping flags forever.
+            sqlite3_bind_double(
+                statement, 8,
+                (walkStartedAt ?? Date.distantFuture).timeIntervalSince1970
+            )
             step(statement, "record")
         }
     }
@@ -168,9 +187,11 @@ public final class FileIndexCatalog: @unchecked Sendable {
         queue.sync {
             let sql = """
                 INSERT INTO shards
-                    (root_path, name, generation, entry_count, walked_at, dirty)
-                VALUES (?, ?, 0, 0, 0, 1)
-                ON CONFLICT(root_path, name) DO UPDATE SET dirty = 1
+                    (root_path, name, generation, entry_count, walked_at,
+                     dirty, dirtied_at)
+                VALUES (?, ?, 0, 0, 0, 1, ?)
+                ON CONFLICT(root_path, name) DO UPDATE SET
+                    dirty = 1, dirtied_at = excluded.dirtied_at
                 """
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK
@@ -178,6 +199,7 @@ public final class FileIndexCatalog: @unchecked Sendable {
             defer { sqlite3_finalize(statement) }
             bindText(statement, 1, root)
             bindText(statement, 2, name)
+            sqlite3_bind_double(statement, 3, Date().timeIntervalSince1970)
             step(statement, "markPending")
         }
     }
@@ -221,12 +243,16 @@ public final class FileIndexCatalog: @unchecked Sendable {
     public func markDirty(root: String, name: String) {
         queue.sync {
             var statement: OpaquePointer?
-            let sql = "UPDATE shards SET dirty = 1 WHERE root_path = ? AND name = ?"
+            let sql = """
+                UPDATE shards SET dirty = 1, dirtied_at = ?
+                WHERE root_path = ? AND name = ?
+                """
             guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK
             else { return }
             defer { sqlite3_finalize(statement) }
-            bindText(statement, 1, root)
-            bindText(statement, 2, name)
+            sqlite3_bind_double(statement, 1, Date().timeIntervalSince1970)
+            bindText(statement, 2, root)
+            bindText(statement, 3, name)
             step(statement, "markDirty")
         }
     }
@@ -289,6 +315,29 @@ public final class FileIndexCatalog: @unchecked Sendable {
     }
 
     // MARK: - Plumbing
+
+    /// Add `dirtied_at` to an index written before the column existed.
+    ///
+    /// Checked rather than attempted, because a failed `ALTER TABLE` is now
+    /// logged, and an expected failure on every launch is noise that trains a
+    /// reader to ignore the one that matters.
+    private func addDirtiedAtIfMissing() {
+        var statement: OpaquePointer?
+        guard
+            sqlite3_prepare_v2(
+                database, "PRAGMA table_info(shards)", -1, &statement, nil
+            ) == SQLITE_OK
+        else { return }
+        var present = false
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if text(statement, 1) == "dirtied_at" { present = true }
+        }
+        sqlite3_finalize(statement)
+        guard !present else { return }
+        execute(
+            "ALTER TABLE shards ADD COLUMN dirtied_at REAL NOT NULL DEFAULT 0"
+        )
+    }
 
     /// How long a contended write may wait before it is treated as failed.
     ///

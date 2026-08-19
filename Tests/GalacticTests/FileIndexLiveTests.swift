@@ -386,6 +386,96 @@ extension FileIndexLiveTests {
     }
 }
 
+// MARK: - A dirty mark that must outlive the walk it interrupted
+
+extension FileIndexLiveTests {
+
+    /// Marking is not lease-guarded and publishing clears the flag, so the gap
+    /// between a walk starting and its publish landing was a hole: an event
+    /// arriving inside it raised a flag the publish erased, and the rewalk it
+    /// asked for never happened. The corpus being published cannot contain a
+    /// change reported after it was built.
+    func testAMarkRaisedDuringAWalkSurvivesThePublish() async throws {
+        try touch("subtree/file.swift")
+        await indexRoot()
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+
+        let walkStarted = Date()
+        // The mark lands after the walk began, which is the whole point.
+        try await Task.sleep(nanoseconds: 20_000_000)
+        catalog.markDirty(root: canonical, name: "subtree")
+
+        catalog.record(
+            root: canonical, name: "subtree", generation: 9, entryCount: 1,
+            walkStartedAt: walkStarted, eventsUUID: nil, eventsID: nil
+        )
+
+        let shard = try XCTUnwrap(
+            catalog.shards(forRoot: canonical).first { $0.name == "subtree" }
+        )
+        XCTAssertTrue(
+            shard.dirty,
+            "the publish cleared a mark describing a change it cannot contain"
+        )
+        XCTAssertEqual(
+            shard.generation, 9, "the publish itself was supposed to land"
+        )
+    }
+
+    /// The other half: a mark the walk *has* answered is cleared, or every
+    /// rewalk would leave the shard dirty and the sweep would never settle.
+    func testAMarkRaisedBeforeAWalkIsClearedByThePublish() async throws {
+        try touch("subtree/file.swift")
+        await indexRoot()
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+
+        catalog.markDirty(root: canonical, name: "subtree")
+        try await Task.sleep(nanoseconds: 20_000_000)
+        // A walk that began after the mark has seen whatever it reported.
+        let walkStarted = Date()
+
+        catalog.record(
+            root: canonical, name: "subtree", generation: 9, entryCount: 1,
+            walkStartedAt: walkStarted, eventsUUID: nil, eventsID: nil
+        )
+
+        let shard = try XCTUnwrap(
+            catalog.shards(forRoot: canonical).first { $0.name == "subtree" }
+        )
+        XCTAssertFalse(
+            shard.dirty,
+            "an answered mark was kept, so the sweep will rewalk forever"
+        )
+    }
+
+    /// A mark arriving while the shard is being walked must reach the catalog
+    /// even though an earlier mark already set the flag.
+    ///
+    /// The dedupe exists to keep repeated marks off the main thread, and it is
+    /// right to suppress a mark that says nothing new. But a suppressed mark
+    /// leaves no timestamp, and the timestamp is what the publish compares
+    /// against — so during a walk, suppressing is how a real change gets
+    /// answered by a corpus built before it happened.
+    func testAMarkIsWrittenAgainWhileTheShardIsBeingWalked() {
+        XCTAssertTrue(
+            FileCorpusStore.shouldRecordMark(alreadyKnown: false, isWalking: false),
+            "a mark nothing knows about must always be recorded"
+        )
+        XCTAssertFalse(
+            FileCorpusStore.shouldRecordMark(alreadyKnown: true, isWalking: false),
+            "a repeat with no walk in flight is the case the dedupe exists for"
+        )
+        XCTAssertTrue(
+            FileCorpusStore.shouldRecordMark(alreadyKnown: true, isWalking: true),
+            "a repeat during a walk needs a fresh timestamp or the publish clears it"
+        )
+        XCTAssertTrue(
+            FileCorpusStore.shouldRecordMark(alreadyKnown: false, isWalking: true),
+            "a new mark during a walk must be recorded"
+        )
+    }
+}
+
 // MARK: - Reuse that does not depend on what was opened first
 
 extension FileIndexLiveTests {

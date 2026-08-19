@@ -219,6 +219,21 @@ public final class FileCorpusStore {
         )
     }
 
+    /// Whether a dirty mark is worth writing down.
+    ///
+    /// Suppressing a repeat is the point of the dedupe: the condition is cheap
+    /// to re-derive and the response is not — a database write and a log line
+    /// per repetition, on the main thread, for a fact that has not changed.
+    ///
+    /// A walk in flight is the exception, and it is not an optimisation detail.
+    /// The publish that ends that walk decides whether to keep the flag by
+    /// comparing when the mark was raised against when the walk began, so a
+    /// suppressed mark leaves nothing to compare and the flag is cleared by a
+    /// corpus built before the change it describes.
+    static func shouldRecordMark(alreadyKnown: Bool, isWalking: Bool) -> Bool {
+        !alreadyKnown || isWalking
+    }
+
     public func isWalking(_ root: String) -> Bool {
         !(roots[root]?.walkingShards.isEmpty ?? true)
     }
@@ -451,7 +466,7 @@ public final class FileCorpusStore {
         dropOverlayEntries(under: shard, canonical: canonical)
 
         let elapsed = Date().timeIntervalSince(started)
-        publish(corpus, shard: shard, canonical: canonical)
+        publish(corpus, shard: shard, canonical: canonical, walkStartedAt: started)
 
         // The root's shard names all the others, so walking it is also how a
         // directory created *since* the last walk acquires a shard of its own.
@@ -503,7 +518,10 @@ public final class FileCorpusStore {
     }
 
     /// Write a shard and record the new generation.
-    private func publish(_ corpus: FileCorpus, shard: String, canonical: String) {
+    private func publish(
+        _ corpus: FileCorpus, shard: String, canonical: String,
+        walkStartedAt: Date
+    ) {
         guard let catalog else { return }
         // Held for the write and released immediately after, rather than for
         // the life of the process.
@@ -544,7 +562,7 @@ public final class FileCorpusStore {
             let bytes = try FileCorpusFile.write(corpus, to: url)
             catalog.record(
                 root: canonical, name: shard, generation: generation,
-                entryCount: corpus.entryCount,
+                entryCount: corpus.entryCount, walkStartedAt: walkStartedAt,
                 eventsUUID: FileIndexWatcher.volumeUUID(for: canonical),
                 eventsID: FileIndexWatcher.currentEventID()
             )
@@ -930,7 +948,18 @@ public final class FileCorpusStore {
         // Already known. The condition is cheap to re-derive and the response
         // is not: a database write and a log line per repetition, on the main
         // thread, for a fact that has not changed.
-        guard roots[root]?.dirtyShards.contains(shard) != true else { return }
+        //
+        // Except while the shard is being walked. A mark raised then describes a
+        // change the walk in progress may already have passed, and the publish
+        // that follows decides whether to keep the flag by comparing timestamps
+        // — so the write has to happen for there to be a timestamp to compare.
+        // Deduping here would answer a new event with an old walk.
+        guard
+            Self.shouldRecordMark(
+                alreadyKnown: roots[root]?.dirtyShards.contains(shard) == true,
+                isWalking: roots[root]?.walkingShards.contains(shard) == true
+            )
+        else { return }
         roots[root]?.dirtyShards.insert(shard)
 
         catalog?.markDirty(root: root, name: shard)
