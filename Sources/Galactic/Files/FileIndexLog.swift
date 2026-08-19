@@ -53,7 +53,7 @@ public final class FileIndexLog: @unchecked Sendable {
     /// noticed. A path comparison cannot see it: the path never changes.
     private var openInode: ino_t?
     /// Serialises rotation against the other applications sharing this index.
-    private let rotationLease = FileIndexLock()
+    private let rotationLease = FileIndexLock(.log)
     /// Writes since `bytesWritten` was last reconciled with the file.
     private var writesSinceSizeCheck = 0
 

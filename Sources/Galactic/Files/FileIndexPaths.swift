@@ -58,6 +58,18 @@ public enum FileIndexPaths {
         indexDirectory.appendingPathComponent("lock")
     }
 
+    /// The log's own lease, separate from the writer lease above.
+    ///
+    /// Sharing one file made a log rotation able to turn a publish into a
+    /// no-op, since the lease does not wait and a losing publish never comes
+    /// back. Rotation and shard-building protect different things and contend
+    /// for nothing, so they get a file each.
+    ///
+    /// Never replaced, for the reason the writer lease is never replaced.
+    public static var logLockFile: URL {
+        logsDirectory.appendingPathComponent("lock")
+    }
+
     /// Where one root's shards live. Named by a hash so a path with slashes,
     /// spaces or accents cannot become a directory name.
     public static func shardDirectory(forCanonicalRoot root: String) -> URL {

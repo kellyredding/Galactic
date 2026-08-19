@@ -209,45 +209,16 @@ final class FileIndexMultiProcessTests: XCTestCase {
         }
     }
 
-    /// Run `test` in a separate process, pointed at this test's scratch index.
+    /// Run `test` in a separate process and wait for it. For children that need
+    /// no starting signal, since nothing is racing them.
     private func spawn(
         _ test: String, role: String, extraEnvironment: [String: String] = [:]
     ) throws -> ChildRun {
-        let report = home.appendingPathComponent("report-\(role)-\(UUID().uuidString)")
-        let process = Process()
-        process.executableURL = Self.xctestURL
-        process.arguments = [
-            "-XCTest", "GalacticTests.FileIndexMultiProcessTests/\(test)",
-            Bundle(for: Self.self).bundlePath,
-        ]
-        var environment = ProcessInfo.processInfo.environment
-        environment["GALACTIC_HOME"] = home.path
-        environment[Self.roleKey] = role
-        environment[Self.reportKey] = report.path
-        environment[Self.treeKey] = root.path
-        for (key, value) in extraEnvironment { environment[key] = value }
-        process.environment = environment
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        // Read while it runs: a full pipe buffer would deadlock a child that
-        // logs more than 64k, and these children are meant to be chatty.
-        var collected = Data()
-        let handle = pipe.fileHandleForReading
-        handle.readabilityHandler = { collected.append($0.availableData) }
-        try process.run()
-        process.waitUntilExit()
-        handle.readabilityHandler = nil
-        collected.append(handle.availableData)
-
-        let reported = try? String(contentsOf: report, encoding: .utf8)
-        return ChildRun(
-            role: role,
-            status: process.terminationStatus,
-            resolvedRoot: reported?.split(separator: "\n").first.map(String.init),
-            output: String(decoding: collected, as: UTF8.self)
+        let pending = try launch(
+            test, role: role, extraEnvironment: extraEnvironment
         )
+        try Data("go".utf8).write(to: gate)
+        return collect(pending)
     }
 
     /// Fail unless the child ran, and ran against the index we meant.
@@ -454,6 +425,112 @@ final class FileIndexMultiProcessTests: XCTestCase {
             )
         }
     }
+
+    // MARK: - The writer lease
+
+    /// A log tidying itself must not cost a shard.
+    ///
+    /// The lease does not wait and a publish that loses it writes nothing,
+    /// records nothing and never retries, so anything sharing that lease can
+    /// make a shard silently absent from the index and rewalked on every
+    /// launch. Rotation used to share it.
+    func testRotatingTheLogDoesNotCostAPublish() async throws {
+        try Self.requireParentRole()
+        for subtree in 0..<12 {
+            try touch("shard\(subtree)/file.swift")
+        }
+
+        // The child only churns the log; this process is the second writer, and
+        // it is the one whose publishes have something to lose.
+        let rotator = try launch(
+            "testChildRotatesTheLog", role: "rotator",
+            extraEnvironment: [
+                Self.rotateAtKey: "2048",
+                Self.lineCountKey: "6000",
+            ]
+        )
+        try Data("go".utf8).write(to: gate)
+        await indexRoot()
+        verify(collect(rotator))
+
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        let recorded = Set(catalog.shards(forRoot: canonical).map(\.name))
+        var absent: [String] = []
+        for subtree in 0..<12 where !recorded.contains("shard\(subtree)") {
+            absent.append("shard\(subtree)")
+        }
+        XCTAssertTrue(
+            absent.isEmpty,
+            """
+            \(absent.count) walked shard(s) were never recorded, so a publish \
+            lost the lease and never came back: \(absent.joined(separator: ", "))
+            """
+        )
+        XCTAssertEqual(
+            deferredPublishCount(), 0,
+            "a publish was deferred for want of a lease it should not contend for"
+        )
+    }
+
+    private func indexRoot() async {
+        await withCheckedContinuation { continuation in
+            var resumed = false
+            FileCorpusStore.shared.index(
+                root: root, skipping: [],
+                onFinished: {
+                    guard !resumed else { return }
+                    resumed = true
+                    continuation.resume()
+                }
+            )
+        }
+    }
+
+    func testChildRotatesTheLog() throws {
+        _ = try Self.requireChildRole()
+        if let bytes = ProcessInfo.processInfo.environment[Self.rotateAtKey],
+            let value = Int(bytes)
+        {
+            FileIndexLog.rotateAtBytes = value
+        }
+        let count =
+            ProcessInfo.processInfo.environment[Self.lineCountKey]
+            .flatMap(Int.init) ?? Self.probeLines
+        Self.waitForGate()
+        for line in 0..<count {
+            FileIndexLog.shared.record("probe", [("role", "rotator"), ("n", "\(line)")])
+        }
+        FileIndexLog.shared.drain()
+    }
+
+    private func deferredPublishCount() -> Int {
+        let directory = FileIndexPaths.logsDirectory
+        var names = ["index.log"]
+        names += (1...FileIndexLog.generationsKept).map { "index.log.\($0)" }
+        var total = 0
+        for name in names {
+            let url = directory.appendingPathComponent(name)
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                continue
+            }
+            total += text.split(separator: "\n").filter {
+                $0.contains("[publish]") && $0.contains("reason=another-writer")
+            }.count
+        }
+        return total
+    }
+
+    @discardableResult
+    private func touch(_ relative: String) throws -> URL {
+        let url = root.appendingPathComponent(relative)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try Data("x".utf8).write(to: url)
+        return url
+    }
+
+    private var canonical: String { FilePaths.canonical(root) }
 
     /// Which numbered generations exist, in order.
     private func presentGenerations() -> [Int] {

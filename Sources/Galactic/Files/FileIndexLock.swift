@@ -8,9 +8,35 @@ import Foundation
 /// each other and nothing else.
 public final class FileIndexLock: @unchecked Sendable {
 
-    private var descriptor: Int32 = -1
+    /// What a lease protects.
+    ///
+    /// Two, because one lock file for unrelated work is not caution but a
+    /// coupling: rotation is a handful of renames, and a publish that happened
+    /// to ask during them lost a non-blocking lease, wrote nothing, recorded
+    /// nothing and never retried — a shard silently absent from the index and
+    /// rewalked on every launch, caused by a log tidying itself.
+    public enum Scope {
+        /// Shards and the catalog rows describing them — the writer lease.
+        case index
+        /// The log's own generations, which nothing else touches.
+        case log
 
-    public init() {}
+        /// Resolved on each acquisition rather than stored, because the index
+        /// location is a computed path a host or a test can move.
+        var url: URL {
+            switch self {
+            case .index: FileIndexPaths.lockFile
+            case .log: FileIndexPaths.logLockFile
+            }
+        }
+    }
+
+    private var descriptor: Int32 = -1
+    private let scope: Scope
+
+    public init(_ scope: Scope = .index) {
+        self.scope = scope
+    }
 
     public var isHeld: Bool { descriptor >= 0 }
 
@@ -30,7 +56,7 @@ public final class FileIndexLock: @unchecked Sendable {
     public func acquire() -> Bool {
         guard descriptor < 0 else { return true }
         FileIndexPaths.prepare()
-        let path = FileIndexPaths.lockFile.path
+        let path = scope.url.path
         let opened = open(path, O_RDWR | O_CREAT, 0o600)
         guard opened >= 0 else { return false }
 
@@ -56,7 +82,13 @@ public final class FileIndexLock: @unchecked Sendable {
             return false
         }
         descriptor = held
-        FileIndexLog.shared.record("lock", [("event", "acquired"), ("pid", "\(getpid())")])
+        FileIndexLog.shared.record(
+            "lock",
+            [
+                ("event", "acquired"), ("scope", "\(scope)"),
+                ("pid", "\(getpid())"),
+            ]
+        )
         return true
     }
 
@@ -64,7 +96,13 @@ public final class FileIndexLock: @unchecked Sendable {
         guard descriptor >= 0 else { return }
         close(descriptor)
         descriptor = -1
-        FileIndexLog.shared.record("lock", [("event", "released"), ("pid", "\(getpid())")])
+        FileIndexLog.shared.record(
+            "lock",
+            [
+                ("event", "released"), ("scope", "\(scope)"),
+                ("pid", "\(getpid())"),
+            ]
+        )
     }
 
     deinit { if descriptor >= 0 { close(descriptor) } }
