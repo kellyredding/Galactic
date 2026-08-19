@@ -18,6 +18,24 @@ import Foundation
 /// instead for whichever shard has gone longest without being walked spreads
 /// the same work across the hour, and it self-corrects: a shard marked dirty
 /// by a dropped event jumps the queue.
+///
+/// ### A re-walk is not free, and not only in time
+///
+/// The picker was originally built never to re-walk at all, and one of the two
+/// reasons was this: **entering a protected directory costs a consent prompt**,
+/// so a walk on a timer asks the reader for permission on a schedule. The other
+/// reason — that a reader watched a finished corpus be replaced by one counting
+/// up from zero — is answered by refreshing one shard in the background, which
+/// is what this does. The permission cost is not answered, and re-walking a
+/// home directory hourly asks about Desktop, Documents, Downloads, Movies,
+/// Music and Pictures once per pass each.
+///
+/// That is a live constraint rather than a historical note. The case for
+/// re-walking is that the kernel drops a non-Apple watcher's queue under load,
+/// and the load in question is a build or a checkout — which happens in project
+/// trees, not in `~/Pictures`. So the directories least likely to need this
+/// backstop are the only ones that cost a prompt to re-check, and anything
+/// added here should account for that rather than rediscover it.
 @MainActor
 public final class FileIndexRefreshSweep {
 

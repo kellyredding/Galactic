@@ -97,22 +97,6 @@ public final class FilePickerPresenter: ObservableObject {
     /// for why each part of it is what it is.
     let focus = ModalFocusCapture()
 
-    /// **A finished index is never re-walked**, and it is held by
-    /// `FileCorpusStore` rather than here.
-
-    ///
-    /// There is no staleness window, and that is deliberate rather than pending:
-    /// re-walking meant a reader who came back to a root watched a complete
-    /// corpus be replaced by one counting up from zero — the restart this type
-    /// spent three rounds removing, arriving through the door marked refresh. On
-    /// a tree that takes tens of seconds and raises a permission prompt per
-    /// protected directory, an unrequested re-walk is not a background detail.
-    ///
-    /// The cost is that a file created after the walk is not found until the
-    /// process restarts. Noticing changes as they happen — and a way to ask for a
-    /// refresh by hand — is its own effort, and the shape of this makes room for
-    /// it: a corpus knows when it completed.
-
     /// Cancelled on every keystroke, so a slow filter over a large tree cannot
     /// land after the query it was answering has been typed past.
     private var filterTask: Task<Void, Never>?
@@ -293,8 +277,12 @@ public final class FilePickerPresenter: ObservableObject {
         indexedCount = store.indexedCount(forCanonicalRoot: canonical)
         corpusWasTruncated = false
 
-        // Said while there is nothing at all to rank against. A root already
-        // walked is never re-walked, so it never says "indexing…" twice.
+        // Said while there is nothing at all to rank against. Opening never
+        // re-walks a root it already holds, so this never says "indexing…"
+        // twice for the same tree. The sweep does rewalk, shard by shard, and
+        // deliberately does not touch this: a background refresh of a corpus
+        // that already answers queries is not something to interrupt a reader
+        // with.
         isIndexing = !held
 
         store.index(

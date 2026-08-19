@@ -64,11 +64,34 @@ public enum FileCorpusBuilder {
     ///
     /// Not merged into the list above, because these are wrong for a repository:
     /// a project may legitimately hold a directory called `Library`, and
-    /// skipping it there would hide real source. They belong to the home
-    /// directory specifically — a container the walk cannot afford to enter,
-    /// since the walk caps and reports truncation, and one enormous directory
-    /// otherwise spends the whole corpus before reaching anything a reader
-    /// wanted.
+    /// skipping it there would hide real source.
+    ///
+    /// **None of these is about privacy.** They are about what a reader would
+    /// ever open. Everything indexed is scanned on every keystroke, so a subtree
+    /// nobody browses is paid for by everybody — and the walk caps and reports
+    /// truncation, so one enormous directory can spend the whole corpus before
+    /// reaching anything that was wanted.
+    ///
+    /// Measured on one machine, a home directory indexes to 1,032,220 entries.
+    ///
+    /// - `Library` holds hundreds of thousands of files no one browses.
+    /// - A Photos library is a package, not a folder, and holds the same order
+    ///   of files. `Pictures` itself stays in, since images render in a reader.
+    /// - `OrbStack` is a container mount — 161,773 entries of somebody else's
+    ///   filesystem, none of it a file an application here opens.
+    ///
+    /// **`.rubies` is deliberately absent, and it is the biggest thing left.**
+    /// At 321,793 entries it is the obvious next candidate for anyone reading
+    /// this list by size, and removing it would be wrong: it is where an
+    /// installed gem's own source lives, and reading that is a real reason to
+    /// open a file. Size is not the criterion — whether a reader goes there is.
+    ///
+    /// **`Documents`, `Desktop` and `Downloads` are deliberately absent** for
+    /// the same reason: they are exactly what a reader opens. Indexing them
+    /// means macOS asks permission, which was judged the correct trade against a
+    /// picker that cannot see them at all — on the understanding that it is
+    /// asked once. A walk on a timer asks per pass instead, which is a cost this
+    /// list did not agree to; see `FileIndexRefreshSweep`.
     public static let homeSkipList: Set<String> = defaultSkipList.union([
         "Library",
         "Photos Library.photoslibrary",
