@@ -42,6 +42,13 @@ public final class FileIndexCatalog: @unchecked Sendable {
     public init?(at url: URL = FileIndexPaths.catalogFile) {
         FileIndexPaths.prepare()
         guard sqlite3_open(url.path, &database) == SQLITE_OK else { return nil }
+        // Wait rather than refuse. WAL admits one writer at a time, so a second
+        // application is refused the instant it asks, and with no timeout every
+        // contended write was simply lost. Bounded, because these calls reach
+        // the main actor through a synchronous queue: long enough to absorb a
+        // single-statement write from another process many times over, short
+        // enough that the worst case is not a stall anyone sees.
+        sqlite3_busy_timeout(database, Int32(Self.busyTimeoutMilliseconds))
         execute("PRAGMA journal_mode=WAL")
         execute("PRAGMA synchronous=NORMAL")
         execute(
@@ -82,7 +89,7 @@ public final class FileIndexCatalog: @unchecked Sendable {
             defer { sqlite3_finalize(statement) }
             bindText(statement, 1, root)
             sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
-            sqlite3_step(statement)
+            step(statement, "adopt")
         }
     }
 
@@ -140,7 +147,7 @@ public final class FileIndexCatalog: @unchecked Sendable {
             } else {
                 sqlite3_bind_null(statement, 7)
             }
-            sqlite3_step(statement)
+            step(statement, "record")
         }
     }
 
@@ -171,7 +178,7 @@ public final class FileIndexCatalog: @unchecked Sendable {
             defer { sqlite3_finalize(statement) }
             bindText(statement, 1, root)
             bindText(statement, 2, name)
-            sqlite3_step(statement)
+            step(statement, "markPending")
         }
     }
 
@@ -220,7 +227,7 @@ public final class FileIndexCatalog: @unchecked Sendable {
             defer { sqlite3_finalize(statement) }
             bindText(statement, 1, root)
             bindText(statement, 2, name)
-            sqlite3_step(statement)
+            step(statement, "markDirty")
         }
     }
 
@@ -248,7 +255,7 @@ public final class FileIndexCatalog: @unchecked Sendable {
             defer { sqlite3_finalize(statement) }
             bindText(statement, 1, root)
             bindText(statement, 2, name)
-            sqlite3_step(statement)
+            step(statement, "remove")
         }
     }
 
@@ -276,15 +283,54 @@ public final class FileIndexCatalog: @unchecked Sendable {
                 else { continue }
                 defer { sqlite3_finalize(statement) }
                 bindText(statement, 1, root)
-                sqlite3_step(statement)
+                step(statement, "forget")
             }
         }
     }
 
     // MARK: - Plumbing
 
+    /// How long a contended write may wait before it is treated as failed.
+    ///
+    /// Waiting is SQLite's job here, not this class's. A retry loop layered on
+    /// top was measured and removed: with the timeout in place it never fired,
+    /// and with the timeout absent it made matters worse than doing nothing —
+    /// four hundred and fifty of six hundred writes lost against two hundred
+    /// and forty — because an immediate retry is a spin that holds the lock
+    /// contended rather than letting the other writer finish.
+    private static let busyTimeoutMilliseconds = 250
+
+    /// Run a statement to completion, and say so when it does not.
+    ///
+    /// Every mutating method used to discard this result, which made a refused
+    /// write and a successful one the same event as far as the caller and the
+    /// log were concerned. Since the index heals itself by writing to the
+    /// catalog — recording a shard as owed, marking one dirty — a write that
+    /// vanishes quietly disables the recovery rather than delaying it.
+    @discardableResult
+    private func step(_ statement: OpaquePointer?, _ what: String) -> Bool {
+        let result = sqlite3_step(statement)
+        guard result == SQLITE_DONE || result == SQLITE_ROW else {
+            FileIndexLog.shared.record(
+                "catalog",
+                [
+                    ("event", "write-failed"), ("statement", what),
+                    ("code", "\(result)"),
+                ]
+            )
+            return false
+        }
+        return true
+    }
+
     private func execute(_ sql: String) {
-        sqlite3_exec(database, sql, nil, nil, nil)
+        guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
+            FileIndexLog.shared.record(
+                "catalog",
+                [("event", "exec-failed"), ("sql", String(sql.prefix(40)))]
+            )
+            return
+        }
     }
 
     private func bindText(_ statement: OpaquePointer?, _ index: Int32, _ value: String) {

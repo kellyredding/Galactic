@@ -611,6 +611,81 @@ final class FileIndexMultiProcessTests: XCTestCase {
 
     private var canonical: String { FilePaths.canonical(root) }
 
+    // MARK: - The catalog
+
+    /// How many rows each cataloguing child writes.
+    private static let catalogRows = 150
+
+    /// A catalog write either lands or says it did not.
+    ///
+    /// WAL admits one writer at a time and the busy timeout was zero, so a
+    /// second process was refused immediately — and every mutating method
+    /// discarded the result, so a refusal was indistinguishable from success.
+    /// Everything the index does to heal itself is a catalog write, which makes
+    /// a silently dropped one the failure that disables the recovery from all
+    /// the others.
+    func testConcurrentCatalogWritesAllLand() throws {
+        try Self.requireParentRole()
+        let roles = ["cataloger-a", "cataloger-b", "cataloger-c", "cataloger-d"]
+        let runs = try race("testChildWritesCatalogRows", roles: roles)
+        runs.forEach { verify($0) }
+
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        let present = Set(catalog.shards(forRoot: canonical).map(\.name))
+        var missing: [String] = []
+        for role in roles {
+            for row in 0..<Self.catalogRows where !present.contains("\(role)-\(row)") {
+                missing.append("\(role)-\(row)")
+            }
+        }
+        XCTAssertTrue(
+            missing.isEmpty,
+            """
+            \(missing.count) of \(roles.count * Self.catalogRows) catalog writes \
+            were dropped without error (first few: \
+            \(missing.prefix(5).joined(separator: ", ")))
+            """
+        )
+        // The other half of the promise: a write that cannot land says so.
+        XCTAssertEqual(
+            logLineCount(containing: "event=write-failed"), 0,
+            "a catalog write reported failure, so the wait was not long enough"
+        )
+    }
+
+    private func logLineCount(containing needle: String) -> Int {
+        let directory = FileIndexPaths.logsDirectory
+        var names = ["index.log"]
+        names += (1...FileIndexLog.generationsKept).map { "index.log.\($0)" }
+        var total = 0
+        for name in names {
+            let url = directory.appendingPathComponent(name)
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                continue
+            }
+            total += text.split(separator: "\n").filter { $0.contains(needle) }.count
+        }
+        return total
+    }
+
+    func testChildWritesCatalogRows() throws {
+        let role = try Self.requireChildRole()
+        guard let catalog = FileIndexCatalog() else {
+            XCTFail("no catalog")
+            return
+        }
+        let root = FilePaths.canonical(
+            URL(fileURLWithPath: ProcessInfo.processInfo.environment[Self.treeKey] ?? "/")
+        )
+        Self.waitForGate()
+        for row in 0..<Self.catalogRows {
+            catalog.record(
+                root: root, name: "\(role)-\(row)", generation: 1,
+                entryCount: row + 1, eventsUUID: nil, eventsID: nil
+            )
+        }
+    }
+
     /// Which numbered generations exist, in order.
     private func presentGenerations() -> [Int] {
         (1...FileIndexLog.generationsKept).filter {
