@@ -175,14 +175,32 @@ public enum FileCorpusBuilder {
     ///
     /// Paths stay relative to `root` in every shard, so shards of one root
     /// concatenate into one corpus without rewriting a single byte.
+    /// A walked shard, and what the walk was not allowed to see.
+    public struct ShardWalk {
+        public let corpus: FileCorpus
+        /// Directories inside the shard that could not be opened.
+        public let refusedDirectories: [String]
+        /// Whether the shard's own top directory was refused.
+        ///
+        /// The distinction that matters when publishing: a refused subdirectory
+        /// leaves a corpus that is merely incomplete, while a refused top
+        /// directory leaves one that is empty for a reason no reader would
+        /// guess. Publishing the latter over a populated shard replaces an index
+        /// with nothing and reports success.
+        public let rootWasRefused: Bool
+    }
+
     public static func buildShard(
         root: URL,
         shard: String,
         skipping skipList: Set<String> = defaultSkipList,
         isCancelled: () -> Bool = { false },
         onProgress: (Int) -> Void = { _ in }
-    ) -> FileCorpus {
-        build(
+    ) -> ShardWalk {
+        let rootPath = FilePaths.canonical(root)
+        let top = shard.isEmpty ? rootPath : rootPath + "/" + shard
+        var refused: [String] = []
+        let corpus = build(
             root: root,
             subtree: shard,
             // The root's own shard records the top-level entries and descends
@@ -190,7 +208,13 @@ public enum FileCorpusBuilder {
             depthCap: shard.isEmpty ? 0 : depthCap,
             skipping: skipList,
             isCancelled: isCancelled,
-            onProgress: onProgress
+            onProgress: onProgress,
+            onRefused: { refused.append($0) }
+        )
+        return ShardWalk(
+            corpus: corpus,
+            refusedDirectories: refused,
+            rootWasRefused: refused.contains(top)
         )
     }
 
@@ -199,20 +223,26 @@ public enum FileCorpusBuilder {
         of root: URL, skipping skipList: Set<String> = defaultSkipList
     ) -> [String] {
         var names = [""]
-        let corpus = buildShard(root: root, shard: "", skipping: skipList)
+        let corpus = buildShard(root: root, shard: "", skipping: skipList).corpus
         for index in 0..<corpus.entryCount where corpus.isDirectory(at: index) {
             names.append(corpus.relativePath(at: index))
         }
         return names
     }
 
+    /// - Parameter onRefused: called with each directory the walk was not allowed
+    ///   to open. Defaulted away, because most callers only want the corpus —
+    ///   but a caller publishing the result needs to know the difference between
+    ///   a directory that is empty and one it was refused, which otherwise
+    ///   produce the same corpus and the same silence.
     public static func build(
         root: URL,
         subtree: String = "",
         depthCap: Int = depthCap,
         skipping skipList: Set<String> = defaultSkipList,
         isCancelled: () -> Bool = { false },
-        onProgress: (Int) -> Void = { _ in }
+        onProgress: (Int) -> Void = { _ in },
+        onRefused: (String) -> Void = { _ in }
     ) -> FileCorpus {
         // Per thread, before anything is enumerated. Enumeration itself is a
         // materialisation trigger, so this cannot wait until the first file.
@@ -266,7 +296,16 @@ public enum FileCorpusBuilder {
             head += 1
 
             let descriptor = open(directory, O_RDONLY, 0)
-            guard descriptor >= 0 else { continue }
+            guard descriptor >= 0 else {
+                // Read immediately: anything else here would clobber it. A
+                // refusal is the interesting case — the walk produces an empty
+                // corpus either way, so without this a directory the user has
+                // not granted access to is indistinguishable from one with
+                // nothing in it.
+                let failure = errno
+                if failure == EPERM || failure == EACCES { onRefused(directory) }
+                continue
+            }
             defer { close(descriptor) }
 
             var request = attrlist()

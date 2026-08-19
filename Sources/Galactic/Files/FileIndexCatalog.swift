@@ -204,6 +204,34 @@ public final class FileIndexCatalog: @unchecked Sendable {
         }
     }
 
+    /// Record that a walk was attempted and refused.
+    ///
+    /// Moves the walk time forward without touching the generation, and clears
+    /// the dirty flag. Both halves matter: leaving the time alone would have the
+    /// sweep choose this shard on every tick forever, and leaving it dirty would
+    /// do the same and jump the queue while doing it. Neither retry can succeed,
+    /// because the obstacle is permission rather than staleness, and each one
+    /// costs a dialog.
+    ///
+    /// The shard keeps whatever generation it last published, so a refusal never
+    /// destroys an index that was readable when it was built.
+    public func noteWalkRefused(root: String, name: String) {
+        queue.sync {
+            let sql = """
+                UPDATE shards SET walked_at = ?, dirty = 0
+                WHERE root_path = ? AND name = ?
+                """
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK
+            else { return }
+            defer { sqlite3_finalize(statement) }
+            sqlite3_bind_double(statement, 1, Date().timeIntervalSince1970)
+            bindText(statement, 2, root)
+            bindText(statement, 3, name)
+            step(statement, "noteWalkRefused")
+        }
+    }
+
     public func shards(forRoot root: String) -> [Shard] {
         queue.sync {
             var found: [Shard] = []

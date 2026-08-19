@@ -452,7 +452,7 @@ public final class FileCorpusStore {
         let started = Date()
         let alreadyHeld = roots[canonical]?.shards.values.reduce(0) { $0 + $1.entryCount } ?? 0
 
-        let corpus = await Task.detached(priority: .utility) {
+        let walked = await Task.detached(priority: .utility) {
             FileCorpusBuilder.buildShard(
                 root: root,
                 shard: shard,
@@ -466,6 +466,42 @@ public final class FileCorpusStore {
             )
         }.value
 
+        // A refused top directory is not an empty one, and the corpus looks the
+        // same either way. Keeping what is already mapped and declining to
+        // publish is the only safe reading: the alternative replaces a working
+        // index with nothing, records success, and leaves the reader searching a
+        // directory the picker now believes is empty.
+        if walked.rootWasRefused {
+            roots[canonical]?.walkingShards.remove(shard)
+            roots[canonical]?.dirtyShards.remove(shard)
+            // Attempted, so it stops being chosen every tick. A timer cannot
+            // succeed where permission is the obstacle, and retrying on one
+            // costs a dialog per attempt. The way back is an explicit refresh.
+            catalog?.noteWalkRefused(root: canonical, name: shard)
+            log.record(
+                "walk",
+                [
+                    ("root", canonical),
+                    ("shard", shard.isEmpty ? "(root)" : shard),
+                    ("result", "refused"),
+                    ("held", "\(roots[canonical]?.shards[shard]?.entryCount ?? 0)"),
+                    ("seconds", String(format: "%.2f", Date().timeIntervalSince(started))),
+                ]
+            )
+            return
+        }
+
+        let corpus = walked.corpus
+        if !walked.refusedDirectories.isEmpty {
+            log.record(
+                "walk",
+                [
+                    ("shard", shard.isEmpty ? "(root)" : shard),
+                    ("result", "partial"),
+                    ("refused", "\(walked.refusedDirectories.count)"),
+                ]
+            )
+        }
         roots[canonical]?.shards[shard] = corpus
         roots[canonical]?.removed[shard] = nil
         roots[canonical]?.walkingShards.remove(shard)
