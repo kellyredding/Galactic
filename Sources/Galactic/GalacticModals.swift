@@ -37,6 +37,7 @@ public enum GalacticModals {
             CheatSheetPresenter.isClaimingKeyboard
                 || AgentInboxPresenter.isClaimingKeyboard
                 || FilePickerPresenter.isClaimingKeyboard
+                || LineJumpPresenter.isClaimingKeyboard
                 || SheetAlert.isClaimingKeyboard
         }
     }

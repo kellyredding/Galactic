@@ -46,6 +46,15 @@ final class ShippedJavaScriptTests: XCTestCase {
                 HTMLRenderer.blockIndexDOMWalkJS
             ),
             ("SourceRenderer.highlightJS", SourceRenderer.highlightJS),
+            // Built per call rather than stored, so it is registered with a
+            // line and an anchoring filled in — which is the only form of it
+            // that is ever evaluated, and the only form that is JavaScript.
+            (
+                "ReaderLineJump.javaScript",
+                ReaderLineJump.javaScript(
+                    line: 1, anchoring: SourceRenderer.anchoring
+                )
+            ),
         ]
     }
 
@@ -92,7 +101,7 @@ final class ShippedJavaScriptTests: XCTestCase {
     /// leave an app without someone being told, and this is where it has to
     /// arrive.
     func testCoverageHasNotShrunk() {
-        XCTAssertGreaterThanOrEqual(embeddedLiterals.count, 12)
+        XCTAssertGreaterThanOrEqual(embeddedLiterals.count, 13)
         XCTAssertGreaterThanOrEqual(bundledResources.count, 2)
     }
 }
