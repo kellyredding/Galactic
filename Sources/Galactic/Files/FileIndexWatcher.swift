@@ -33,12 +33,36 @@ public final class FileIndexWatcher: @unchecked Sendable {
     /// in an editor is findable before the reader goes looking for it.
     public static let latency: CFTimeInterval = 0.5
 
+    /// How many replayed paths are worth reading one at a time.
+    ///
+    /// Above this the replay is answered by naming the subtrees it touched and
+    /// letting the sweep redo them, which is the same answer already given when
+    /// the file system says it lost track. Reading each path costs an `lstat`,
+    /// and a burst of nine hundred of those measured 213 ms — so this bounds
+    /// that half of the work to roughly a tenth of a second however long the
+    /// application was away.
+    public static let replayPathLimit = 500
+
+    /// How long to wait for the end of a replay that never announces itself.
+    ///
+    /// `HistoryDone` is only delivered when history was actually requested, and
+    /// this exists so that a stream which never sends it cannot leave events
+    /// buffered for the life of the process.
+    public static let replayGrace: TimeInterval = 10
+
     private var stream: FSEventStreamRef?
     private let queue = DispatchQueue(
         label: "com.kellyredding.galactic.index-watch", qos: .utility
     )
     private let canonicalRoot: String
     private let log = FileIndexLog.shared
+
+    /// Set only when history was asked for, and cleared by the first
+    /// `HistoryDone` — or by the grace timer. Every access is on `queue`, which
+    /// is serial, and that is what makes it safe without a lock.
+    private var replaying = false
+    private var replayTouched: [String] = []
+    private var replayRescan: [String] = []
 
     public init(canonicalRoot: String) {
         self.canonicalRoot = canonicalRoot
@@ -118,6 +142,27 @@ public final class FileIndexWatcher: @unchecked Sendable {
 
         stream = created
         FSEventStreamSetDispatchQueue(created, queue)
+
+        // Buffer while the replay arrives. Asking for history means being sent
+        // everything that happened while the application was away, as fast as
+        // the file system can deliver it — the coalescing latency above governs
+        // live events and does nothing for these. Measured after half an hour
+        // away: 1,048 callbacks carrying 11,807 paths in nine seconds, each one
+        // a hop to the main actor and its share of an `lstat` storm, landing in
+        // the same window as everything else a launch has to do.
+        let replaying = start != FSEventStreamEventId(kFSEventStreamEventIdSinceNow)
+        queue.async { [self] in
+            // Cleared as well as set: a restart must not deliver a previous
+            // stream's replay into this one.
+            replayTouched = []
+            replayRescan = []
+            self.replaying = replaying
+            guard replaying else { return }
+            queue.asyncAfter(deadline: .now() + Self.replayGrace) { [self] in
+                flushReplay(reason: "grace")
+            }
+        }
+
         FSEventStreamStart(created)
         log.record(
             "watch",
@@ -126,6 +171,7 @@ public final class FileIndexWatcher: @unchecked Sendable {
                 ("root", canonicalRoot),
                 ("since", since.map(String.init) ?? "now"),
                 ("latency", "\(Self.latency)"),
+                ("replaying", "\(replaying)"),
             ]
         )
     }
@@ -150,6 +196,7 @@ public final class FileIndexWatcher: @unchecked Sendable {
         let list = unsafeBitCast(paths, to: NSArray.self)
         var touched: [String] = []
         var rescan: [String] = []
+        var historyDone = false
         touched.reserveCapacity(count)
 
         for index in 0..<count {
@@ -161,17 +208,37 @@ public final class FileIndexWatcher: @unchecked Sendable {
                 rescan.append(path)
                 continue
             }
-            if flag & UInt32(kFSEventStreamEventFlagHistoryDone) != 0 { continue }
+            // Not a path at all: the marker saying the replay is over. It was
+            // being skipped as an uninteresting event, which threw away the one
+            // signal that says when the flood stops.
+            if flag & UInt32(kFSEventStreamEventFlagHistoryDone) != 0 {
+                historyDone = true
+                continue
+            }
             touched.append(path)
         }
 
+        if replaying {
+            replayTouched.append(contentsOf: touched)
+            replayRescan.append(contentsOf: rescan)
+            if historyDone { flushReplay(reason: "history-done") }
+            return
+        }
+
+        deliver(touched: touched, rescan: rescan)
+    }
+
+    /// Hand a batch to the store.
+    ///
+    /// Classified here, on the watcher's own queue, rather than after the hop to
+    /// the main actor. This is where the cost is: a burst of nine hundred paths
+    /// measured 213 ms in `lstat` alone, because each path is a cold metadata
+    /// read somewhere in a tree of nearly a million files. Doing that on the
+    /// main actor is what a beach ball is made of, and none of it needs the
+    /// store's state — only the answers do.
+    private func deliver(touched: [String], rescan: [String]) {
+        guard !touched.isEmpty || !rescan.isEmpty else { return }
         let root = canonicalRoot
-        // Classified here, on the watcher's own queue, rather than after the hop
-        // to the main actor. This is where the cost is: a burst of nine hundred
-        // paths measured 213 ms in `lstat` alone, because each path is a cold
-        // metadata read somewhere in a tree of nearly a million files. Doing
-        // that on the main actor is what a beach ball is made of, and none of it
-        // needs the store's state — only the answers do.
         let classified = FileCorpusStore.classify(touched)
         Task { @MainActor in
             FileCorpusStore.shared.apply(
@@ -179,5 +246,79 @@ public final class FileIndexWatcher: @unchecked Sendable {
                 rescan: rescan, canonicalRoot: root
             )
         }
+    }
+
+    /// Answer a whole replay at once.
+    ///
+    /// One delivery rather than one per callback, and above `replayPathLimit`
+    /// the paths are not read at all — the subtrees they fall in are named and
+    /// the sweep redoes them. That is not a shortcut: it is the same answer this
+    /// watcher already gives when the file system reports it lost track, and for
+    /// the same reason. Learning what changed costs a cold `lstat` per path,
+    /// which past a certain volume is more expensive than rewalking the few
+    /// subtrees involved — and a rewalk is the more accurate answer anyway.
+    private func flushReplay(reason: String) {
+        guard replaying else { return }
+        replaying = false
+        let touched = replayTouched
+        let rescan = replayRescan
+        replayTouched = []
+        replayRescan = []
+
+        if touched.count > Self.replayPathLimit {
+            let subtrees = Self.subtrees(of: touched, underCanonical: canonicalRoot)
+            log.record(
+                "watch",
+                [
+                    ("event", "replay-done"),
+                    ("reason", reason),
+                    ("paths", "\(touched.count)"),
+                    ("action", "rescan-subtrees"),
+                    ("subtrees", "\(subtrees.count)"),
+                ]
+            )
+            deliver(touched: [], rescan: Array(subtrees) + rescan)
+            return
+        }
+
+        log.record(
+            "watch",
+            [
+                ("event", "replay-done"),
+                ("reason", reason),
+                ("paths", "\(touched.count)"),
+                ("action", "classify"),
+            ]
+        )
+        deliver(touched: touched, rescan: rescan)
+    }
+
+    /// The distinct top-level subtrees a set of paths falls in.
+    ///
+    /// What `markSubtreeDirty` reduces each path to anyway. Reduced here
+    /// instead, off the main actor and before the hop, so twelve thousand paths
+    /// become the handful of shards they actually name — one main-actor call
+    /// each rather than twelve thousand.
+    ///
+    /// A path outside the root is dropped rather than guessed at: the stream
+    /// watches one root, and anything else arriving is not this index's to
+    /// answer for.
+    static func subtrees(
+        of paths: [String], underCanonical root: String
+    ) -> Set<String> {
+        var found: Set<String> = []
+        for path in paths {
+            guard
+                let relative = FilePaths.relativeEntry(
+                    of: path, underCanonical: root
+                )
+            else { continue }
+            guard let first = relative.split(separator: "/").first else {
+                found.insert(root)
+                continue
+            }
+            found.insert(root + "/" + first)
+        }
+        return found
     }
 }
