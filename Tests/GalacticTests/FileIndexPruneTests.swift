@@ -114,7 +114,7 @@ final class FileIndexPruneTests: XCTestCase {
         await indexRoot()
 
         let catalog = try XCTUnwrap(FileIndexCatalog())
-        catalog.setSkipListEntry(root: canonical, name: "unwanted", skipped: true)
+        catalog.setSkipListEntry(name: "unwanted", skipped: true)
         FileCorpusStore.shared.prune(shard: "unwanted", canonicalRoot: canonical)
 
         // A fresh process against the same index and the same stored list.
@@ -144,7 +144,7 @@ final class FileIndexPruneTests: XCTestCase {
 
         let catalog = try XCTUnwrap(FileIndexCatalog())
         // The entry is stored and nothing prunes — the interrupted case.
-        catalog.setSkipListEntry(root: canonical, name: "unwanted", skipped: true)
+        catalog.setSkipListEntry(name: "unwanted", skipped: true)
         XCTAssertNotNil(
             catalog.shards(forRoot: canonical).first { $0.name == "unwanted" },
             "fixture assumes the row is still there"

@@ -437,7 +437,12 @@ public final class FileCorpusStore {
             )
         }
 
-        for shard in catalog.shards(forRoot: canonical) where !shard.dirty {
+        // Generation zero means nothing was ever published for this shard — a
+        // placeholder for one that is owed a walk or was refused its first. There
+        // is no file to map, and attempting one logs an unreadable-shard line on
+        // every launch for a directory that is behaving exactly as recorded.
+        for shard in catalog.shards(forRoot: canonical)
+        where !shard.dirty && shard.generation > 0 {
             let url = FileCorpusFile.url(
                 shardDirectory: directory,
                 shard: FileIndexPaths.rootIdentifier(shard.name),
@@ -598,7 +603,7 @@ public final class FileCorpusStore {
             list = override
         } else {
             var derived = FileCorpusBuilder.skipList(forRoot: state.url)
-            if let delta = catalog?.skipListDelta(forRoot: root) {
+            if let delta = catalog?.skipListDelta() {
                 derived.formUnion(delta.added)
                 derived.subtract(delta.removed)
             }
@@ -616,6 +621,35 @@ public final class FileCorpusStore {
         if let resolved = state.resolvedSkipList { return resolved }
         return state.skipListOverride
             ?? FileCorpusBuilder.skipList(forRoot: state.url)
+    }
+
+    /// Stop indexing a root and reclaim what it was holding.
+    ///
+    /// Both halves, because either alone is a defect. Forgetting the rows
+    /// without reclaiming leaves the shard files on disk with nothing naming
+    /// them — thirteen megabytes were orphaned exactly that way by the covering
+    /// root retirement. Reclaiming without forgetting deletes files rows still
+    /// point at.
+    ///
+    /// Unmapping in this process too, so a picker open in the meantime stops
+    /// answering from a tree the index no longer covers.
+    public func stopIndexing(canonicalRoot root: String) {
+        guard let catalog else { return }
+        let shards = catalog.shards(forRoot: root)
+        catalog.forget(root: root)
+        roots[root] = nil
+        servedBy = servedBy.filter { $0.value != root && $0.key != root }
+        let reclaimed = reclaimOrphanedShardDirectories()
+        log.record(
+            "index",
+            [
+                ("root", root),
+                ("event", "stopped"),
+                ("shards", "\(shards.count)"),
+                ("entries", "\(shards.reduce(0) { $0 + $1.entryCount })"),
+                ("reclaimed", "\(reclaimed)"),
+            ]
+        )
     }
 
     /// Delete shard directories no root in the catalog answers for.
@@ -757,13 +791,17 @@ public final class FileCorpusStore {
             // Attempted, so it stops being chosen every tick. A timer cannot
             // succeed where permission is the obstacle, and retrying on one
             // costs a dialog per attempt. The way back is an explicit refresh.
-            catalog?.noteWalkRefused(root: canonical, name: shard)
+            catalog?.noteWalkRefused(
+                root: canonical, name: shard,
+                code: walked.rootRefusal?.code ?? 0
+            )
             log.record(
                 "walk",
                 [
                     ("root", canonical),
                     ("shard", shard.isEmpty ? "(root)" : shard),
                     ("result", "refused"),
+                    ("code", "\(walked.rootRefusal?.code ?? 0)"),
                     ("held", "\(roots[canonical]?.shards[shard]?.entryCount ?? 0)"),
                     ("seconds", String(format: "%.2f", Date().timeIntervalSince(started))),
                 ]
@@ -793,7 +831,8 @@ public final class FileCorpusStore {
         let elapsed = Date().timeIntervalSince(started)
         publish(
             corpus, shard: shard, canonical: canonical, walkStartedAt: started,
-            encounteredSkips: walked.encounteredSkips
+            encounteredSkips: walked.encounteredSkips,
+            refusedDirectoryCount: walked.refusedDirectories.count
         )
 
         // The root's shard names all the others, so walking it is also how a
@@ -849,7 +888,8 @@ public final class FileCorpusStore {
     /// Write a shard and record the new generation.
     private func publish(
         _ corpus: FileCorpus, shard: String, canonical: String,
-        walkStartedAt: Date, encounteredSkips: Set<String>
+        walkStartedAt: Date, encounteredSkips: Set<String>,
+        refusedDirectoryCount: Int = 0
     ) {
         guard let catalog else { return }
         // Held for the write and released immediately after, rather than for
@@ -893,7 +933,8 @@ public final class FileCorpusStore {
                 root: canonical, name: shard, generation: generation,
                 entryCount: corpus.entryCount, walkStartedAt: walkStartedAt,
                 eventsUUID: FileIndexWatcher.volumeUUID(for: canonical),
-                eventsID: FileIndexWatcher.currentEventID()
+                eventsID: FileIndexWatcher.currentEventID(),
+                refusedDirectoryCount: refusedDirectoryCount
             )
             catalog.recordEncounteredSkips(
                 root: canonical, shard: shard, names: encounteredSkips

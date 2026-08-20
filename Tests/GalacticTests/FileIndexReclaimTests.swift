@@ -91,6 +91,55 @@ final class FileIndexReclaimTests: XCTestCase {
         XCTAssertFalse(slices.isEmpty, "the live corpus went with it")
     }
 
+    // MARK: - Stopping a root on purpose
+
+    /// Both halves in one call, because either alone is a defect: rows without
+    /// files answer with nothing, and files without rows are unreachable bytes.
+    func testStoppingARootForgetsItAndReclaimsItsFiles() async throws {
+        try Data("x".utf8).write(to: root.appendingPathComponent("a_file.swift"))
+        await indexRoot()
+
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        let directory = FileIndexPaths.shardDirectory(forCanonicalRoot: canonical)
+        XCTAssertTrue(catalog.roots().contains(canonical), "fixture not indexed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path))
+
+        FileCorpusStore.shared.stopIndexing(canonicalRoot: canonical)
+
+        XCTAssertFalse(
+            catalog.roots().contains(canonical),
+            "the root is still in the index"
+        )
+        XCTAssertTrue(
+            catalog.shards(forRoot: canonical).isEmpty,
+            "the shard rows outlived the root"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: directory.path),
+            "the shard files were orphaned rather than reclaimed"
+        )
+    }
+
+    /// And this process stops answering from it, or a picker already open keeps
+    /// serving a tree the index no longer covers.
+    func testStoppingARootUnmapsItHere() async throws {
+        try Data("x".utf8).write(
+            to: root.appendingPathComponent("findable_thing.swift")
+        )
+        await indexRoot()
+        XCTAssertFalse(
+            FileCorpusStore.shared.slices(forCanonicalRoot: canonical).isEmpty,
+            "fixture was not mapped"
+        )
+
+        FileCorpusStore.shared.stopIndexing(canonicalRoot: canonical)
+
+        XCTAssertTrue(
+            FileCorpusStore.shared.slices(forCanonicalRoot: canonical).isEmpty,
+            "the corpus is still being served after the root was dropped"
+        )
+    }
+
     /// The catalog file and the lock live alongside the shard directories and
     /// are not directories, so they must be passed over rather than matched.
     func testTheCatalogAndLockAreNotMistakenForOrphans() async throws {

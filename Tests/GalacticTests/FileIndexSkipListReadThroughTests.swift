@@ -75,7 +75,7 @@ final class FileIndexSkipListReadThroughTests: XCTestCase {
 
         let catalog = try XCTUnwrap(FileIndexCatalog())
         catalog.adopt(root: canonical)
-        catalog.setSkipListEntry(root: canonical, name: "hideme", skipped: true)
+        catalog.setSkipListEntry(name: "hideme", skipped: true)
 
         await indexRoot()
 
@@ -97,9 +97,7 @@ final class FileIndexSkipListReadThroughTests: XCTestCase {
             FileCorpusBuilder.defaultSkipList.contains("node_modules"),
             "fixture assumes the default skips this"
         )
-        catalog.setSkipListEntry(
-            root: canonical, name: "node_modules", skipped: false
-        )
+        catalog.setSkipListEntry(name: "node_modules", skipped: false)
 
         await indexRoot()
 
@@ -127,7 +125,7 @@ final class FileIndexSkipListReadThroughTests: XCTestCase {
 
         // Another application edits the shared index.
         let catalog = try XCTUnwrap(FileIndexCatalog())
-        catalog.setSkipListEntry(root: canonical, name: "nested", skipped: true)
+        catalog.setSkipListEntry(name: "nested", skipped: true)
 
         // No notification, no reload — just the next walk of the parent shard.
         await FileCorpusStore.shared.refresh(

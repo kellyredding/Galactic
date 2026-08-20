@@ -53,6 +53,11 @@ public enum FileCorpusBuilder {
         "target", ".gradle", ".terraform", ".dart_tool",
         // Caches and tooling
         ".cache", ".parcel-cache", ".turbo", "coverage", ".idea",
+        // Deleted files. macOS refuses `~/.Trash` outright — `open` returns
+        // EPERM regardless of consent — so indexing it can only ever produce a
+        // refusal nobody can act on, and it is not somewhere a reader opens a
+        // file from anyway.
+        ".Trash", ".Trashes",
         // The index's own storage. Without this it indexes itself — thirty
         // megabytes of its own shards — and worse, every publish writes there,
         // which the watcher then reports as file-system activity, which churns
@@ -92,11 +97,21 @@ public enum FileCorpusBuilder {
     /// picker that cannot see them at all — on the understanding that it is
     /// asked once. A walk on a timer asks per pass instead, which is a cost this
     /// list did not agree to; see `FileIndexRefreshSweep`.
-    public static let homeSkipList: Set<String> = defaultSkipList.union([
+    public static let homeSkipList: Set<String> = defaultSkipList.union(
+        homeOnlyNames
+    )
+
+    /// The names skipped only when the root takes in the home directory.
+    ///
+    /// Separated so a surface listing the skip list can say which entries are
+    /// conditional. They are the reason the built-in list cannot simply be one
+    /// set: `Library` under home is a hundred thousand files nobody browses, and
+    /// `Library` in a checkout is source.
+    public static let homeOnlyNames: Set<String> = [
         "Library",
         "Photos Library.photoslibrary",
         "OrbStack",
-    ])
+    ]
 
     /// Directories macOS asks the user about before letting anything read them.
     ///
@@ -126,7 +141,7 @@ public enum FileCorpusBuilder {
             && root + "/" + shard == home + "/" + shard
     }
 
-    /// The list for a root, decided by what the root is.
+    /// The built-in list for a root, decided by what the root is.
     ///
     /// A property of the index rather than of whichever application opened it.
     /// Every host used to supply its own, which made the same corpus mean two
@@ -135,6 +150,11 @@ public enum FileCorpusBuilder {
     /// rewalk would replace the other's, forever, with nothing recording that
     /// they disagreed. Deriving it here means they cannot disagree — the answer
     /// is a function of the root, and both compute it from the same code.
+    ///
+    /// This is only the base. A person's own additions and removals are stored
+    /// once for the whole index, not per root, and applied on top — so the part
+    /// that varies by tree is the part describing what a tree *is*, and the part
+    /// that does not vary is the part someone chose.
     public static func skipList(forRoot root: URL) -> Set<String> {
         coversHomeDirectory(FilePaths.canonical(root))
             ? homeSkipList : defaultSkipList
@@ -175,24 +195,45 @@ public enum FileCorpusBuilder {
     ///
     /// Paths stay relative to `root` in every shard, so shards of one root
     /// concatenate into one corpus without rewriting a single byte.
+    /// A directory the walk was not allowed to open, and why.
+    ///
+    /// The code is the `errno` the failed `open` reported. It is carried rather
+    /// than reduced to a flag because the two values that reach here mean
+    /// different things to whoever reads it later: `EACCES` is a file mode a
+    /// user can change, while `EPERM` from one of the consent-protected
+    /// directories is a decision recorded outside the file system that no
+    /// amount of retrying will alter.
+    public struct Refusal: Sendable, Equatable {
+        public let path: String
+        public let code: Int32
+
+        public init(path: String, code: Int32) {
+            self.path = path
+            self.code = code
+        }
+    }
+
     /// A walked shard, and what the walk was not allowed to see.
     public struct ShardWalk {
         public let corpus: FileCorpus
         /// Directories inside the shard that could not be opened.
-        public let refusedDirectories: [String]
+        public let refusedDirectories: [Refusal]
         /// Names from the skip list this walk actually met.
         ///
         /// The set is what makes un-skipping precise: a name nothing encountered
         /// cannot change this shard, so the shard needs no rewalk.
         public let encounteredSkips: Set<String>
-        /// Whether the shard's own top directory was refused.
+        /// The refusal of the shard's own top directory, if that is what
+        /// happened.
         ///
         /// The distinction that matters when publishing: a refused subdirectory
         /// leaves a corpus that is merely incomplete, while a refused top
         /// directory leaves one that is empty for a reason no reader would
         /// guess. Publishing the latter over a populated shard replaces an index
         /// with nothing and reports success.
-        public let rootWasRefused: Bool
+        public let rootRefusal: Refusal?
+
+        public var rootWasRefused: Bool { rootRefusal != nil }
     }
 
     public static func buildShard(
@@ -204,7 +245,7 @@ public enum FileCorpusBuilder {
     ) -> ShardWalk {
         let rootPath = FilePaths.canonical(root)
         let top = shard.isEmpty ? rootPath : rootPath + "/" + shard
-        var refused: [String] = []
+        var refused: [Refusal] = []
         var skipped: Set<String> = []
         let corpus = build(
             root: root,
@@ -215,14 +256,14 @@ public enum FileCorpusBuilder {
             skipping: skipList,
             isCancelled: isCancelled,
             onProgress: onProgress,
-            onRefused: { refused.append($0) },
+            onRefused: { refused.append(Refusal(path: $0, code: $1)) },
             onSkipped: { skipped.insert($0) }
         )
         return ShardWalk(
             corpus: corpus,
             refusedDirectories: refused,
             encounteredSkips: skipped,
-            rootWasRefused: refused.contains(top)
+            rootRefusal: refused.first { $0.path == top }
         )
     }
 
@@ -239,10 +280,10 @@ public enum FileCorpusBuilder {
     }
 
     /// - Parameter onRefused: called with each directory the walk was not allowed
-    ///   to open. Defaulted away, because most callers only want the corpus —
-    ///   but a caller publishing the result needs to know the difference between
-    ///   a directory that is empty and one it was refused, which otherwise
-    ///   produce the same corpus and the same silence.
+    ///   to open, and the `errno` that said so. Defaulted away, because most
+    ///   callers only want the corpus — but a caller publishing the result needs
+    ///   to know the difference between a directory that is empty and one it was
+    ///   refused, which otherwise produce the same corpus and the same silence.
     public static func build(
         root: URL,
         subtree: String = "",
@@ -250,7 +291,7 @@ public enum FileCorpusBuilder {
         skipping skipList: Set<String> = defaultSkipList,
         isCancelled: () -> Bool = { false },
         onProgress: (Int) -> Void = { _ in },
-        onRefused: (String) -> Void = { _ in },
+        onRefused: (String, Int32) -> Void = { _, _ in },
         onSkipped: (String) -> Void = { _ in }
     ) -> FileCorpus {
         // Per thread, before anything is enumerated. Enumeration itself is a
@@ -312,7 +353,9 @@ public enum FileCorpusBuilder {
                 // not granted access to is indistinguishable from one with
                 // nothing in it.
                 let failure = errno
-                if failure == EPERM || failure == EACCES { onRefused(directory) }
+                if failure == EPERM || failure == EACCES {
+                    onRefused(directory, failure)
+                }
                 continue
             }
             defer { close(descriptor) }

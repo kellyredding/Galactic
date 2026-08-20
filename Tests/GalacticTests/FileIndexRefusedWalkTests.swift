@@ -31,7 +31,7 @@ final class FileIndexRefusedWalkTests: XCTestCase {
 
     override func tearDown() async throws {
         // Readable again, or the directory cannot be deleted.
-        for name in ["locked", "sub/locked"] {
+        for name in ["locked", "sub/locked", "outer/inner"] {
             let path = root.appendingPathComponent(name).path
             if FileManager.default.fileExists(atPath: path) {
                 chmod(path, 0o700)
@@ -144,6 +144,154 @@ final class FileIndexRefusedWalkTests: XCTestCase {
             after.dirty,
             "a refused shard left dirty jumps the sweep queue forever"
         )
+    }
+
+    // MARK: - The catalog remembers which it was
+
+    /// The distinction the whole column exists for: two shards holding zero
+    /// entries, one because it was refused and one because it is empty.
+    /// Everything else about the rows agrees, so nothing but this can tell a
+    /// reader that one of them is a permission problem and the other is not.
+    func testARefusedShardIsDistinguishableFromAnEmptyOne() async throws {
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("empty"),
+            withIntermediateDirectories: true
+        )
+        try touch("locked/secret.swift")
+        let locked = root.appendingPathComponent("locked")
+        XCTAssertEqual(chmod(locked.path, 0o000), 0, "fixture did not apply")
+
+        await indexRoot()
+
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        let rows = catalog.shards(forRoot: canonical)
+        let refused = try XCTUnwrap(rows.first { $0.name == "locked" })
+        let empty = try XCTUnwrap(rows.first { $0.name == "empty" })
+
+        XCTAssertEqual(
+            refused.entryCount, empty.entryCount,
+            "the fixture is only interesting while both hold nothing"
+        )
+        XCTAssertTrue(
+            refused.isRefused,
+            "a refused shard is still indistinguishable from an empty one"
+        )
+        XCTAssertFalse(
+            empty.isRefused, "an empty directory was recorded as refused"
+        )
+        XCTAssertEqual(
+            refused.refusalCode, EACCES,
+            "the errno was discarded, so nothing can say why it was refused"
+        )
+    }
+
+    /// Being allowed back in has to clear the record, or a directory reads as
+    /// refused forever after one bad walk.
+    func testASuccessfulWalkClearsAStoredRefusal() async throws {
+        try touch("locked/one.swift")
+        let locked = root.appendingPathComponent("locked")
+        XCTAssertEqual(chmod(locked.path, 0o000), 0)
+        await indexRoot()
+
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        XCTAssertTrue(
+            try XCTUnwrap(
+                catalog.shards(forRoot: canonical).first { $0.name == "locked" }
+            ).isRefused,
+            "fixture did not produce a refusal to clear"
+        )
+
+        XCTAssertEqual(chmod(locked.path, 0o700), 0)
+        await FileCorpusStore.shared.refresh(shard: "locked", canonicalRoot: canonical)
+
+        let after = try XCTUnwrap(
+            catalog.shards(forRoot: canonical).first { $0.name == "locked" }
+        )
+        XCTAssertFalse(
+            after.isRefused,
+            "a shard that walked cleanly still reports itself refused"
+        )
+        XCTAssertNil(after.refusalCode)
+        XCTAssertEqual(after.entryCount, 1, "the shard did not actually walk")
+    }
+
+    /// A shard refused before it ever published has no row to update, and the
+    /// directory nobody has granted access to is exactly the one a reader needs
+    /// listed.
+    func testAShardRefusedOnItsFirstWalkIsStillRecorded() async throws {
+        try touch("locked/secret.swift")
+        let locked = root.appendingPathComponent("locked")
+        XCTAssertEqual(chmod(locked.path, 0o000), 0)
+
+        await indexRoot()
+
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        let row = try XCTUnwrap(
+            catalog.shards(forRoot: canonical).first { $0.name == "locked" },
+            "a shard refused its first walk is missing from the index entirely"
+        )
+        XCTAssertTrue(row.isRefused)
+        XCTAssertEqual(
+            row.generation, 0, "a refused shard was given a generation to map"
+        )
+    }
+
+    /// A shard that opens but hides most of itself is not the same as one that
+    /// walked completely, and the count is the only thing that says so.
+    func testDirectoriesRefusedInsideAShardAreCounted() async throws {
+        try touch("outer/visible.swift")
+        try touch("outer/inner/hidden.swift")
+        let inner = root.appendingPathComponent("outer/inner")
+        XCTAssertEqual(chmod(inner.path, 0o000), 0)
+
+        await indexRoot()
+
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        let row = try XCTUnwrap(
+            catalog.shards(forRoot: canonical).first { $0.name == "outer" }
+        )
+        XCTAssertFalse(
+            row.isRefused, "the shard's own top directory opened fine"
+        )
+        XCTAssertEqual(
+            row.refusedDirectoryCount, 1,
+            "a directory refused inside the shard was counted and dropped"
+        )
+        XCTAssertTrue(
+            row.isIncomplete,
+            "a shard missing a subtree reported itself complete"
+        )
+
+        // Readable again, or tearDown cannot remove it.
+        XCTAssertEqual(chmod(inner.path, 0o700), 0)
+    }
+
+    // MARK: - A refusal nobody can act on is not indexed at all
+
+    /// `~/.Trash` is refused however often it is asked, so surfacing it as
+    /// something to fix is a standing complaint rather than a task. Skipping it
+    /// has to remove it outright — a skipped directory is never recorded as an
+    /// entry, so it cannot go on to become a shard of its own.
+    func testTheTrashIsSkippedRatherThanReportedAsRefused() throws {
+        for name in [".Trash", ".Trashes"] {
+            XCTAssertTrue(
+                FileCorpusBuilder.defaultSkipList.contains(name),
+                "\(name) would be walked, refused, and reported forever"
+            )
+        }
+    }
+
+    func testASkippedDirectoryNeverBecomesAShard() throws {
+        try touch(".Trash/deleted_thing.swift")
+        try touch("kept/real_thing.swift")
+
+        let names = FileCorpusBuilder.shardNames(of: root)
+
+        XCTAssertFalse(
+            names.contains(".Trash"),
+            "a skipped directory still produced a shard to walk and refuse"
+        )
+        XCTAssertTrue(names.contains("kept"), "the fixture did not take")
     }
 
     /// And what is already mapped stays mapped, so searches keep working.
