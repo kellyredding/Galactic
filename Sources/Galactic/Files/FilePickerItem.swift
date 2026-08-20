@@ -12,6 +12,14 @@ public struct FilePickerItem: Identifiable, Equatable {
         case recent
         /// Matched from the index against a query.
         case matched
+        /// A directory offered while a path is being typed.
+        ///
+        /// A fourth provenance with a fourth behaviour: browsed into rather
+        /// than opened, because nothing renders a folder. Kept as a case rather
+        /// than an `isDirectory` flag beside the others — a flag would admit
+        /// `.closed` and a directory at once, which means nothing, and would
+        /// make every consumer read two fields to learn what a row does.
+        case folder
     }
 
     public let url: URL

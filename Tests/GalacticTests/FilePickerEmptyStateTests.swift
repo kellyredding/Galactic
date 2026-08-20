@@ -47,12 +47,22 @@ final class FilePickerEmptyStateTests: XCTestCase {
         )
     }
 
-    /// The other mode needs its instructions while the path is half-typed.
-    func testARootChangeExplainsBothOfItsKeys() {
-        let text = message(isRootChange: true, query: "~/pro")
+    /// The other mode reports a path naming nowhere, and no longer explains its
+    /// keys.
+    ///
+    /// It used to, because the rows were emptied the moment a path was typed
+    /// and instructions were the only thing left to show. The rows are now the
+    /// matching folders, so this message is reached only when there are none —
+    /// and teaching Return and Tab here would describe a list the reader sees
+    /// every other time.
+    func testARootChangeReportsThatNothingIsThere() {
+        let text = message(isRootChange: true, query: "~/zzz")
 
-        XCTAssertTrue(text.contains("Return"))
-        XCTAssertTrue(text.contains("Tab"))
+        XCTAssertEqual(text, "No folder here by that name")
+        XCTAssertFalse(
+            text.contains("Tab"),
+            "the keys are no longer taught by the empty state"
+        )
     }
 
     /// The first thing anyone sees. Leads with the action, then says what the

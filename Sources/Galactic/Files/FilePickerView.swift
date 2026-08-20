@@ -262,6 +262,7 @@ private struct FilePickerRow: View {
         case .closed: return "arrow.uturn.backward"
         case .recent: return "clock"
         case .matched: return "doc"
+        case .folder: return "folder"
         }
     }
 

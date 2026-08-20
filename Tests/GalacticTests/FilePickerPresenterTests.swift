@@ -254,9 +254,14 @@ final class FilePickerPresenterTests: XCTestCase {
         XCTAssertEqual(changed, 0)
     }
 
-    /// A path being typed is not a filter, so the corpus is not consulted and
-    /// the reader is not shown a list that ignores what they are doing.
-    func testAPathQueryListsNothing() {
+    /// A path being typed is not a filter, so the corpus is not consulted — and
+    /// the file rows go **at once**, before the directory is read.
+    ///
+    /// Reading a directory takes long enough to see, and what is showing while
+    /// it happens belongs to the previous query: under a half-typed path that
+    /// is a list of files, which is precisely what this mode exists not to
+    /// show. Clearing after the read would flash the wrong answer.
+    func testAPathQueryClearsTheFileRowsBeforeReadingAnything() {
         let p = FilePickerPresenter()
         p.rootProvider = { [dir] in dir }
         var stack = ClosedTabStack()
@@ -267,7 +272,121 @@ final class FilePickerPresenterTests: XCTestCase {
 
         p.query = "~/"
 
-        XCTAssertTrue(p.rows.isEmpty)
+        XCTAssertTrue(
+            p.rows.isEmpty, "the file rows are gone synchronously"
+        )
+    }
+
+    /// And then the folders arrive, which is the mode's whole point: the reader
+    /// sees what they are choosing between instead of a hint describing it.
+    func testAPathQueryThenListsTheMatchingFolders() async throws {
+        for name in ["alpha", "beta", "gamma"] {
+            try FileManager.default.createDirectory(
+                at: dir.appendingPathComponent(name),
+                withIntermediateDirectories: true
+            )
+        }
+        try Data("x".utf8).write(
+            to: dir.appendingPathComponent("notafolder.rb")
+        )
+
+        let p = FilePickerPresenter()
+        p.rootProvider = { [dir] in dir }
+        p.present()
+
+        p.query = dir.path + "/a"
+        try await settle(p)
+
+        XCTAssertEqual(p.rows.map(\.relativePath), ["alpha"])
+        XCTAssertEqual(p.rows.first?.source, .folder)
+    }
+
+    /// A file is not somewhere anyone can browse to, so it is never offered.
+    func testTheFolderListNeverOffersAFile() async throws {
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("adir"),
+            withIntermediateDirectories: true
+        )
+        try Data("x".utf8).write(to: dir.appendingPathComponent("afile.rb"))
+
+        let p = FilePickerPresenter()
+        p.rootProvider = { [dir] in dir }
+        p.present()
+
+        p.query = dir.path + "/"
+        try await settle(p)
+
+        XCTAssertEqual(p.rows.map(\.relativePath), ["adir"])
+    }
+
+    /// Typing inside one directory reads it once, not once per keystroke — the
+    /// bound that keeps a `readdir` and a `resourceValues` per entry off the
+    /// path every keystroke travels.
+    func testTypingFurtherInsideOneDirectoryReadsItOnce() async throws {
+        for name in ["alpha", "album"] {
+            try FileManager.default.createDirectory(
+                at: dir.appendingPathComponent(name),
+                withIntermediateDirectories: true
+            )
+        }
+
+        let p = FilePickerPresenter()
+        p.rootProvider = { [dir] in dir }
+        p.present()
+
+        p.query = dir.path + "/al"
+        try await settle(p)
+        XCTAssertEqual(p.rows.count, 2, "precondition: both matched")
+
+        // Narrowing within the same parent must answer from the held children
+        // rather than the disk, so it lands without waiting.
+        p.query = dir.path + "/alp"
+
+        XCTAssertEqual(
+            p.rows.map(\.relativePath), ["alpha"],
+            "narrowing answered synchronously, so nothing was read again"
+        )
+    }
+
+    /// A symlink pointing at a directory is somewhere a reader can browse to,
+    /// and `isDirectoryKey` reports it is not — which is why `/tmp` never
+    /// completed and a symlinked project folder was invisible.
+    ///
+    /// A symlink pointing at a *file* is still not offered, which is what stops
+    /// the repair from becoming "anything that resolves".
+    func testASymlinkedDirectoryIsOfferedAndASymlinkedFileIsNot() async throws {
+        let realDir = dir.appendingPathComponent("realdir")
+        try FileManager.default.createDirectory(
+            at: realDir, withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: dir.appendingPathComponent("linkdir"),
+            withDestinationURL: realDir
+        )
+
+        let realFile = dir.appendingPathComponent("real.rb")
+        try Data("x".utf8).write(to: realFile)
+        try FileManager.default.createSymbolicLink(
+            at: dir.appendingPathComponent("linkfile.rb"),
+            withDestinationURL: realFile
+        )
+
+        let p = FilePickerPresenter()
+        p.rootProvider = { [dir] in dir }
+        p.present()
+
+        p.query = dir.path + "/"
+        try await settle(p)
+
+        XCTAssertEqual(p.rows.map(\.relativePath), ["linkdir", "realdir"])
+    }
+
+    /// Long enough for one directory read to land.
+    private func settle(_ p: FilePickerPresenter) async throws {
+        for _ in 0..<100 {
+            if !p.rows.isEmpty { return }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
     }
 
     // MARK: - The focus note

@@ -32,9 +32,13 @@ enum FilePickerEmptyState {
         // for something they can do a moment later anyway.
         if isIndexing { return "Reading the folder…" }
 
-        // The other mode, and it needs its instructions while the path is
-        // half-typed rather than after.
-        if isRootChange { return "Return to browse here, Tab to complete" }
+        // The other mode. It used to carry instructions — "Return to browse
+        // here, Tab to complete" — because there was nothing else to show: the
+        // rows were emptied the moment a path was typed. They are now the
+        // matching folders, so this is reached only when a path names nowhere,
+        // and describing the mechanism here would explain a list the reader can
+        // see everywhere else.
+        if isRootChange { return "No folder here by that name" }
 
         if query.isEmpty { return emptyQuery }
 
