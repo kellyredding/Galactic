@@ -84,11 +84,25 @@ public struct FileTabStripView: View {
                         // strip at rest changes.
                         .background(liftedBackdrop(for: tab.id))
                         // Carried by the tab itself rather than by a dragged
-                        // copy of it. The offset is geometry, never an
-                        // animation: the strip's labels are measured by
-                        // `ViewThatFits`, and a curve on the transaction is what
-                        // once left rows sliding forever.
+                        // copy of it.
                         .offset(x: offset(for: tab.id))
+                        // The curve goes on this property, never on the
+                        // transaction. Attaching it here is what the refresh
+                        // spinners already do and why they repeat forever
+                        // without leaking: a transaction curve is inherited by
+                        // every animatable change in the same pass, including
+                        // the `ViewThatFits` re-measure that once left rows
+                        // sliding back and forth on a loop with nothing to
+                        // return them.
+                        //
+                        // Only the tabs being displaced animate. The one under
+                        // the cursor is tracking a pointer and must not lag it —
+                        // easing that would put the tab behind the hand moving
+                        // it, which reads as the drag being dropped.
+                        .animation(
+                            drag?.id == tab.id ? nil : Metrics.slide,
+                            value: offset(for: tab.id)
+                        )
                         // Above its neighbours while it is the one moving, so
                         // passing over them does not clip it.
                         .zIndex(drag?.id == tab.id ? 1 : 0)
@@ -129,12 +143,33 @@ public struct FileTabStripView: View {
 
     // MARK: - Dragging a tab into place
 
+    /// A drag in progress, and the order it is proposing.
+    ///
+    /// **The proposed order is not the model's.** The model is left alone until
+    /// the drag ends, and that is what makes the exchange animatable at all: a
+    /// tab displaced by a reorder moves because the row *re-lays-out*, and the
+    /// only way to put a curve on a layout change is to put it on the
+    /// transaction — which in a view whose labels re-measure is the mechanism
+    /// that once left rows sliding forever. Holding the layout still and drawing
+    /// every tab at an offset turns the same movement into a property change,
+    /// which a curve can be attached to safely.
+    ///
+    /// It also stops a reorder per crossing: the host persists on every move, so
+    /// dragging across six tabs used to be six writes.
     private struct Drag {
         let id: FileTab.ID
         /// Where inside the tab it was picked up, so it does not snap its
         /// leading edge to the cursor.
         let grabX: CGFloat
         var pointer: CGPoint
+        /// The row this is arranging within, as the model has it.
+        var row: Int
+        /// The row's ids in the order the drag is asking for.
+        var order: [FileTab.ID]
+
+        func index(of id: FileTab.ID) -> Int? {
+            order.firstIndex(of: id)
+        }
     }
 
     private func dragGesture(for id: FileTab.ID) -> some Gesture {
@@ -144,6 +179,7 @@ public struct FileTabStripView: View {
             .onChanged { value in
                 guard onMove != nil else { return }
                 if drag?.id != id {
+                    guard let position = position(of: id) else { return }
                     // Picking a tab up is also choosing it. Rearranging the
                     // strip while looking at a different file is a thing nobody
                     // asked for, and every other way of touching a tab selects
@@ -152,29 +188,46 @@ public struct FileTabStripView: View {
                     drag = Drag(
                         id: id,
                         grabX: value.startLocation.x - layoutX(of: id),
-                        pointer: value.location
+                        pointer: value.location,
+                        row: position.row,
+                        order: set.tabs.rows[position.row].map(\.id)
                     )
                 } else {
                     drag?.pointer = value.location
                 }
                 settle()
             }
-            .onEnded { _ in drag = nil }
+            .onEnded { _ in commitDrag() }
     }
 
-    /// How far the dragged tab is drawn from where the layout put it.
+    /// Write the proposed order down, once.
+    private func commitDrag() {
+        defer { drag = nil }
+        guard let drag, let onMove, let index = drag.index(of: drag.id),
+            let current = position(of: drag.id),
+            current.row != drag.row || current.column != index
+        else { return }
+        onMove(drag.id, drag.row, index)
+    }
+
+    /// How far a tab is drawn from where the layout put it.
     ///
-    /// Against a position computed from the current order rather than one read
-    /// back from the layout. A reported frame arrives a pass late, so during the
-    /// very update that reorders the strip the offset would be measured against
-    /// where the tab used to be — which is a jump of one tab's width, every
-    /// time, and is what made this bounce.
+    /// The dragged one follows the pointer. Every other tab in the same row sits
+    /// at the difference between the slot the drag is proposing for it and the
+    /// slot the model still has it in — which is zero until something is
+    /// displaced, and one tab's width plus a gap once something is.
     private func offset(for id: FileTab.ID) -> CGFloat {
-        guard let drag, drag.id == id else { return 0 }
-        return leadingEdge(of: drag) - layoutX(of: id)
+        guard let drag else { return 0 }
+        if drag.id == id { return leadingEdge(of: drag) - layoutX(of: id) }
+        guard let proposed = drag.index(of: id),
+            let current = position(of: id), current.row == drag.row
+        else { return 0 }
+        return proposedGeometry(of: drag).minX(at: proposed)
+            - geometry(ofRow: current.row).minX(at: current.column)
     }
 
-    /// Move the dragged tab as far as the pointer has earned, one step at a time.
+    /// Move the dragged tab through the proposed order as far as the pointer has
+    /// earned, one place at a time.
     ///
     /// **The test is an edge against a neighbour's midline, not a centre against
     /// it.** Dragging right, the tab's trailing edge has to pass the midline of
@@ -185,40 +238,57 @@ public struct FileTabStripView: View {
     /// no such gap, and the exchange it produces oscillates every frame the
     /// pointer holds still near a boundary.
     ///
-    /// Looped, because one frame of a fast drag can earn several places.
+    /// Looped, because one frame of a fast drag can earn several places, and the
+    /// geometry is rebuilt from the proposed order each time round — held across
+    /// the loop it describes the row as it was before the step, and the reversed
+    /// condition then measures against the dragged tab's own width sitting in the
+    /// slot it just left. A wide tab passing a narrow one moved, immediately read
+    /// itself as owed a move back, and stayed put.
     private func settle() {
-        guard let drag, let onMove else { return }
+        guard let drag, onMove != nil else { return }
         let rows = set.tabs.rows
         guard !rows.isEmpty else { return }
 
+        // Changing rows is decided by the pointer alone — the rows are one tab
+        // tall, so there is no midline to earn vertically. Committed rather than
+        // proposed, because a row change moves the tab out of the arrangement
+        // the proposal describes.
         let row = nearestRow(to: drag.pointer.y, of: rows.count)
-        if let current = position(of: drag.id), current.row != row {
-            // Changing rows is decided by the pointer alone. There is no
-            // midline to earn vertically — the rows are one tab tall, so being
-            // over one is the whole of the intent.
+        if row != drag.row {
+            commitDrag()
+            guard let onMove else { return }
             onMove(drag.id, row, slot(for: drag.pointer.x, in: row))
+            if let position = position(of: drag.id) {
+                self.drag = Drag(
+                    id: drag.id, grabX: drag.grabX, pointer: drag.pointer,
+                    row: position.row,
+                    order: set.tabs.rows[position.row].map(\.id)
+                )
+            }
             return
         }
 
-        // Both the position and the widths are re-read after every step, and
-        // that is not caution. Held across the loop they describe the row as it
-        // was *before* the move, and the reversed condition is then evaluated
-        // against the dragged tab's own width sitting in the slot it just left:
-        // a wide tab passing a narrow one moved right, immediately read itself
-        // as owed a move back, and stayed put. It failed only in that direction
-        // and only for that width order, which is what made it look like
-        // left-to-right was unimplemented.
         let edge = leadingEdge(of: drag)
-        for _ in 0..<rows[row].count {
-            guard let current = position(of: drag.id), current.row == row
+        for _ in 0..<drag.order.count {
+            guard let current = self.drag?.index(of: drag.id),
+                let proposal = self.drag
             else { return }
             guard
-                let step = geometry(ofRow: row).step(
-                    draggedAt: current.column, leadingEdge: edge
+                let step = proposedGeometry(of: proposal).step(
+                    draggedAt: current, leadingEdge: edge
                 )
             else { return }
-            onMove(drag.id, row, step)
+            self.drag?.order.remove(at: current)
+            self.drag?.order.insert(drag.id, at: step)
         }
+    }
+
+    private func proposedGeometry(of drag: Drag) -> FileTabRowGeometry {
+        FileTabRowGeometry(
+            widths: drag.order.map(width(of:)),
+            spacing: Metrics.tabSpacing,
+            leading: Metrics.stripPadding
+        )
     }
 
     /// Where the dragged tab's leading edge is being asked to sit.
@@ -334,6 +404,10 @@ public struct FileTabStripView: View {
         /// before the first layout pass. Wrong by a little for one frame beats
         /// zero, which would put every midline in the same place.
         static let assumedTabWidth: CGFloat = 90
+        /// Short, because it describes a tab getting out of the way rather than
+        /// anything worth watching. Long enough to read as movement instead of a
+        /// jump cut.
+        static let slide: Animation = .easeOut(duration: 0.14)
     }
 }
 
