@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import Galactic
 
@@ -468,5 +469,109 @@ final class GalacticPublicSurfaceTests: XCTestCase {
                 onReload: { _ in }
             )
         )
+    }
+
+    // MARK: - The index, as something an application can show
+
+    /// The index used to be reached one way only — call the picker, it indexes
+    /// for you — so none of its bookkeeping needed to face a host. A settings
+    /// surface reads it directly, which makes these four types part of the
+    /// contract rather than an implementation detail that happens to be
+    /// `public`. Asserted here so narrowing one fails a test rather than an
+    /// application.
+    @MainActor
+    func testTheIndexIsInspectableWithoutWalkingIt() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("galactic-surface-index-\(UUID().uuidString)")
+        setenv("GALACTIC_HOME", home.path, 1)
+        defer {
+            unsetenv("GALACTIC_HOME")
+            try? FileManager.default.removeItem(at: home)
+        }
+        XCTAssertTrue(FileIndexPaths.prepare())
+
+        // Where it lives, answerable without opening it.
+        XCTAssertEqual(FileIndexPaths.root.path, home.path)
+        XCTAssertEqual(
+            FileIndexPaths.catalogFile.path,
+            home.appendingPathComponent("index")
+                .appendingPathComponent("catalog.db").path
+        )
+
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        catalog.adopt(root: "/tmp/surface-root")
+        XCTAssertEqual(catalog.roots(), ["/tmp/surface-root"])
+
+        catalog.record(
+            root: "/tmp/surface-root", name: "src", generation: 1,
+            entryCount: 12, eventsUUID: nil, eventsID: nil,
+            refusedDirectoryCount: 1
+        )
+        catalog.noteWalkRefused(
+            root: "/tmp/surface-root", name: "sealed", code: EACCES
+        )
+
+        // Everything a row needs in order to say why it holds what it holds.
+        let rows = catalog.shards(forRoot: "/tmp/surface-root")
+        let src = try XCTUnwrap(rows.first { $0.name == "src" })
+        XCTAssertEqual(src.entryCount, 12)
+        XCTAssertEqual(src.refusedDirectoryCount, 1)
+        XCTAssertFalse(src.isRefused)
+        XCTAssertTrue(src.isIncomplete)
+
+        let sealed = try XCTUnwrap(rows.first { $0.name == "sealed" })
+        XCTAssertTrue(sealed.isRefused)
+        XCTAssertEqual(sealed.refusalCode, EACCES)
+
+        // And the translation into something sayable.
+        let report = FileIndexStatusReport.report(
+            for: rows, root: "/tmp/surface-root"
+        )
+        XCTAssertEqual(report.needingAttention.map(\.name), ["sealed", "src"])
+
+        // The skip list, composed from the two halves a host can reach.
+        XCTAssertEqual(
+            FileIndexSettingsModel.effectiveSkipList(
+                forRoot: "/tmp/surface-root", catalog: catalog
+            ),
+            FileCorpusBuilder.defaultSkipList,
+            "an untouched root's list is the derived one, with no delta applied"
+        )
+        // One entry, and it reaches every tree rather than the one it was added
+        // from — which is the whole reason the delta stopped being per-root.
+        catalog.setSkipListEntry(name: "vendor", skipped: true)
+        for root in ["/tmp/surface-root", "/tmp/somewhere-else"] {
+            XCTAssertTrue(
+                FileIndexSettingsModel.effectiveSkipList(
+                    forRoot: root, catalog: catalog
+                ).contains("vendor"),
+                "a skipped name did not reach \(root)"
+            )
+        }
+        XCTAssertTrue(
+            FileIndexSettingsModel.skipList(catalog: catalog)
+                .contains("vendor")
+        )
+
+        // The sweep's knobs, which a host may want to describe.
+        XCTAssertGreaterThan(FileIndexRefreshSweep.targetAge, 0)
+        XCTAssertGreaterThan(FileIndexRefreshSweep.tickInterval, 0)
+    }
+
+    @MainActor
+    func testTheIndexSettingsSurfaceIsReachedWithoutAHostProtocol() {
+        // The whole point of this one: unlike every other shared surface here,
+        // it is constructed from nothing. The index belongs to no application,
+        // so there is nothing for one to answer.
+        XCTAssertNotNil(FileIndexSettingsView())
+
+        let model = FileIndexSettingsModel()
+        XCTAssertFalse(model.hasLoaded)
+        XCTAssertTrue(model.roots.isEmpty)
+        XCTAssertEqual(model.indexLocation, FileIndexPaths.root)
+
+        // Chrome a host can build its own rows from.
+        XCTAssertNotNil(SettingsCard(title: "Index") { EmptyView() })
+        XCTAssertNotNil(SettingsRow(label: "Root") { EmptyView() })
     }
 }
