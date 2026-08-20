@@ -441,8 +441,17 @@ public final class FileCorpusStore {
         // placeholder for one that is owed a walk or was refused its first. There
         // is no file to map, and attempting one logs an unreadable-shard line on
         // every launch for a directory that is behaving exactly as recorded.
+        //
+        // **Dirty is not a reason to skip one.** A dirty shard with a generation
+        // has a published file; the flag says it is owed a walk, not that what it
+        // holds is unusable. Skipping it made a whole subtree unanswerable at
+        // load, and the consequence was not a stale result — it was a second
+        // root: a picker asking for a subtree the covering root could no longer
+        // serve adopted it and walked four hundred thousand entries the index
+        // already held. Slightly old beats absent, and the sweep takes dirty
+        // shards first anyway.
         for shard in catalog.shards(forRoot: canonical)
-        where !shard.dirty && shard.generation > 0 {
+        where shard.generation > 0 {
             let url = FileCorpusFile.url(
                 shardDirectory: directory,
                 shard: FileIndexPaths.rootIdentifier(shard.name),
@@ -1328,8 +1337,25 @@ public final class FileCorpusStore {
         guard
             let relative = FilePaths.relativeEntry(of: path, underCanonical: root)
         else { return }
-        let shard = relative.split(separator: "/").first.map(String.init) ?? ""
+        let components = relative.split(separator: "/")
+        mark(components.first.map(String.init) ?? "", root: root, reason: reason)
 
+        // A path with one component names something sitting directly in the
+        // root, and that may be a file rather than a directory — in which case
+        // it belongs to the root's own shard and not to one named after it. The
+        // two are indistinguishable without a `stat`, which this path cannot
+        // afford: it runs per event, on the main actor.
+        //
+        // So both are marked. Marking the named shard is free when no such shard
+        // exists, and marking the root when the entry was in fact a directory
+        // costs one rewalk of the root's own entries — seventy-odd of them,
+        // because everything below is somebody else's shard. Cheaper than the
+        // alternative, which was a mark that landed nowhere at all: a file
+        // created directly in the root never invalidated anything.
+        if components.count == 1 { mark("", root: root, reason: reason) }
+    }
+
+    private func mark(_ shard: String, root: String, reason: String) {
         // Already known. The condition is cheap to re-derive and the response
         // is not: a database write and a log line per repetition, on the main
         // thread, for a fact that has not changed.
@@ -1412,6 +1438,59 @@ public final class FileCorpusStore {
         for path in rescan { markSubtreeDirty(path, canonicalRoot: root) }
         if !removed.isEmpty { noteRemoved(removed, canonicalRoot: root) }
         if !created.isEmpty { noteCreated(created, canonicalRoot: root) }
+    }
+
+    /// Apply a completed replay, then record how far the rest of the root got.
+    ///
+    /// One call so the ordering is not a caller's problem: the replay has to be
+    /// applied first, because applying it is what marks the shards it mentioned,
+    /// and marked shards are exactly the ones whose position must *not* move.
+    public func applyReplay(
+        created: [Appearance], removed: [String], rescan: [String],
+        canonicalRoot root: String, horizon: UInt64
+    ) {
+        apply(
+            created: created, removed: removed, rescan: rescan,
+            canonicalRoot: root
+        )
+        advanceUntouchedShards(canonicalRoot: root, to: horizon)
+    }
+
+    /// Carry every shard the replay did not mention up to `horizon`.
+    ///
+    /// Dirty and walking shards are skipped, and that skip *is* the definition
+    /// of "untouched" — applying the replay marked everything it mentioned, so
+    /// what is left is what nothing happened to. A shard another application
+    /// marked is skipped for the same reason, which is why the flag is read from
+    /// the catalog row rather than only from memory.
+    ///
+    /// Without this a shard taken off the refresh rotation keeps the position it
+    /// had when it was last walked, forever, and the root replays from it on
+    /// every launch.
+    func advanceUntouchedShards(canonicalRoot root: String, to horizon: UInt64) {
+        guard let catalog, let state = roots[root] else { return }
+        guard let uuid = FileIndexWatcher.volumeUUID(for: root) else { return }
+        var advanced = 0
+        for shard in catalog.shards(forRoot: root) {
+            if shard.dirty { continue }
+            if state.dirtyShards.contains(shard.name) { continue }
+            if state.walkingShards.contains(shard.name) { continue }
+            if let recorded = shard.eventsID, recorded >= horizon { continue }
+            catalog.advanceEventPosition(
+                root: root, name: shard.name, uuid: uuid, id: horizon
+            )
+            advanced += 1
+        }
+        guard advanced > 0 else { return }
+        log.record(
+            "watch",
+            [
+                ("event", "positions-advanced"),
+                ("root", root),
+                ("shards", "\(advanced)"),
+                ("to", "\(horizon)"),
+            ]
+        )
     }
 
     // MARK: - Watching

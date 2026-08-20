@@ -466,6 +466,44 @@ public final class FileIndexCatalog: @unchecked Sendable {
         }
     }
 
+    /// Move a shard's event position forward without walking it.
+    ///
+    /// **A shard nothing happened to is current.** Once a replay has been read
+    /// up to some event, every shard it did not mention is as fresh as that
+    /// event, and saying so costs nothing — no walk, no generation, no consent
+    /// dialog for a directory macOS asks about.
+    ///
+    /// This exists because a position only ever advanced on publish, and a
+    /// publish only happens on a walk. A shard deliberately taken off the
+    /// refresh rotation therefore froze its position forever, and since a
+    /// root replays from the *oldest* position among its shards, five frozen
+    /// ones dragged every launch further back than the last — measured at
+    /// 550,799 replayed paths from a day earlier.
+    ///
+    /// Monotonic in SQL rather than in the caller: two applications may be doing
+    /// this at once, and the one with the older idea of now must not win.
+    public func advanceEventPosition(
+        root: String, name: String, uuid: String, id: UInt64
+    ) {
+        queue.sync {
+            let sql = """
+                UPDATE shards SET events_uuid = ?, events_id = ?
+                WHERE root_path = ? AND name = ?
+                    AND (events_id IS NULL OR events_id < ?)
+                """
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK
+            else { return }
+            defer { sqlite3_finalize(statement) }
+            bindText(statement, 1, uuid)
+            sqlite3_bind_int64(statement, 2, Int64(bitPattern: id))
+            bindText(statement, 3, root)
+            bindText(statement, 4, name)
+            sqlite3_bind_int64(statement, 5, Int64(bitPattern: id))
+            step(statement, "advanceEventPosition")
+        }
+    }
+
     public func shards(forRoot root: String) -> [Shard] {
         queue.sync {
             var found: [Shard] = []

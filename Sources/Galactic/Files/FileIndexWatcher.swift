@@ -43,12 +43,26 @@ public final class FileIndexWatcher: @unchecked Sendable {
     /// application was away.
     public static let replayPathLimit = 500
 
-    /// How long to wait for the end of a replay that never announces itself.
+    /// How long a replay has to go quiet before it counts as finished.
     ///
-    /// `HistoryDone` is only delivered when history was actually requested, and
-    /// this exists so that a stream which never sends it cannot leave events
-    /// buffered for the life of the process.
-    public static let replayGrace: TimeInterval = 10
+    /// Measured from the last event rather than from the start of the stream,
+    /// and that is the fix for a deadline that fired at the moment delivery
+    /// began: the history took ten seconds to arrive and then landed in seventy
+    /// milliseconds, so a ten-second deadline from the start expired in the
+    /// middle of it and nothing was ever concluded.
+    ///
+    /// A replay that has said nothing for this long is over whether or not it
+    /// announced itself, and anything still to come arrives live — where it
+    /// marks its own shard, which is what makes concluding early safe.
+    public static let replayIdle: TimeInterval = 2
+
+    /// The longest a replay may stay open.
+    ///
+    /// A machine churning without pause is indistinguishable from a replay still
+    /// arriving, and waiting for quiet that never comes is how the position
+    /// stayed frozen in the first place. Whatever is still coming marks its own
+    /// shard, so there is nothing to lose by stopping here.
+    public static let replayCeiling: TimeInterval = 30
 
     private var stream: FSEventStreamRef?
     private let queue = DispatchQueue(
@@ -63,6 +77,15 @@ public final class FileIndexWatcher: @unchecked Sendable {
     private var replaying = false
     private var replayTouched: [String] = []
     private var replayRescan: [String] = []
+    /// Where the event store stood when this stream was created.
+    ///
+    /// Read before any event arrives, so it is a conservative bound on what the
+    /// replay can contain: anything later than this is delivered live instead.
+    /// That is what makes it safe to declare untouched shards current as of it.
+    private var replayHorizon: UInt64 = 0
+    /// Invalidates a pending idle check when another event arrives, since a
+    /// dispatch item cannot be cancelled once scheduled.
+    private var replayIdleToken = 0
 
     public init(canonicalRoot: String) {
         self.canonicalRoot = canonicalRoot
@@ -151,15 +174,18 @@ public final class FileIndexWatcher: @unchecked Sendable {
         // a hop to the main actor and its share of an `lstat` storm, landing in
         // the same window as everything else a launch has to do.
         let replaying = start != FSEventStreamEventId(kFSEventStreamEventIdSinceNow)
+        let horizon = Self.currentEventID()
         queue.async { [self] in
             // Cleared as well as set: a restart must not deliver a previous
             // stream's replay into this one.
             replayTouched = []
             replayRescan = []
+            replayHorizon = horizon
             self.replaying = replaying
             guard replaying else { return }
-            queue.asyncAfter(deadline: .now() + Self.replayGrace) { [self] in
-                flushReplay(reason: "grace")
+            scheduleReplayIdle()
+            queue.asyncAfter(deadline: .now() + Self.replayCeiling) { [self] in
+                flushReplay(reason: "ceiling")
             }
         }
 
@@ -221,7 +247,18 @@ public final class FileIndexWatcher: @unchecked Sendable {
         if replaying {
             replayTouched.append(contentsOf: touched)
             replayRescan.append(contentsOf: rescan)
-            if historyDone { flushReplay(reason: "history-done") }
+            scheduleReplayIdle()
+            if historyDone {
+                flushReplay(reason: "history-done")
+            } else if replayTouched.count > Self.replayPathLimit {
+                // Drained as it fills rather than held to the end. A replay
+                // large enough to pass the limit has already earned the cheap
+                // answer, and holding the rest of it in memory to reach the same
+                // conclusion later only risks the grace timer arriving first and
+                // sending the remainder through the live path one event at a
+                // time — which is what happened on a 550,799-path replay.
+                drainReplay(reason: "batch")
+            }
             return
         }
 
@@ -257,40 +294,96 @@ public final class FileIndexWatcher: @unchecked Sendable {
     /// the same reason. Learning what changed costs a cold `lstat` per path,
     /// which past a certain volume is more expensive than rewalking the few
     /// subtrees involved — and a rewalk is the more accurate answer anyway.
+    /// Wait for the replay to go quiet, and treat that as the end of it.
+    private func scheduleReplayIdle() {
+        replayIdleToken += 1
+        let token = replayIdleToken
+        queue.asyncAfter(deadline: .now() + Self.replayIdle) { [self] in
+            guard replaying, token == replayIdleToken else { return }
+            flushReplay(reason: "idle")
+        }
+    }
+
     private func flushReplay(reason: String) {
         guard replaying else { return }
         replaying = false
+        // Every way of concluding carries the untouched shards forward, and the
+        // earlier reluctance about that was wrong twice over. It made the fix
+        // conditional on a signal that never arrived, so nothing was ever
+        // carried — and the caution was unfounded anyway: the horizon was read
+        // before any event was delivered, and a change still in flight marks its
+        // own shard when it lands, which is exactly what excludes that shard from
+        // being carried.
+        drainReplay(reason: reason, advancing: true)
+    }
+
+    /// Hand over what has accumulated, and empty the buffer.
+    private func drainReplay(reason: String, advancing: Bool = false) {
         let touched = replayTouched
         let rescan = replayRescan
         replayTouched = []
         replayRescan = []
+        guard !touched.isEmpty || !rescan.isEmpty || advancing else { return }
 
-        if touched.count > Self.replayPathLimit {
-            let subtrees = Self.subtrees(of: touched, underCanonical: canonicalRoot)
-            log.record(
-                "watch",
-                [
-                    ("event", "replay-done"),
-                    ("reason", reason),
-                    ("paths", "\(touched.count)"),
-                    ("action", "rescan-subtrees"),
-                    ("subtrees", "\(subtrees.count)"),
-                ]
-            )
-            deliver(touched: [], rescan: Array(subtrees) + rescan)
-            return
-        }
-
+        let cheap = touched.count > Self.replayPathLimit
+        let subtrees =
+            cheap
+            ? Self.subtrees(of: touched, underCanonical: canonicalRoot) : []
         log.record(
             "watch",
             [
-                ("event", "replay-done"),
+                ("event", "replay-drained"),
                 ("reason", reason),
                 ("paths", "\(touched.count)"),
-                ("action", "classify"),
+                ("action", cheap ? "rescan-subtrees" : "classify"),
+                ("subtrees", "\(subtrees.count)"),
+                // A sample, because a count alone cannot say whether these are
+                // real shards. Every path should reduce to one of the root's
+                // top-level entries, and a reduction producing anything else is
+                // marking a shard that does not exist.
+                ("sample", subtrees.sorted().prefix(5).joined(separator: ",")),
+                ("advancing", "\(advancing)"),
             ]
         )
-        deliver(touched: touched, rescan: rescan)
+
+        let root = canonicalRoot
+        let horizon = replayHorizon
+        if cheap {
+            let all = Array(subtrees) + rescan
+            Task { @MainActor in
+                Self.hand(
+                    created: [], removed: [], rescan: all, root: root,
+                    horizon: advancing ? horizon : nil
+                )
+            }
+            return
+        }
+        let classified = FileCorpusStore.classify(touched)
+        Task { @MainActor in
+            Self.hand(
+                created: classified.created, removed: classified.removed,
+                rescan: rescan, root: root,
+                horizon: advancing ? horizon : nil
+            )
+        }
+    }
+
+    @MainActor
+    private static func hand(
+        created: [FileCorpusStore.Appearance], removed: [String],
+        rescan: [String], root: String, horizon: UInt64?
+    ) {
+        guard let horizon else {
+            FileCorpusStore.shared.apply(
+                created: created, removed: removed, rescan: rescan,
+                canonicalRoot: root
+            )
+            return
+        }
+        FileCorpusStore.shared.applyReplay(
+            created: created, removed: removed, rescan: rescan,
+            canonicalRoot: root, horizon: horizon
+        )
     }
 
     /// The distinct top-level subtrees a set of paths falls in.

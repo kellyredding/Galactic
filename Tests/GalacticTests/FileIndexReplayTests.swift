@@ -105,10 +105,24 @@ final class FileIndexReplayTests: XCTestCase {
         )
     }
 
-    /// A replay that never announces its end must not buffer forever, so the
-    /// grace timer has to be a real duration.
-    func testTheGraceIsFiniteAndNotInstant() {
-        XCTAssertGreaterThan(FileIndexWatcher.replayGrace, 0)
-        XCTAssertLessThanOrEqual(FileIndexWatcher.replayGrace, 60)
+    /// A replay that never announces its end must still conclude, and the idle
+    /// window is what concludes it. Measured from the last event rather than the
+    /// start of the stream: history took ten seconds to begin arriving and then
+    /// landed in seventy milliseconds, so a deadline from the start expired in
+    /// the middle of delivery and nothing was ever concluded.
+    func testTheIdleWindowIsShortEnoughToBeQuietAndLongEnoughToBeReal() {
+        XCTAssertGreaterThan(FileIndexWatcher.replayIdle, 0.5)
+        XCTAssertLessThanOrEqual(FileIndexWatcher.replayIdle, 5)
+    }
+
+    /// And a machine churning without pause must not hold the replay open
+    /// forever, since waiting for quiet that never comes is how the position
+    /// stayed frozen to begin with.
+    func testTheCeilingBoundsAReplayThatNeverGoesQuiet() {
+        XCTAssertGreaterThan(
+            FileIndexWatcher.replayCeiling, FileIndexWatcher.replayIdle,
+            "a ceiling below the idle window would end every replay early"
+        )
+        XCTAssertLessThanOrEqual(FileIndexWatcher.replayCeiling, 120)
     }
 }
