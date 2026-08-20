@@ -28,7 +28,23 @@ public enum FilePickerRootInput {
         return trimmed
     }
 
-    /// Extend a partly-typed path to the longest prefix every candidate shares.
+    /// The directory whose children a partly-typed path is choosing between.
+    ///
+    /// `~/pro` is choosing among the children of `~`; `~/projects/` is choosing
+    /// among the children of `~/projects`. The trailing separator is the whole
+    /// distinction, and it cannot be left to `deletingLastPathComponent`, which
+    /// strips a trailing slash *before* removing a component and so answers
+    /// `~` for both.
+    public static func candidateParent(of query: String) -> String? {
+        guard let typed = expandedPath(query) else { return nil }
+        guard typed.hasSuffix("/") else {
+            return (typed as NSString).deletingLastPathComponent
+        }
+        return typed == "/" ? "/" : String(typed.dropLast())
+    }
+
+    /// Extend a partly-typed path to the longest prefix every candidate shares,
+    /// and close a finished segment with the separator.
     ///
     /// The shell's Tab, and the reason it is worth having rather than making
     /// someone type a path in full: one press either finishes the segment or
@@ -50,19 +66,31 @@ public enum FilePickerRootInput {
         let matching = directories.filter { $0.hasPrefix(typed) }
         guard !matching.isEmpty else { return nil }
 
-        let common = longestCommonPrefix(matching)
-        guard common.count > typed.count else { return nil }
+        var extended = longestCommonPrefix(matching)
+
+        // The separator is what says "keep going", and having to type it at
+        // every level is the friction this exists to remove. Withheld unless
+        // the segment is genuinely settled: one candidate, or a name already
+        // typed in full while longer siblings exist. **Not** merely because the
+        // shared prefix happens to name a directory — completing `/work/pro` to
+        // `/work/project/` when `/work/projections` is also there would commit
+        // a choice the reader had not made and put the sibling out of reach.
+        let settled =
+            matching.count == 1 || (extended == typed && matching.contains(typed))
+        if settled, !extended.hasSuffix("/") { extended += "/" }
+
+        guard extended.count > typed.count else { return nil }
 
         // Re-abbreviated, so a reader who typed `~` keeps seeing `~`. Replacing
         // it with their home path would be correct and would read as the field
         // rewriting what they typed.
         let home = NSHomeDirectory()
         if query.trimmingCharacters(in: .whitespaces).hasPrefix("~"),
-           common.hasPrefix(home)
+           extended.hasPrefix(home)
         {
-            return "~" + common.dropFirst(home.count)
+            return "~" + extended.dropFirst(home.count)
         }
-        return common
+        return extended
     }
 
     /// The longest prefix shared by every string, compared by character.

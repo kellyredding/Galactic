@@ -76,13 +76,54 @@ final class FilePickerRootInputTests: XCTestCase {
         )
     }
 
-    /// One candidate completes the whole way.
-    func testASingleCandidateCompletesFully() {
+    /// One candidate completes the whole way, and closes with the separator —
+    /// the segment is settled, so the next thing typed belongs to the next one.
+    func testASingleCandidateCompletesFullyAndClosesTheSegment() {
         XCTAssertEqual(
             FilePickerRootInput.completion(
                 for: "/work/pro", directories: ["/work/project"]
             ),
-            "/work/project"
+            "/work/project/"
+        )
+    }
+
+    /// The case that did nothing at all before, and the reason Tab appeared to
+    /// stop working one level in: the parent of `~` is `/Users`, whose only
+    /// matching child is the home directory itself, so the shared prefix
+    /// equalled what was typed and the guard refused it.
+    func testATildeAloneCompletesToATildeSlash() {
+        XCTAssertEqual(
+            FilePickerRootInput.completion(
+                for: "~", directories: [NSHomeDirectory()]
+            ),
+            "~/"
+        )
+    }
+
+    /// A name typed in full is settled even with longer siblings present, which
+    /// is what makes a second press move rather than sit there.
+    func testANameTypedInFullClosesDespiteLongerSiblings() {
+        XCTAssertEqual(
+            FilePickerRootInput.completion(
+                for: "/work/project",
+                directories: ["/work/project", "/work/projections"]
+            ),
+            "/work/project/"
+        )
+    }
+
+    /// The tripwire for the opposite mistake. Completing to a shared prefix
+    /// that happens to name a real directory must **not** close it: doing so
+    /// commits a choice the reader has not made and puts the sibling out of
+    /// reach by typing.
+    func testASharedPrefixNamingADirectoryIsNotClosed() {
+        XCTAssertEqual(
+            FilePickerRootInput.completion(
+                for: "/work/pro",
+                directories: ["/work/project", "/work/projections"]
+            ),
+            "/work/project",
+            "closing this would make /work/projections unreachable"
         )
     }
 
@@ -120,7 +161,33 @@ final class FilePickerRootInputTests: XCTestCase {
             for: "~/pro", directories: ["\(home)/projects"]
         )
 
-        XCTAssertEqual(completed, "~/projects")
+        XCTAssertEqual(completed, "~/projects/")
+    }
+
+    // MARK: - Which directory the candidates come from
+
+    /// The trailing separator is the whole distinction, and it is why this
+    /// cannot be `deletingLastPathComponent`: that strips a trailing slash
+    /// before removing a component, so it answers the grandparent for the
+    /// second case and the folder list would offer the wrong directory's
+    /// children.
+    func testTheCandidateParentFollowsTheTrailingSeparator() {
+        let home = NSHomeDirectory()
+        XCTAssertEqual(
+            FilePickerRootInput.candidateParent(of: "~/pro"), home
+        )
+        XCTAssertEqual(
+            FilePickerRootInput.candidateParent(of: "~/projects/"),
+            "\(home)/projects"
+        )
+    }
+
+    func testTheCandidateParentOfTheFilesystemRootIsItself() {
+        XCTAssertEqual(FilePickerRootInput.candidateParent(of: "/"), "/")
+    }
+
+    func testAFilterHasNoCandidateParent() {
+        XCTAssertNil(FilePickerRootInput.candidateParent(of: "usermodel"))
     }
 
     // MARK: - The prefix primitive
