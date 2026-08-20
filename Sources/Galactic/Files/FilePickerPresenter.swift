@@ -62,6 +62,13 @@ public final class FilePickerPresenter: ObservableObject {
     /// tree they are searching before they wonder why a file is missing.
     @Published public private(set) var root: URL?
 
+    /// What a relative path is relative to: the route shown above the field.
+    ///
+    /// The same thing the reader is looking at, deliberately — `..` has to go
+    /// up from where the picker *says* they are, or the answer is somewhere
+    /// they cannot see.
+    private var route: String? { root?.path }
+
     /// True while the corpus is being walked, so the view can say so rather than
     /// looking like a picker with no matches.
     @Published public private(set) var isIndexing = false
@@ -207,7 +214,7 @@ public final class FilePickerPresenter: ObservableObject {
             activate(rows[selectedIndex])
             return
         }
-        if let path = FilePickerRootInput.expandedPath(query),
+        if let path = FilePickerRootInput.expandedPath(query, route: route),
             path.hasSuffix("/")
         {
             changeRoot(to: URL(fileURLWithPath: path))
@@ -217,7 +224,7 @@ public final class FilePickerPresenter: ObservableObject {
             activate(rows[selectedIndex])
             return
         }
-        if let path = FilePickerRootInput.expandedPath(query) {
+        if let path = FilePickerRootInput.expandedPath(query, route: route) {
             changeRoot(to: URL(fileURLWithPath: path))
         }
     }
@@ -258,9 +265,11 @@ public final class FilePickerPresenter: ObservableObject {
 
     /// Extend a partly-typed path, the way a shell's Tab does.
     public func completePath() {
-        guard let parent = FilePickerRootInput.candidateParent(of: query) else {
-            return
-        }
+        guard
+            let parent = FilePickerRootInput.candidateParent(
+                of: query, route: route
+            )
+        else { return }
         // The same children the folder list is showing, from the same cache, so
         // Tab and the list can never disagree about what is in a directory.
         // They each read the disk separately before this.
@@ -270,7 +279,7 @@ public final class FilePickerPresenter: ObservableObject {
             : Self.childDirectories(of: parent)
         guard
             let completed = FilePickerRootInput.completion(
-                for: query, directories: candidates
+                for: query, directories: candidates, route: route
             )
         else { return }
         query = completed
@@ -369,7 +378,7 @@ public final class FilePickerPresenter: ObservableObject {
         // A path being typed is still not a filter — the corpus is still not
         // consulted — but the reader now sees the folders they are choosing
         // between rather than a hint describing them.
-        if FilePickerRootInput.isRootChange(query) {
+        if FilePickerRootInput.isRootChange(query, route: route) {
             refreshFolderRows()
             return
         }
@@ -438,7 +447,11 @@ public final class FilePickerPresenter: ObservableObject {
     private var folderCache: (parent: String, children: [String])?
 
     private func refreshFolderRows() {
-        guard let parent = FilePickerRootInput.candidateParent(of: query) else {
+        guard
+            let parent = FilePickerRootInput.candidateParent(
+                of: query, route: route
+            )
+        else {
             rows = []
             resetSelection()
             return
@@ -446,7 +459,7 @@ public final class FilePickerPresenter: ObservableObject {
 
         if let cached = folderCache, cached.parent == parent {
             rows = FilePickerFolderList.rows(
-                for: query, children: cached.children
+                for: query, children: cached.children, route: route
             )
             resetSelection()
             return
@@ -470,10 +483,13 @@ public final class FilePickerPresenter: ObservableObject {
             // it, because more may have been typed while the directory was
             // read — and the rows must answer the field as it stands, not as it
             // was. Still the same parent, or a later refresh already owns this.
-            guard FilePickerRootInput.isRootChange(query),
-                FilePickerRootInput.candidateParent(of: query) == parent
+            guard FilePickerRootInput.isRootChange(query, route: route),
+                FilePickerRootInput.candidateParent(of: query, route: route)
+                    == parent
             else { return }
-            rows = FilePickerFolderList.rows(for: query, children: children)
+            rows = FilePickerFolderList.rows(
+                for: query, children: children, route: route
+            )
             resetSelection()
         }
     }

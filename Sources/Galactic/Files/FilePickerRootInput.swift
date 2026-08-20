@@ -9,23 +9,105 @@ import Foundation
 public enum FilePickerRootInput {
 
     /// Whether this query is a path being typed rather than a filter.
-    public static func isRootChange(_ query: String) -> Bool {
+    ///
+    /// - Parameter route: where the picker currently says it is, which is what
+    ///   a relative path is relative to. Without one there is nothing for `.`
+    ///   or `..` to mean, so they stay filters.
+    public static func isRootChange(_ query: String, route: String? = nil)
+        -> Bool
+    {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
-        return trimmed.hasPrefix("/") || trimmed.hasPrefix("~")
+        if trimmed.hasPrefix("/") || trimmed.hasPrefix("~") { return true }
+        guard route != nil else { return false }
+        return isRelative(trimmed)
     }
 
-    /// The absolute path a root-change query names, with `~` expanded.
+    /// Whether the first segment is exactly `.` or `..`.
+    ///
+    /// **Tested whole, and that is the entire subtlety.** A leading dot cannot
+    /// simply mean "a path": `.env`, `.gitignore` and `.zshrc` are things a
+    /// reader types to *filter*, and there are more dotfiles in a checkout than
+    /// there are reasons to type `..`. Getting this wrong turns a common filter
+    /// into a failed directory lookup, which reads as the file not existing.
+    static func isRelative(_ trimmed: String) -> Bool {
+        let first =
+            trimmed.split(separator: "/", omittingEmptySubsequences: false)
+            .first.map(String.init) ?? ""
+        return first == "." || first == ".."
+    }
+
+    /// The absolute path a root-change query names, with `~` expanded and any
+    /// leading `.` or `..` resolved against the route.
     ///
     /// Nil when the query is not a root change, so a caller can use this as the
     /// test rather than asking twice.
-    public static func expandedPath(_ query: String) -> String? {
+    public static func expandedPath(_ query: String, route: String? = nil)
+        -> String?
+    {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
-        guard isRootChange(trimmed) else { return nil }
+        guard isRootChange(trimmed, route: route) else { return nil }
         if trimmed == "~" { return NSHomeDirectory() }
         if trimmed.hasPrefix("~/") {
             return NSHomeDirectory() + String(trimmed.dropFirst(1))
         }
-        return trimmed
+        if trimmed.hasPrefix("/") { return trimmed }
+        guard let route else { return nil }
+        return resolve(trimmed, against: route)
+    }
+
+    /// Walk off the leading `.` and `..` segments, then hang the rest on what
+    /// is left.
+    ///
+    /// Only the *leading* run is resolved. An interior `..` is left in place
+    /// for the filesystem to settle, because the alternative — standardising
+    /// the whole path — also rewrites symlinked prefixes, and every caller here
+    /// matches the result against names read from a directory. A resolved
+    /// spelling silently matches none of them.
+    private static func resolve(_ typed: String, against route: String)
+        -> String?
+    {
+        let parts = split(typed, against: route)
+        let rest = parts.rest.joined(separator: "/")
+        var result = parts.base
+        if !rest.isEmpty {
+            result =
+                parts.base.hasSuffix("/")
+                ? parts.base + rest : parts.base + "/" + rest
+        }
+        if parts.trailing, !result.hasSuffix("/") { result += "/" }
+        return result
+    }
+
+    /// A relative query in three pieces: the `.`/`..` run as the reader typed
+    /// it, the directory that run resolves to, and what follows.
+    private static func split(_ typed: String, against route: String)
+        -> (lead: [String], base: String, rest: [String], trailing: Bool)
+    {
+        var segments =
+            typed.split(separator: "/", omittingEmptySubsequences: false)
+            .map(String.init)
+
+        // A trailing separator leaves an empty final segment. It carries the
+        // "show me what is inside" meaning the folder list reads, so it is
+        // remembered rather than resolved away.
+        let trailing = segments.count > 1 && segments.last == ""
+        if trailing { segments.removeLast() }
+
+        var base = route
+        var index = 0
+        while index < segments.count {
+            if segments[index] == "." {
+                index += 1
+            } else if segments[index] == ".." {
+                base = (base as NSString).deletingLastPathComponent
+                index += 1
+            } else {
+                break
+            }
+        }
+        return (
+            Array(segments[..<index]), base, Array(segments[index...]), trailing
+        )
     }
 
     /// The directory whose children a partly-typed path is choosing between.
@@ -35,8 +117,10 @@ public enum FilePickerRootInput {
     /// distinction, and it cannot be left to `deletingLastPathComponent`, which
     /// strips a trailing slash *before* removing a component and so answers
     /// `~` for both.
-    public static func candidateParent(of query: String) -> String? {
-        guard let typed = expandedPath(query) else { return nil }
+    public static func candidateParent(of query: String, route: String? = nil)
+        -> String?
+    {
+        guard let typed = expandedPath(query, route: route) else { return nil }
         guard typed.hasSuffix("/") else {
             return (typed as NSString).deletingLastPathComponent
         }
@@ -59,9 +143,10 @@ public enum FilePickerRootInput {
     ///   no candidates, or they already disagree at the next character.
     public static func completion(
         for query: String,
-        directories: [String]
+        directories: [String],
+        route: String? = nil
     ) -> String? {
-        guard let typed = expandedPath(query) else { return nil }
+        guard let typed = expandedPath(query, route: route) else { return nil }
 
         let matching = directories.filter { $0.hasPrefix(typed) }
         guard !matching.isEmpty else { return nil }
@@ -81,14 +166,28 @@ public enum FilePickerRootInput {
 
         guard extended.count > typed.count else { return nil }
 
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+
         // Re-abbreviated, so a reader who typed `~` keeps seeing `~`. Replacing
         // it with their home path would be correct and would read as the field
         // rewriting what they typed.
         let home = NSHomeDirectory()
-        if query.trimmingCharacters(in: .whitespaces).hasPrefix("~"),
-           extended.hasPrefix(home)
-        {
+        if trimmed.hasPrefix("~"), extended.hasPrefix(home) {
             return "~" + extended.dropFirst(home.count)
+        }
+
+        // The same courtesy for a relative path, for the same reason: `../Doc`
+        // completes to `../Documents/` rather than to the absolute directory
+        // that names. The reader said where they were going relative to here,
+        // and answering with an absolute path discards the part they chose to
+        // say — and makes the next `..` mean something different.
+        if let route, isRelative(trimmed) {
+            let parts = split(trimmed, against: route)
+            if extended.hasPrefix(parts.base) {
+                let tail = extended.dropFirst(parts.base.count)
+                let lead = parts.lead.joined(separator: "/")
+                return lead + (tail.hasPrefix("/") ? String(tail) : "/" + tail)
+            }
         }
         return extended
     }

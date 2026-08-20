@@ -190,6 +190,107 @@ final class FilePickerRootInputTests: XCTestCase {
         XCTAssertNil(FilePickerRootInput.candidateParent(of: "usermodel"))
     }
 
+    // MARK: - Relative paths
+
+    private let route = "/Users/someone/projects"
+
+    /// The trap this rule exists for. There are more dotfiles in a checkout
+    /// than there are reasons to type `..`, and treating a leading dot as a
+    /// path turns a common filter into a failed directory lookup — which reads
+    /// as the file not existing.
+    func testADotfileQueryIsStillAFilter() {
+        XCTAssertFalse(
+            FilePickerRootInput.isRootChange(".env", route: route)
+        )
+        XCTAssertFalse(
+            FilePickerRootInput.isRootChange(".gitignore", route: route)
+        )
+        XCTAssertFalse(
+            FilePickerRootInput.isRootChange("..foo", route: route)
+        )
+    }
+
+    func testDotAndDotDotAreRelativePaths() {
+        XCTAssertTrue(FilePickerRootInput.isRootChange(".", route: route))
+        XCTAssertTrue(FilePickerRootInput.isRootChange("..", route: route))
+        XCTAssertTrue(FilePickerRootInput.isRootChange("./src", route: route))
+        XCTAssertTrue(FilePickerRootInput.isRootChange("../src", route: route))
+    }
+
+    /// Without a route there is nothing for them to be relative *to*, so they
+    /// stay filters rather than resolving against a guess.
+    func testARelativePathNeedsARoute() {
+        XCTAssertFalse(FilePickerRootInput.isRootChange(".."))
+        XCTAssertNil(FilePickerRootInput.expandedPath(".."))
+    }
+
+    func testDotDotGoesUpFromTheRoute() {
+        XCTAssertEqual(
+            FilePickerRootInput.expandedPath("..", route: route),
+            "/Users/someone"
+        )
+        XCTAssertEqual(
+            FilePickerRootInput.expandedPath("../Documents", route: route),
+            "/Users/someone/Documents"
+        )
+        XCTAssertEqual(
+            FilePickerRootInput.expandedPath("../../shared", route: route),
+            "/Users/shared",
+            "each leading .. consumes one component of the route"
+        )
+    }
+
+    func testASingleDotIsTheRouteItself() {
+        XCTAssertEqual(
+            FilePickerRootInput.expandedPath(".", route: route), route
+        )
+        XCTAssertEqual(
+            FilePickerRootInput.expandedPath("./src", route: route),
+            "\(route)/src"
+        )
+    }
+
+    /// The separator carries the "show me what is inside" meaning the folder
+    /// list reads, so resolving must not eat it.
+    func testATrailingSeparatorSurvivesResolution() {
+        XCTAssertEqual(
+            FilePickerRootInput.expandedPath("../", route: route),
+            "/Users/someone/"
+        )
+    }
+
+    /// An interior `..` is left for the filesystem to settle. Standardising the
+    /// whole path would also rewrite a symlinked prefix, and every caller here
+    /// matches the result against names read from a directory — where a
+    /// resolved spelling matches none of them.
+    func testAnInteriorDotDotIsLeftAlone() {
+        XCTAssertEqual(
+            FilePickerRootInput.expandedPath("../a/../b", route: route),
+            "/Users/someone/a/../b"
+        )
+    }
+
+    /// Completion keeps the reader's spelling, exactly as it does for `~`.
+    /// Answering with an absolute path would discard the part they chose to say
+    /// and change what a following `..` means.
+    func testARelativeCompletionStaysRelative() {
+        XCTAssertEqual(
+            FilePickerRootInput.completion(
+                for: "../Doc",
+                directories: ["/Users/someone/Documents"],
+                route: route
+            ),
+            "../Documents/"
+        )
+    }
+
+    func testTheCandidateParentOfARelativePathResolves() {
+        XCTAssertEqual(
+            FilePickerRootInput.candidateParent(of: "../Doc", route: route),
+            "/Users/someone"
+        )
+    }
+
     // MARK: - The prefix primitive
 
     func testLongestCommonPrefix() {

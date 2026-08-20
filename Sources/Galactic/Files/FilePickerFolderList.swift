@@ -24,16 +24,19 @@ public enum FilePickerFolderList {
     ///   - children: absolute paths of the candidate parent's child
     ///     directories. Files are the caller's to exclude — a file is not
     ///     somewhere anyone can browse to.
+    ///   - route: where the picker says it is, for a `.` or `..` to mean
+    ///     something.
     ///   - limit: how many rows to offer.
     /// - Returns: the folders to show, or none when the query is not a path.
     public static func rows(
         for query: String,
         children: [String],
+        route: String? = nil,
         limit: Int = rowLimit
     ) -> [FilePickerItem] {
-        guard let typed = FilePickerRootInput.expandedPath(query) else {
-            return []
-        }
+        guard
+            let typed = FilePickerRootInput.expandedPath(query, route: route)
+        else { return [] }
 
         let matching =
             typed.hasSuffix("/")

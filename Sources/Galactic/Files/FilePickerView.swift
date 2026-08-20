@@ -218,7 +218,7 @@ public struct FilePickerView: View {
                 hasRoot: presenter.root != nil,
                 isIndexing: presenter.isIndexing,
                 isRootChange: FilePickerRootInput.isRootChange(
-                    presenter.query
+                    presenter.query, route: presenter.root?.path
                 ),
                 query: presenter.query
             )
