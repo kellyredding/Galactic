@@ -14,6 +14,10 @@ public class AnnotationCoordinator: NSObject,
         ((AnnotationMessage) -> Void)?
     public var pendingInitJS: String?
 
+    /// Run after `pendingInitJS`, because that script builds the annotation
+    /// cards and moves the content any offset was measured against.
+    public var pendingScrollJS: String?
+
     public init(isDark: Bool) {
         self.lastIsDark = isDark
     }
@@ -56,6 +60,10 @@ public class AnnotationCoordinator: NSObject,
         if let js = pendingInitJS {
             webView.evaluateJavaScript(js)
             pendingInitJS = nil
+        }
+        if let js = pendingScrollJS {
+            webView.evaluateJavaScript(js)
+            pendingScrollJS = nil
         }
     }
 }

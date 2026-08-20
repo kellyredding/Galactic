@@ -46,6 +46,17 @@ public struct ReaderHostView: NSViewRepresentable {
     /// nothing.
     public var annotationInitJS: (String?) -> String
 
+    /// Take the outgoing page's scroll position, and answer with the incoming
+    /// page's.
+    ///
+    /// One call in both directions, for the same reason the composer hand-off is
+    /// one call: the position arriving belongs to the page being replaced, and
+    /// only the host knows which file that was.
+    ///
+    /// Asked *before* `annotationInitJS`, because that is where the host hands
+    /// the composer over and advances its own record of which file is on screen.
+    public var handOffScroll: ((Double) -> Double)?
+
     public var baseURL: URL?
 
     /// Published back so a host can drive find-in-page and card updates.
@@ -79,6 +90,7 @@ public struct ReaderHostView: NSViewRepresentable {
         reloadToken: AnyHashable,
         document: @escaping () -> String,
         annotationInitJS: @escaping (String?) -> String,
+        handOffScroll: ((Double) -> Double)? = nil,
         baseURL: URL?,
         webView: Binding<WKWebView?>,
         isVisibleSurface: Bool,
@@ -89,6 +101,7 @@ public struct ReaderHostView: NSViewRepresentable {
         self.reloadToken = reloadToken
         self.document = document
         self.annotationInitJS = annotationInitJS
+        self.handOffScroll = handOffScroll
         self.baseURL = baseURL
         self._webView = webView
         self.isVisibleSurface = isVisibleSurface
@@ -144,14 +157,25 @@ public struct ReaderHostView: NSViewRepresentable {
         view.layer?.backgroundColor = backdrop
 
         let build = annotationInitJS
+        let scroll = handOffScroll
         let page = document
         let base = baseURL
 
         // Ask the outgoing page for anything worth keeping, then load inside
         // the reply — loading first would destroy the page being asked.
-        view.evaluateJavaScript(Self.rescueFormStateJS) { result, _ in
-            context.coordinator.pendingInitJS = build(result as? String)
-            view.loadHTMLString(page(), baseURL: base)
+        //
+        // Scroll first, and the order is load-bearing: `annotationInitJS` is
+        // where the host hands the composer over, and that hand-off is what
+        // advances its record of which file is on screen. Anything else that
+        // needs to know which file is being *replaced* has to ask before it.
+        view.evaluateJavaScript(Self.rescueScrollJS) { position, _ in
+            let restoreTo = scroll?((position as? Double) ?? 0) ?? 0
+            view.evaluateJavaScript(Self.rescueFormStateJS) { result, _ in
+                context.coordinator.pendingInitJS = build(result as? String)
+                context.coordinator.pendingScrollJS =
+                    restoreTo > 0 ? Self.restoreScrollJS(restoreTo) : nil
+                view.loadHTMLString(page(), baseURL: base)
+            }
         }
     }
 
@@ -183,6 +207,21 @@ public struct ReaderHostView: NSViewRepresentable {
         ? JSON.stringify(AnnotationManager.getFormState())
         : null
     """
+
+    /// Asks the outgoing page how far down it was.
+    ///
+    /// Separate from the composer rescue rather than folded into it, because
+    /// that one answers `null` for a page with no anchorable blocks — an image,
+    /// or anything the annotation layer declined to install on. Those pages
+    /// scroll too.
+    ///
+    /// The document is the scrolling element in a reader, unlike the scrollback,
+    /// whose own container scrolls inside it.
+    private static let rescueScrollJS = "window.pageYOffset"
+
+    private static func restoreScrollJS(_ offset: Double) -> String {
+        "window.scrollTo({ top: \(offset), behavior: 'instant' })"
+    }
 
     /// Remembers what the page was last built from.
     ///

@@ -416,6 +416,29 @@ public final class FileSet: ObservableObject {
         )
     }
 
+    /// Store the outgoing page's scroll position and answer with the incoming
+    /// page's.
+    ///
+    /// The mirror of `handOffComposer`, and deliberately not folded into it: the
+    /// composer rescue answers nothing for a page the annotation layer declined
+    /// to install on, and those pages scroll too.
+    ///
+    /// **Called before `handOffComposer`, which is what moves `renderedTabID`.**
+    /// Reading it after would name the file arriving rather than the one leaving
+    /// and store the position onto the wrong tab.
+    @discardableResult
+    public func handOffScroll(rescued: Double?, to incoming: FileTab.ID?)
+        -> Double
+    {
+        if let rescued, rescued > 0, let outgoing = renderedTabID {
+            tabs.update(id: outgoing) { $0.scrollOffset = rescued }
+        }
+        guard let incoming,
+            let tab = tabs.tabs.first(where: { $0.id == incoming })
+        else { return 0 }
+        return tab.scrollOffset
+    }
+
     // MARK: - Persistence
 
     /// The open files, as rows, for a host to persist.
