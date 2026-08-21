@@ -64,6 +64,38 @@ final class FilePickerRootInputTests: XCTestCase {
         )
     }
 
+    /// A leniently-matched segment is *corrected*, not preserved: the
+    /// extension is taken from the candidate's own spelling, so what lands in
+    /// the field is a path that exists.
+    func testCompletionCorrectsTheCaseOfWhatWasTyped() {
+        XCTAssertEqual(
+            FilePickerRootInput.completion(
+                for: "/work/lib", directories: ["/work/Library"]
+            ),
+            "/work/Library/"
+        )
+    }
+
+    /// Lenience costs ambiguity, and that is the honest answer rather than a
+    /// bug: `d` names four things once case stops separating them, so one press
+    /// moves nowhere and the folder list shows the choice.
+    func testCompletionRefusesWhenLenienceMakesTheSegmentAmbiguous() {
+        XCTAssertNil(
+            FilePickerRootInput.completion(
+                for: "/work/d",
+                directories: ["/work/Desktop", "/work/dev"]
+            )
+        )
+    }
+
+    func testCompletionKeepsAnUppercaseSegmentExact() {
+        XCTAssertNil(
+            FilePickerRootInput.completion(
+                for: "/work/LIB", directories: ["/work/Library"]
+            )
+        )
+    }
+
     /// Candidates that diverge at the very next character add nothing, even
     /// though they all match what was typed. One press moving nowhere is how a
     /// reader learns they have to choose.

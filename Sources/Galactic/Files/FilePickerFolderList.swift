@@ -41,7 +41,9 @@ public enum FilePickerFolderList {
         let matching =
             typed.hasSuffix("/")
             ? children
-            : children.filter { $0.hasPrefix(typed) }
+            : children.filter {
+                FilePickerRootInput.continues($0, typed: typed)
+            }
 
         return matching
             .sorted(by: precedes)

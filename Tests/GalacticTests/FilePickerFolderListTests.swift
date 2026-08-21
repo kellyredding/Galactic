@@ -39,6 +39,50 @@ final class FilePickerFolderListTests: XCTestCase {
         XCTAssertEqual(rows.map(\.relativePath), ["projects", "prototypes"])
     }
 
+    // MARK: - Case
+
+    /// The reported bug: `~/lib` found nothing while `Library` sat right there.
+    func testALowercaseSegmentReachesACapitalisedFolder() {
+        let rows = FilePickerFolderList.rows(
+            for: "~/lib",
+            children: ["\(home)/Library", "\(home)/Documents"]
+        )
+
+        XCTAssertEqual(rows.map(\.relativePath), ["Library"])
+    }
+
+    /// Smart case, the matcher's rule: typing a capital asks for one.
+    func testAnUppercaseSegmentIsMatchedExactly() {
+        let rows = FilePickerFolderList.rows(
+            for: "~/LIB",
+            children: ["\(home)/Library", "\(home)/lib"]
+        )
+
+        XCTAssertTrue(rows.isEmpty)
+    }
+
+    func testACapitalisedSegmentStillReachesItsOwnFolder() {
+        let rows = FilePickerFolderList.rows(
+            for: "~/Lib",
+            children: ["\(home)/Library", "\(home)/libexec"]
+        )
+
+        XCTAssertEqual(rows.map(\.relativePath), ["Library"])
+    }
+
+    /// The case rule is asked of the segment being typed, never of the whole
+    /// path — `/Users` carries a capital the reader never typed, and asking it
+    /// of the whole string would make every path under a home directory
+    /// case-sensitive.
+    func testTheCapitalInUsersDoesNotMakeTheSegmentSensitive() {
+        let rows = FilePickerFolderList.rows(
+            for: "\(home)/lib",
+            children: ["\(home)/Library"]
+        )
+
+        XCTAssertEqual(rows.map(\.relativePath), ["Library"])
+    }
+
     // MARK: - What a row is
 
     /// The name alone, because the field above already shows the parent.

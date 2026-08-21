@@ -148,9 +148,14 @@ public enum FilePickerRootInput {
     ) -> String? {
         guard let typed = expandedPath(query, route: route) else { return nil }
 
-        let matching = directories.filter { $0.hasPrefix(typed) }
+        let matching = directories.filter { continues($0, typed: typed) }
         guard !matching.isEmpty else { return nil }
 
+        // The extension is built from the matched directories' own spelling, so
+        // a leniently-matched segment is *corrected* rather than preserved:
+        // `~/lib` completes to `~/Library/`, leaving a path in the field that
+        // exists. Nothing extra is needed for that — it falls out of taking the
+        // prefix from the candidates rather than from what was typed.
         var extended = longestCommonPrefix(matching)
 
         // The separator is what says "keep going", and having to type it at
@@ -190,6 +195,46 @@ public enum FilePickerRootInput {
             }
         }
         return extended
+    }
+
+    /// Whether an absolute path is one of the things a partly-typed path could
+    /// still become.
+    ///
+    /// The parent portion of both sides is identical by construction — the
+    /// caller derived the parent from this same typed text, and spelled every
+    /// child against it — so the only part that can disagree in case is the
+    /// final segment, and that is the only part the case rule is applied to.
+    ///
+    /// **Applying it to the whole path instead would make every path under a
+    /// home directory case-sensitive**, because `/Users` carries a capital `U`
+    /// that the reader never typed. That is the trap here: the rule reads as
+    /// though it should be asked of the whole string, and asked that way it is
+    /// always answered the same.
+    static func continues(_ candidate: String, typed: String) -> Bool {
+        // A finished segment has no partial to fold, and the prefix is exact.
+        guard !typed.hasSuffix("/") else { return candidate.hasPrefix(typed) }
+
+        let parent = (typed as NSString).deletingLastPathComponent
+        guard (candidate as NSString).deletingLastPathComponent == parent else {
+            return false
+        }
+        return begins(
+            (candidate as NSString).lastPathComponent,
+            with: (typed as NSString).lastPathComponent
+        )
+    }
+
+    /// Smart case, which is the matcher's rule rather than a second one
+    /// invented here: an uppercase letter anywhere in what was typed asks for
+    /// an exact answer, and an all-lowercase segment is answered leniently. So
+    /// `~/lib` reaches `Library` and `~/Lib` still does, while `~/LIB` does
+    /// not — the same bargain `FileMatcher.PreparedQuery` strikes.
+    static func begins(_ name: String, with typed: String) -> Bool {
+        guard !typed.isEmpty else { return true }
+        if typed.contains(where: { $0.isUppercase }) {
+            return name.hasPrefix(typed)
+        }
+        return name.lowercased().hasPrefix(typed.lowercased())
     }
 
     /// The longest prefix shared by every string, compared by character.
