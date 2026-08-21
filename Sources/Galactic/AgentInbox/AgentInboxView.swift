@@ -278,6 +278,7 @@ private struct AgentInboxList: View {
                 AgentInboxRow(
                     entry: entry,
                     showsTopDivider: entry.id != inbox.entries.first?.id,
+                    onCopy: { copy(entry) },
                     onTogglePause: { togglePause(entry) },
                     onSendNow: { sendNow(entry) },
                     onDelete: { confirmDelete(entry) })
@@ -311,6 +312,23 @@ private struct AgentInboxList: View {
 
     private func togglePause(_ entry: AgentInboxEntry) {
         inbox.setState(entry.state == .paused ? .ready : .paused, for: entry.id)
+    }
+
+    /// The way out when a message cannot be sent and cannot be retyped.
+    ///
+    /// `entry.body`, never the row's preview: the preview is a 220-character
+    /// first line and the body behind it routinely runs to tens of thousands.
+    /// Nothing else holds that text — the surface that composed it is torn down
+    /// before the send, and this queue is memory-only — so a truncated copy
+    /// here loses the rest of it for good.
+    ///
+    /// Deliberately leaves the entry alone. A reader copying a row has said
+    /// they want the text, not that they want it cancelled, and the send should
+    /// still land on its own once whatever is blocking it lifts.
+    private func copy(_ entry: AgentInboxEntry) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(entry.body, forType: .string)
+        notice = Notice(text: "Copied.", tint: .green)
     }
 
     /// Sending by hand is allowed from any state, which is the point of it: the
@@ -357,6 +375,7 @@ private struct AgentInboxList: View {
 private struct AgentInboxRow: View {
     let entry: AgentInboxEntry
     let showsTopDivider: Bool
+    let onCopy: () -> Void
     let onTogglePause: () -> Void
     let onSendNow: () -> Void
     let onDelete: () -> Void
@@ -405,10 +424,14 @@ private struct AgentInboxRow: View {
         .onHover { isHovering = $0 }
     }
 
-    /// Send, hold, discard — left to right, destructive last and furthest from
-    /// the pointer's resting path.
+    /// Copy, send, hold, discard — left to right, destructive last and furthest
+    /// from the pointer's resting path.
     private var actions: some View {
         HStack(spacing: 2) {
+            AgentInboxGlyphButton(
+                systemName: "doc.on.doc",
+                help: "Copy this message",
+                action: onCopy)
             AgentInboxGlyphButton(
                 systemName: "paperplane",
                 help: "Send this message now",
