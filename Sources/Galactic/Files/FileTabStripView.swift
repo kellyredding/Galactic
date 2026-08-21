@@ -163,14 +163,15 @@ public struct FileTabStripView: View {
         // through each other. The base goes on only while it moves, so nothing
         // about the strip at rest changes.
         .background(liftedBackdrop(for: tab.id))
-        // Carried by the tab itself rather than by a dragged copy of it.
-        .offset(x: offset(for: tab.id))
+        // Carried by the tab itself rather than by a dragged copy of it, and in
+        // both axes: a tab asked to change rows has a row's pitch to travel.
+        .offset(x: offset(of: tab.id).width, y: offset(of: tab.id).height)
         // The curve goes on this property, never on the transaction: a
         // transaction curve is inherited by every animatable change in the same
         // pass, which is what once left rows sliding back and forth on a loop
         // with nothing to return them.
         .animation(
-            drag?.id == tab.id ? nil : Metrics.slide, value: offset(for: tab.id)
+            drag?.id == tab.id ? nil : Metrics.slide, value: offset(of: tab.id)
         )
         // Above its neighbours while it is the one moving, so passing over them
         // does not clip it.
@@ -209,13 +210,12 @@ public struct FileTabStripView: View {
                         grabX: value.startLocation.x - layoutX(of: id),
                         pointer: value.location,
                         arrangement: set.tabs.rows.map { $0.map(\.id) },
+                        widths: widths,
                         metrics: Metrics.drag
                     )
                 }
                 updated.update(
-                    pointer: value.location,
-                    widths: widths,
-                    stripWidth: stripWidth
+                    pointer: value.location, stripWidth: stripWidth
                 )
                 drag = updated
             }
@@ -231,28 +231,9 @@ public struct FileTabStripView: View {
         onRearrange(drag.proposal)
     }
 
-    /// How far a tab is drawn from where the layout put it.
-    ///
-    /// **Only the dragged one is offset now, and that is the simplification the
-    /// proposal bought.** Displaced tabs used to be drawn at the difference
-    /// between the slot the drag proposed and the slot the model still had,
-    /// because the model was what the strip was laid out from. The strip is laid
-    /// out from the proposal, so a displaced tab is already where it belongs and
-    /// has nothing to correct.
-    ///
-    /// What that gives up is the slide: displacement is a layout change again,
-    /// and a curve on a layout change in this view is the mechanism behind the
-    /// sliding-rows bug. Correct and discrete beat smooth and wrong; the slide
-    /// can come back as an animated offset *within* the proposal if it earns it.
-    private func offset(for id: FileTab.ID) -> CGFloat {
-        guard let drag, drag.id == id else { return 0 }
-        return leadingEdge(of: drag) - layoutX(of: id)
-    }
     /// Where the dragged tab's leading edge is being asked to sit.
     private func leadingEdge(of drag: FileTabDrag) -> CGFloat {
-        drag.leadingEdge(
-            widths: sized.mapValues(\.width), stripWidth: stripWidth
-        )
+        drag.leadingEdge(stripWidth: stripWidth)
     }
 
 
@@ -261,15 +242,24 @@ public struct FileTabStripView: View {
     /// The rows being drawn: the drag's proposal while one is in progress, the
     /// model's otherwise.
     ///
-    /// **Drawing the proposal is the point.** The alternative — model on screen,
-    /// proposal in the drag's head — is exactly what let the two disagree about
-    /// which row a tab was in, and every stuck drag came from that gap.
+    /// One arrangement, so the screen and the drag cannot disagree about which
+    /// row a tab is in — the gap every stuck drag came out of. During a gesture
+    /// it is the arrangement as it *was*, with the proposal expressed as offsets;
+    /// see `FileTabDrag.origin` for why that is what makes displacement
+    /// animatable.
     private var displayRows: [[FileTab]] {
         guard let drag else { return set.tabs.rows }
         let byID = Dictionary(
             set.tabs.tabs.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }
         )
-        return drag.proposal
+        // **The arrangement as it was, not as the drag is proposing.** Laying
+        // out the proposal is correct and unwatchable: every displaced tab
+        // arrives in its new slot in one frame, because moving it *is* the
+        // layout. Holding the layout still and offsetting toward the proposal
+        // turns the same movement into a property change, which can carry a
+        // curve — the rule this view has always had, now that widths are
+        // computed and both arrangements can be measured without re-measuring.
+        return drag.origin
             .map { $0.compactMap { byID[$0] } }
             .filter { !$0.isEmpty }
     }
@@ -286,6 +276,11 @@ public struct FileTabStripView: View {
             for entry in fit(row) { result[entry.id] = entry }
         }
         return result
+    }
+
+    /// The offset a tab is drawn at, and whether it should ease into it.
+    private func offset(of id: FileTab.ID) -> CGSize {
+        drag?.offset(of: id, stripWidth: stripWidth) ?? .zero
     }
 
     private func fit(_ row: [FileTab]) -> [FileTabRowFit.Sized] {
@@ -360,7 +355,7 @@ public struct FileTabStripView: View {
     /// Whether the drag is over the new-row band and a row would actually
     /// appear, which is what the dashed target promises.
     private var isProposingNewRow: Bool {
-        drag?.isProposingNewRow(widths: sized.mapValues(\.width)) ?? false
+        drag?.isProposingNewRow() ?? false
     }
 
 

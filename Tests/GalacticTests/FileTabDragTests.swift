@@ -39,6 +39,10 @@ final class FileTabDragTests: XCTestCase {
             grabX: 0,
             pointer: CGPoint(x: x, y: middleOfRow(0)),
             arrangement: arrangement,
+            widths: Dictionary(
+                uniqueKeysWithValues: arrangement.flatMap { $0 }
+                    .map { ($0, CGFloat(100)) }
+            ),
             metrics: metrics
         )
     }
@@ -52,7 +56,7 @@ final class FileTabDragTests: XCTestCase {
         // Far enough right that the trailing edge clears the next tab's midline.
         d.update(
             pointer: CGPoint(x: 160, y: middleOfRow(0)),
-            widths: widths, stripWidth: stripWidth
+            stripWidth: stripWidth
         )
 
         XCTAssertEqual(d.position(of: ids[0])?.column, 1)
@@ -68,7 +72,7 @@ final class FileTabDragTests: XCTestCase {
 
         d.update(
             pointer: CGPoint(x: 212, y: metrics.pitch + metrics.newRowMargin / 2),
-            widths: widths, stripWidth: stripWidth
+            stripWidth: stripWidth
         )
 
         XCTAssertEqual(d.proposal.count, 2)
@@ -85,14 +89,14 @@ final class FileTabDragTests: XCTestCase {
 
         d.update(
             pointer: CGPoint(x: 212, y: metrics.pitch + metrics.newRowMargin / 2),
-            widths: widths, stripWidth: stripWidth
+            stripWidth: stripWidth
         )
         XCTAssertEqual(d.proposal[1], [ids[2]], "precondition: it made the row")
 
         // Now back up into the first row, at its left-hand end.
         d.update(
             pointer: CGPoint(x: 6, y: middleOfRow(0)),
-            widths: widths, stripWidth: stripWidth
+            stripWidth: stripWidth
         )
 
         XCTAssertEqual(
@@ -117,13 +121,13 @@ final class FileTabDragTests: XCTestCase {
         // The dragged tab starts in the lower row, so start the pointer there.
         d.update(
             pointer: CGPoint(x: 212, y: middleOfRow(1)),
-            widths: widths, stripWidth: stripWidth
+            stripWidth: stripWidth
         )
 
         // Up into the top row, at its far left.
         d.update(
             pointer: CGPoint(x: 6, y: middleOfRow(0)),
-            widths: widths, stripWidth: stripWidth
+            stripWidth: stripWidth
         )
 
         XCTAssertEqual(
@@ -131,6 +135,75 @@ final class FileTabDragTests: XCTestCase {
             "arriving at the left of the row means the left of the row"
         )
         XCTAssertEqual(d.proposal[1].count, 2)
+    }
+
+    // MARK: - What gets drawn where
+
+    /// Nothing has moved until the proposal moves something.
+    func testNothingIsOffsetBeforeTheProposalChanges() {
+        let (ids, _) = oneRow()
+        let d = drag(ids[0], from: 6, arrangement: [ids])
+
+        XCTAssertEqual(d.offset(of: ids[2], stripWidth: stripWidth), .zero)
+    }
+
+    /// A displaced neighbour is offset by exactly the dragged tab's width and
+    /// the gap it leaves — the distance it has to travel to look like it swapped.
+    func testADisplacedNeighbourIsOffsetByATabAndAGap() {
+        let (ids, _) = oneRow()
+        var d = drag(ids[0], from: 6, arrangement: [ids])
+
+        d.update(
+            pointer: CGPoint(x: 160, y: middleOfRow(0)),
+            stripWidth: stripWidth
+        )
+        XCTAssertEqual(
+            d.position(of: ids[0])?.column, 1, "precondition: they swapped"
+        )
+
+        // ids[1] moved from the second slot to the first, so it comes back by
+        // one tab and one gap.
+        XCTAssertEqual(
+            d.offset(of: ids[1], stripWidth: stripWidth).width,
+            -(100 + metrics.tabSpacing)
+        )
+    }
+
+    /// A tab asked to change rows carries a row's pitch vertically, so the
+    /// movement is something a reader can follow rather than a reappearance.
+    func testChangingRowsOffsetsByARowsPitch() {
+        let ids = (0..<4).map { _ in UUID() }
+        var d = drag(
+            ids[0], from: 6,
+            arrangement: [Array(ids[0..<2]), Array(ids[2..<4])]
+        )
+
+        d.update(
+            pointer: CGPoint(x: 6, y: middleOfRow(1)),
+            stripWidth: stripWidth
+        )
+
+        XCTAssertEqual(
+            d.offset(of: ids[0], stripWidth: stripWidth).height, metrics.pitch
+        )
+    }
+
+    /// The dragged tab tracks the pointer rather than its slot: easing it would
+    /// put the tab behind the hand moving it, which reads as the drag dropping.
+    func testTheDraggedTabFollowsThePointerRatherThanItsSlot() {
+        let (ids, _) = oneRow()
+        var d = drag(ids[0], from: 6, arrangement: [ids])
+
+        d.update(
+            pointer: CGPoint(x: 200, y: middleOfRow(0)),
+            stripWidth: stripWidth
+        )
+
+        // Grabbed at its leading edge, so the tab's edge sits at the pointer and
+        // its offset is the distance from where it started.
+        XCTAssertEqual(
+            d.offset(of: ids[0], stripWidth: stripWidth).width, 200 - 6
+        )
     }
 
     // MARK: - The dead zone
@@ -149,7 +222,7 @@ final class FileTabDragTests: XCTestCase {
         // Just inside the second band, well short of its middle.
         d.update(
             pointer: CGPoint(x: 6, y: metrics.pitch + 1),
-            widths: widths, stripWidth: stripWidth
+            stripWidth: stripWidth
         )
 
         XCTAssertEqual(
@@ -167,7 +240,7 @@ final class FileTabDragTests: XCTestCase {
 
         d.update(
             pointer: CGPoint(x: 6, y: middleOfRow(1)),
-            widths: widths, stripWidth: stripWidth
+            stripWidth: stripWidth
         )
 
         XCTAssertEqual(d.position(of: ids[0])?.row, 1)
@@ -180,10 +253,10 @@ final class FileTabDragTests: XCTestCase {
         var d = drag(ids[0], from: 6, arrangement: [ids])
         d.update(
             pointer: CGPoint(x: 6, y: metrics.pitch + metrics.newRowMargin / 2),
-            widths: widths, stripWidth: stripWidth
+            stripWidth: stripWidth
         )
         // It has already made the row, so there is no further one to promise.
-        XCTAssertFalse(d.isProposingNewRow(widths: widths))
+        XCTAssertFalse(d.isProposingNewRow())
 
         // A tab alone in the last row asking for a row below it would take its
         // own row with it and put an identical one back.
@@ -192,8 +265,8 @@ final class FileTabDragTests: XCTestCase {
             pointer: CGPoint(
                 x: 6, y: 2 * metrics.pitch + metrics.newRowMargin / 2
             ),
-            widths: widths, stripWidth: stripWidth
+            stripWidth: stripWidth
         )
-        XCTAssertFalse(lone.isProposingNewRow(widths: widths))
+        XCTAssertFalse(lone.isProposingNewRow())
     }
 }

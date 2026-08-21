@@ -48,8 +48,30 @@ public struct FileTabDrag: Equatable {
     /// edge to the cursor.
     public let grabX: CGFloat
     public private(set) var pointer: CGPoint
+
+    /// The arrangement as it was when the tab was picked up.
+    ///
+    /// **The strip is drawn from this, not from the proposal.** Every tab is laid
+    /// out where it already was and then *offset* toward where the proposal puts
+    /// it, which is what makes displacement a property change rather than a
+    /// layout change — and a property can carry a curve where a re-measurement in
+    /// this view cannot. Drawing the proposal directly is correct and lands every
+    /// tab in one frame with no movement to read.
+    public let origin: [[FileTab.ID]]
+
     /// The whole strip as the drag is asking for it.
     public private(set) var proposal: [[FileTab.ID]]
+
+    /// Every tab's width as of pickup, and the reason it is a snapshot.
+    ///
+    /// A tab crossing rows re-fits both rows: the one it left has more room, the
+    /// one it joined has less, and a tab landing alone in a row can jump from a
+    /// filename to a whole path — two or three times wider. Under the hand that
+    /// means the tab balloons, the grab point slides because `grabX` was measured
+    /// against the old width, and the clamp ceiling drops far enough to yank the
+    /// tab leftward. Nothing about a strip being rearranged should change how
+    /// wide its tabs are until the rearranging is done.
+    public let frozen: [FileTab.ID: CGFloat]
 
     private let metrics: Metrics
 
@@ -58,13 +80,58 @@ public struct FileTabDrag: Equatable {
         grabX: CGFloat,
         pointer: CGPoint,
         arrangement: [[FileTab.ID]],
+        widths: [FileTab.ID: CGFloat],
         metrics: Metrics
     ) {
         self.id = id
         self.grabX = grabX
         self.pointer = pointer
+        self.origin = arrangement
         self.proposal = arrangement
+        self.frozen = widths
         self.metrics = metrics
+    }
+
+    /// How far a tab is drawn from where the frozen layout put it.
+    ///
+    /// Zero for everything until the proposal moves something, one tab's width
+    /// and a gap once it does — and a whole row's pitch vertically when a tab has
+    /// been asked to change rows.
+    public func offset(of tab: FileTab.ID, stripWidth: CGFloat) -> CGSize {
+        guard let from = position(of: tab, in: origin),
+            let to = position(of: tab, in: proposal)
+        else { return .zero }
+
+        let y = CGFloat(to.row - from.row) * metrics.pitch
+        if tab == id {
+            // The dragged one follows the pointer rather than its slot, or it
+            // would lag the hand moving it.
+            return CGSize(
+                width: leadingEdge(stripWidth: stripWidth)
+                    - minX(of: from.column, in: origin[from.row]),
+                height: y
+            )
+        }
+        return CGSize(
+            width: minX(of: to.column, in: proposal[to.row])
+                - minX(of: from.column, in: origin[from.row]),
+            height: y
+        )
+    }
+
+    private func position(
+        of tab: FileTab.ID, in arrangement: [[FileTab.ID]]
+    ) -> (row: Int, column: Int)? {
+        for (r, row) in arrangement.enumerated() {
+            if let c = row.firstIndex(of: tab) { return (r, c) }
+        }
+        return nil
+    }
+
+    private func minX(of column: Int, in row: [FileTab.ID]) -> CGFloat {
+        row.prefix(column).reduce(metrics.stripPadding) {
+            $0 + (frozen[$1] ?? 0) + metrics.tabSpacing
+        }
     }
 
     // MARK: - Reading
@@ -78,7 +145,7 @@ public struct FileTabDrag: Equatable {
 
     /// Whether the pointer is asking for a row that does not exist yet, and
     /// would get one.
-    public func isProposingNewRow(widths: [FileTab.ID: CGFloat]) -> Bool {
+    public func isProposingNewRow() -> Bool {
         guard let (row, _) = position(of: id) else { return false }
         let count = proposal.count
         guard band(of: pointer.y, rows: count) >= count else { return false }
@@ -89,13 +156,11 @@ public struct FileTabDrag: Equatable {
 
     /// Where the dragged tab's leading edge is being asked to sit, clamped into
     /// the strip.
-    public func leadingEdge(
-        widths: [FileTab.ID: CGFloat], stripWidth: CGFloat
-    ) -> CGFloat {
+    public func leadingEdge(stripWidth: CGFloat) -> CGFloat {
         guard let (row, _) = position(of: id) else { return 0 }
-        return geometry(ofRow: row, widths: widths).clamped(
+        return geometry(ofRow: row).clamped(
             leadingEdge: pointer.x - grabX,
-            width: widths[id] ?? 0,
+            width: frozen[id] ?? 0,
             stripWidth: stripWidth
         )
     }
@@ -107,12 +172,10 @@ public struct FileTabDrag: Equatable {
     /// Vertical first, then horizontal **in the same call**, which is what makes
     /// a tab arriving in a row take its place in it immediately rather than
     /// sitting wherever it landed until the gesture ends.
-    public mutating func update(
-        pointer: CGPoint, widths: [FileTab.ID: CGFloat], stripWidth: CGFloat
-    ) {
+    public mutating func update(pointer: CGPoint, stripWidth: CGFloat) {
         self.pointer = pointer
-        settleRow(widths: widths)
-        settleColumn(widths: widths, stripWidth: stripWidth)
+        settleRow()
+        settleColumn(stripWidth: stripWidth)
     }
 
     /// Which row the pointer is asking for.
@@ -121,7 +184,7 @@ public struct FileTabDrag: Equatable {
     /// without a dead zone a few pixels of tremor at a boundary flips the tab
     /// between two rows over and over — the vertical answer to the same problem
     /// the edge-against-midline rule solves going sideways.
-    private mutating func settleRow(widths: [FileTab.ID: CGFloat]) {
+    private mutating func settleRow() {
         guard let (row, column) = position(of: id) else { return }
         let target = band(of: pointer.y, rows: proposal.count)
         guard target != row, hasReachedMiddle(of: target, from: row) else {
@@ -132,7 +195,7 @@ public struct FileTabDrag: Equatable {
         if target >= proposal.count {
             proposal.append([id])
         } else {
-            let slot = geometry(ofRow: target, widths: widths)
+            let slot = geometry(ofRow: target)
                 .slot(forLeadingEdge: pointer.x - grabX)
             proposal[target].insert(id, at: min(slot, proposal[target].count))
         }
@@ -147,17 +210,15 @@ public struct FileTabDrag: Equatable {
     /// geometry is rebuilt each time round — held across the loop it describes
     /// the row as it was before the step, and a wide tab passing a narrow one
     /// then reads itself as owed a move back and stays put.
-    private mutating func settleColumn(
-        widths: [FileTab.ID: CGFloat], stripWidth: CGFloat
-    ) {
-        let edge = leadingEdge(widths: widths, stripWidth: stripWidth)
+    private mutating func settleColumn(stripWidth: CGFloat) {
+        let edge = leadingEdge(stripWidth: stripWidth)
         guard let (row, _) = position(of: id) else { return }
         for _ in 0..<proposal[row].count {
             guard let (currentRow, currentColumn) = position(of: id) else {
                 return
             }
             guard
-                let step = geometry(ofRow: currentRow, widths: widths).step(
+                let step = geometry(ofRow: currentRow).step(
                     draggedAt: currentColumn, leadingEdge: edge
                 )
             else { return }
@@ -195,12 +256,10 @@ public struct FileTabDrag: Equatable {
         return row > from ? pointer.y >= middle : pointer.y <= middle
     }
 
-    private func geometry(
-        ofRow row: Int, widths: [FileTab.ID: CGFloat]
-    ) -> FileTabRowGeometry {
+    private func geometry(ofRow row: Int) -> FileTabRowGeometry {
         FileTabRowGeometry(
             widths: proposal.indices.contains(row)
-                ? proposal[row].map { widths[$0] ?? 0 } : [],
+                ? proposal[row].map { frozen[$0] ?? 0 } : [],
             spacing: metrics.tabSpacing,
             leading: metrics.stripPadding
         )
