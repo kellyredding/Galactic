@@ -475,6 +475,45 @@ final class FileTabStripModelTests: XCTestCase {
         XCTAssertEqual(m.tabs[0].url.lastPathComponent, "only.swift")
     }
 
+    // MARK: - Whether a step has anywhere to go
+
+    /// **The reported bug.** A tab alone in the last row refused to step back,
+    /// because the host asked whether it had a neighbour *in its row* — one
+    /// answer for both directions. A key equivalent whose menu item is disabled
+    /// is a system beep, so it read as broken rather than as nothing to do.
+    func testALoneTabInTheLastRowCanStillStepBack() {
+        var model = arranged([3, 1])
+        model.select(id: model.rows[1][0].id)
+
+        XCTAssertTrue(
+            model.canSelectPrevious,
+            "the tab before it is the last one of the row above"
+        )
+        XCTAssertFalse(model.canSelectNext, "it is the end of the order")
+    }
+
+    /// Asked per direction, so the two ends answer differently rather than both
+    /// being gated on one fact.
+    func testTheTwoEndsOfTheOrderRefuseOnlyTheirOwnDirection() {
+        var model = arranged([2, 2])
+        model.select(id: model.rows[0][0].id)
+        XCTAssertFalse(model.canSelectPrevious)
+        XCTAssertTrue(model.canSelectNext)
+
+        model.select(id: model.rows[1][1].id)
+        XCTAssertTrue(model.canSelectPrevious)
+        XCTAssertFalse(model.canSelectNext)
+    }
+
+    func testATabInTheMiddleCanGoBothWays() {
+        var model = arranged([3, 3])
+        model.select(id: model.rows[1][1].id)
+
+        XCTAssertTrue(model.canSelectPrevious)
+        XCTAssertTrue(model.canSelectNext)
+    }
+
+
     // MARK: - Navigating
 
     /// **Kept from the round where rows were derived, though for a new reason.**

@@ -264,12 +264,30 @@ public struct FileTabStripModel: Equatable {
     public mutating func selectNext() { step(by: 1) }
     public mutating func selectPrevious() { step(by: -1) }
 
-    private mutating func step(by delta: Int) {
-        guard let id = selectedID, let (r, c) = position(of: id) else { return }
+    /// Whether a step that way has anywhere to land.
+    ///
+    /// **Direction-specific, because the menu asks per key.** One answer for
+    /// both — "does this tab have a neighbour in its row" — is what made the
+    /// lone tab of a row refuse to go left at all, and a refused key equivalent
+    /// is a system beep rather than nothing happening. It was the right question
+    /// while a step stopped at a row's end, and stopped being one when steps
+    /// started crossing.
+    public var canSelectNext: Bool { target(steppingBy: 1) != nil }
+    public var canSelectPrevious: Bool { target(steppingBy: -1) != nil }
+
+    private func target(steppingBy delta: Int) -> FileTab.ID? {
+        guard let id = selectedID, let (r, c) = position(of: id) else {
+            return nil
+        }
         let all = tabs
         let next = flatIndex(row: r, column: c) + delta
-        guard next >= 0, next < all.count else { return }
-        selectedID = all[next].id
+        guard next >= 0, next < all.count else { return nil }
+        return all[next].id
+    }
+
+    private mutating func step(by delta: Int) {
+        guard let id = target(steppingBy: delta) else { return }
+        selectedID = id
     }
 
     /// Between rows, keeping the horizontal position where it can.

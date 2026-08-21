@@ -238,6 +238,11 @@ public final class FileSet: ObservableObject {
 
     public func selectNext() { tabs.selectNext() }
     public func selectPrevious() { tabs.selectPrevious() }
+
+    /// Whether the next or previous file keystroke has anywhere to go, so a host
+    /// can enable its menu item per direction rather than for both at once.
+    public var canSelectNext: Bool { tabs.canSelectNext }
+    public var canSelectPrevious: Bool { tabs.canSelectPrevious }
     public func selectNextRow() { stepRow(by: 1) }
     public func selectPreviousRow() { stepRow(by: -1) }
 
