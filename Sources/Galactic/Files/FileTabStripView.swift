@@ -67,9 +67,16 @@ public struct FileTabStripView: View {
         VStack(alignment: .leading, spacing: Metrics.rowSpacing) {
             let widths = sized
             ForEach(Array(displayRows.enumerated()), id: \.offset) { _, row in
-                HStack(spacing: Metrics.tabSpacing) {
+                // A layout rather than a stack, because a stack's size is its
+                // content and this row spends every point it is offered — see
+                // `FileTabRowLayout` for the loop that closes.
+                FileTabRowLayout(
+                    widths: row.map {
+                        widths[$0.id]?.width ?? Metrics.assumedTabWidth
+                    },
+                    spacing: Metrics.tabSpacing
+                ) {
                     ForEach(row) { tab in tabView(tab, widths) }
-                    Spacer(minLength: 0)
                 }
             }
 
@@ -140,6 +147,7 @@ public struct FileTabStripView: View {
         return FileTabView(
             tab: tab,
             label: entry?.label ?? FileTabLabel.floor(for: tab.url),
+            width: entry?.width ?? Metrics.assumedTabWidth,
             root: set.root,
             noteCount: set.noteCount(forPath: tab.path),
             isSelected: set.tabs.selectedID == tab.id,
@@ -147,9 +155,6 @@ public struct FileTabStripView: View {
             onClose: { onClose(tab.id) },
             onReload: { onReload(tab.id) }
         )
-        // The width the fit decided, so what is drawn and what the drag reasons
-        // about are the same number rather than two that usually agree.
-        .frame(width: entry?.width ?? Metrics.assumedTabWidth)
         // A resting tab is a tint and a border over whatever is behind it, which
         // is right until one is dragged across another and you can read both
         // through each other. The base goes on only while it moves, so nothing
@@ -425,6 +430,14 @@ private struct FileTabView: View {
     /// the width the stack proposes, which is a guess made before the leftover
     /// is known.
     let label: String
+    /// The width the row's fit gave this tab.
+    ///
+    /// Applied **inside** the pill rather than around it. Applied outside — on
+    /// the view that holds the background and the border — a tab wider than its
+    /// label drew a content-sized pill sitting in a pool of dead space, which
+    /// reads as a gap with a border in the middle of it rather than as a tab
+    /// using its row.
+    let width: CGFloat
     /// Only for the context menu's relative-path copy. The label no longer needs
     /// it, since the row's fit resolved that already.
     let root: URL
@@ -469,11 +482,17 @@ private struct FileTabView: View {
             // Reserved rather than conditional: a close button that appears on
             // hover must not widen the tab as it does, or every label re-measures
             // and the strip twitches under the cursor.
+            // Holds the close button against the trailing edge once the pill
+            // is wider than its own label, which the fit's spare room makes
+            // routine.
+            Spacer(minLength: 0)
+
             closeButton
                 .opacity(isHovering ? 1 : 0)
                 .allowsHitTesting(isHovering)
         }
         .padding(.horizontal, 6)
+        .frame(width: width, alignment: .leading)
         // No floor and no cap. A tab is as wide as its label wants and as
         // narrow as the row makes it, and the row is the only cap there is.
         //

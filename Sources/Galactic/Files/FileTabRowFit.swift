@@ -45,13 +45,6 @@ public enum FileTabRowFit {
         public let width: CGFloat
     }
 
-    /// Narrower than this and a tab is a stub with no word in it, so a row too
-    /// crowded to give everyone this much stops dividing and lets the labels
-    /// truncate instead. Not a floor on the *tab* — the row is still the only
-    /// real cap — a floor on the arithmetic, so dividing by enough tabs cannot
-    /// reach zero.
-    public static let hardMinimum: CGFloat = 46
-
     /// The font labels are drawn in. Measuring has to agree with drawing, so
     /// both come from here.
     public static func font(ofSize size: CGFloat) -> NSFont {
@@ -73,70 +66,111 @@ public enum FileTabRowFit {
     ) -> [Sized] {
         guard !candidates.isEmpty else { return [] }
 
-        let gaps = spacing * CGFloat(candidates.count - 1)
-        let room = max(0, available - gaps)
-
         // Every tier's width up front: the label as drawn, plus what the tab
-        // costs around it.
-        let widths: [[CGFloat]] = candidates.map { candidate in
-            candidate.tiers.map { width(of: $0, font: font) + candidate.chrome }
+        // costs around it — and **sorted by that width**, not trusted to arrive
+        // in order. The upgrade loop below assumes the tier before is the wider
+        // one, and a proportional font does not rank by character count:
+        // `p/kajabi/w/api.rb` and `p/k/workers/api.rb` have the same length and
+        // different widths. Sorting here means the caller can offer its tiers in
+        // whatever order says something, and only this has to know which is
+        // bigger.
+        let tiers: [[(label: String, width: CGFloat)]] = candidates.map {
+            candidate in
+            candidate.tiers
+                .map { (label: $0, width: width(of: $0, font: font) + candidate.chrome) }
+                .sorted { $0.width > $1.width }
         }
+        let widths: [[CGFloat]] = tiers.map { $0.map(\.width) }
 
-        // Start everyone at their narrowest and buy upgrades with what is left.
-        // Starting wide and cutting back would need a rule for whose label to
-        // take first; starting narrow only ever needs a rule for whose to
-        // improve, and one step each per pass spreads it evenly.
-        var chosen = widths.map { max(0, $0.count - 1) }
-        var total = zip(widths, chosen).reduce(CGFloat.zero) { $0 + $1.0[$1.1] }
-
-        var improved = true
-        while improved {
-            improved = false
-            for index in candidates.indices where chosen[index] > 0 {
-                let next = chosen[index] - 1
-                let delta = widths[index][next] - widths[index][chosen[index]]
-                guard total + delta <= room else { continue }
-                chosen[index] = next
-                total += delta
-                improved = true
-            }
-        }
-
-        // Still over, so the narrowest labels do not all fit. Divide evenly and
-        // let them truncate: a row is allowed to be crowded, and a tab pushed
-        // out of the strip would be unreachable rather than merely small.
-        if total > room {
-            let share = max(hardMinimum, room / CGFloat(candidates.count))
+        // **No width yet means unmeasured, not zero room.** The strip has no
+        // size until its first layout pass, and dividing that among the tabs
+        // gives every one of them nothing — a strip of invisible tabs for a
+        // frame. Their narrowest label is the honest answer to a question that
+        // has not been asked yet.
+        guard available > 0 else {
             return candidates.enumerated().map { index, candidate in
                 Sized(
                     id: candidate.id,
-                    label: candidate.tiers.last ?? "",
+                    label: tiers[index].last?.label ?? "",
+                    width: widths[index][widths[index].count - 1]
+                )
+            }
+        }
+
+        let gaps = spacing * CGFloat(candidates.count - 1)
+        let room = max(0, available - gaps)
+
+        // Start everyone at their narrowest and buy upgrades with what is left.
+        // Starting wide and cutting back would need a rule for whose label to
+        // take away; starting narrow only needs a rule for whose to improve.
+        var chosen = widths.map { max(0, $0.count - 1) }
+        var total = zip(widths, chosen).reduce(CGFloat.zero) { $0 + $1.0[$1.1] }
+
+        // **The narrowest tab that can afford an upgrade takes it**, rather than
+        // walking the row in order. Order was the obvious loop and it front-loads:
+        // the first tab buys its whole path, leaves nothing, and the rest stay at
+        // their filename — so a tab's label depended on where in the row it sat,
+        // and reordering the strip changed what the tabs said. Feeding the most
+        // starved one first cannot do that.
+        while true {
+            var pick: Int?
+            var starvest = CGFloat.greatestFiniteMagnitude
+            for index in candidates.indices where chosen[index] > 0 {
+                let delta =
+                    widths[index][chosen[index] - 1] - widths[index][chosen[index]]
+                guard total + delta <= room else { continue }
+                let current = widths[index][chosen[index]]
+                if current < starvest {
+                    starvest = current
+                    pick = index
+                }
+            }
+            guard let index = pick else { break }
+            let next = chosen[index] - 1
+            total += widths[index][next] - widths[index][chosen[index]]
+            chosen[index] = next
+        }
+
+        // Still over, so even the narrowest labels do not all fit. Divide what
+        // there is and let them truncate. **No floor**: a floor is what makes a
+        // row overflow, and a tab pushed off the end of the strip is unreachable
+        // rather than merely small. Shrinking has no bottom for the same reason
+        // the row is the only cap — the reader adds a row or closes a tab.
+        if total > room {
+            let share = room / CGFloat(candidates.count)
+            return candidates.enumerated().map { index, candidate in
+                Sized(
+                    id: candidate.id,
+                    label: tiers[index].last?.label ?? "",
                     width: min(share, widths[index][chosen[index]])
                 )
             }
         }
 
-        // **A row is left with its slack rather than filled, and that is not an
-        // oversight.** Once every label is at its widest tier there is nothing
-        // more to buy, so a row of short filenames stops early — which reads as
-        // squashed tabs even though each is showing everything it has.
+        // Whatever is unspent goes out evenly, so the row is used rather than
+        // ending early. Once every label is at its widest tier — the whole path,
+        // relative to the root — there is nothing further to *show*, and the
+        // extra goes into the pills themselves rather than beside them: a wider
+        // pill is the strip using its row, dead space around a content-sized
+        // pill is just a gap with a border drawn in the middle of it.
         //
-        // Spreading the remainder across them was tried and hung the app.
-        // MEASURED: the main thread went to 23,121 frames of recursive
-        // `-[NSView _layoutSubtreeWithOldSize:]` at 80% CPU, against 955 frames
-        // and idle without it. The reason is that this function is handed a
-        // width derived from the strip, and the strip's width is derived from
-        // what this function returns; spending the last point of it closes that
-        // loop, and rounding label widths up means each pass gains a fraction
-        // and the layout never settles. Filling the row needs a width that
-        // provably cannot move when the fit spends it — pinning the strip to its
-        // parent was not enough on its own — and that is its own change with its
-        // own measurement, not a line here.
+        // Evenly, not to the last tab: growing one of them would make a width
+        // depend on its position, so the same file would be a different size for
+        // having been opened later.
+        //
+        // **Only safe because the row reports the width it was offered rather
+        // than the width its tabs add up to** — see `FileTabRowLayout`. Spending
+        // the last point of a width measured *from* the content closes a layout
+        // loop, and it hangs rather than misbehaves: 23,121 frames of recursive
+        // `-[NSView _layoutSubtreeWithOldSize:]` at ~80% CPU when this row was a
+        // stack.
+        let spare = max(0, room - total) / CGFloat(candidates.count)
+
         return candidates.enumerated().map { index, candidate in
             Sized(
                 id: candidate.id,
-                label: candidate.tiers[chosen[index]],
-                width: widths[index][chosen[index]]
+                label: tiers[index][chosen[index]].label,
+                width: widths[index][chosen[index]] + spare
             )
         }
     }

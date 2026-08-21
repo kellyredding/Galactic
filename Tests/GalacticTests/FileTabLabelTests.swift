@@ -23,16 +23,28 @@ final class FileTabLabelTests: XCTestCase {
         XCTAssertEqual(tiers.first, "src/models/user.rb")
     }
 
-    func testTiersNarrowInOrderAndEndAtTheFilename() {
+    /// Widest first, one folder initialled per step, ending at the filename.
+    ///
+    /// **`models/user.rb` used to be one of these and is not any more.** Dropping
+    /// the leading folders outright threw away how deep the file sits, which is
+    /// the thing initialling them was invented to keep — `s/models/user.rb` says
+    /// there is one folder above and this is not the top, and it costs two
+    /// characters to say it. Losing that tier also means each step is strictly
+    /// narrower than the one before, so the order is reliable rather than
+    /// coincidental.
+    func testTiersNarrowOneFolderAtATimeAndEndAtTheFilename() {
         let tiers = FileTabLabel.tiers(
             for: url("/work/project/src/models/user.rb"), root: root
         )
 
         XCTAssertEqual(
             tiers,
-            ["src/models/user.rb", "models/user.rb", "s/m/user.rb", "user.rb"],
-            "widest first — and `models/user.rb` is wider than `s/m/user.rb`, "
-                + "so informativeness and width are not the same ordering"
+            [
+                "src/models/user.rb",
+                "s/models/user.rb",
+                "s/m/user.rb",
+                "user.rb",
+            ]
         )
     }
 
@@ -175,32 +187,46 @@ final class FileTabLabelTests: XCTestCase {
         XCTAssertEqual(Set(tiers).count, tiers.count, "no tier repeats")
     }
 
-    /// The strip spells out one `ViewThatFits` child per tier, because a
-    /// `ForEach` inside one is a single candidate. A fifth tier arriving here
-    /// without `tierCount` moving would simply never be offered — the label
-    /// would sit one notch wider than it had to, and nothing would fail.
-    func testNoTierListExceedsTheCountTheStripDrawsFor() {
-        let siblings = [
-            url("/work/project/web/index.ts"),
-            url("/work/project/worker/index.ts"),
-        ]
-        for path in [
-            "/work/project/a.rb",
-            "/work/project/src/a.rb",
-            "/work/project/a/b/c/d/e.rb",
-            "/work/project/web/index.ts",
-            "/elsewhere/deeply/nested/f.rb",
-            "/f.rb",
-        ] {
-            let tiers = FileTabLabel.tiers(
-                for: url(path), root: root, siblings: siblings
-            )
-            XCTAssertLessThanOrEqual(
-                tiers.count,
-                FileTabLabel.tierCount,
-                "\(path) offers more tiers than the strip has slots"
-            )
-        }
+    /// A tier per folder, unwinding from the right.
+    ///
+    /// **The four coarse tiers this replaced were a cliff.** From every folder
+    /// initialled, the only step up was the entire path — so a row with a little
+    /// room left over could not buy anything with it, and a tab sat squashed
+    /// while the row it was in looked half empty. One folder at a time gives the
+    /// fit something it can afford.
+    ///
+    /// From the right because the folders nearest the file are the ones that say
+    /// which file it is.
+    func testATierPerFolderUnwoundFromTheRight() {
+        let tiers = FileTabLabel.tiers(
+            for: url("/work/project/app/models/live/api.rb"), root: root
+        )
+
+        XCTAssertEqual(
+            tiers,
+            [
+                "app/models/live/api.rb",
+                "a/models/live/api.rb",
+                "a/m/live/api.rb",
+                "a/m/l/api.rb",
+                "api.rb",
+            ]
+        )
+    }
+
+    /// Deep paths get proportionally more steps, which is the point: the deeper
+    /// the file, the more the old cliff cost.
+    func testADeeperPathOffersMoreSteps() {
+        let shallow = FileTabLabel.tiers(
+            for: url("/work/project/src/a.rb"), root: root
+        )
+        // Real folder names, because single-character ones initial to
+        // themselves and every step would dedupe into one.
+        let deep = FileTabLabel.tiers(
+            for: url("/work/project/app/models/live/nested/api.rb"), root: root
+        )
+
+        XCTAssertGreaterThan(deep.count, shallow.count)
     }
 
     func testEveryTierListIsNonEmpty() {

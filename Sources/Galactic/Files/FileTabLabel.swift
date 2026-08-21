@@ -14,16 +14,22 @@ import Foundation
 /// nothing setting a repeating curve on the transaction.
 public enum FileTabLabel {
 
-    /// The most tiers `tiers(for:root:siblings:)` can return.
+    /// Labels for one tab, widest first — one for every folder that could be
+    /// spelled out instead of initialled.
     ///
-    /// Read by the strip, which needs a **fixed** number of `ViewThatFits`
-    /// children — a `ForEach` inside one is a single child, so the slots have to
-    /// be spelled out. A fifth tier added here without this number moving would
-    /// simply never be offered, and the label would be one notch wider than it
-    /// had to be with nothing failing. `FileTabLabelTests` pins the two together.
-    public static let tierCount = 4
-
-    /// Labels for one tab, widest first.
+    /// **A tier per folder, not four tiers.** It used to offer the whole path,
+    /// the path with every folder cut to its initial, the last folder plus the
+    /// filename, and the filename — which is a cliff. A row with room left over
+    /// could not buy anything with it, because the only upgrade on offer from
+    /// `p/k/e/a/m/api_client.rb` was the entire path, and the leftover was never
+    /// that big. So the room went unspent and the tab looked squashed while the
+    /// row looked empty. Unwinding one folder at a time gives the fit something
+    /// it can actually afford.
+    ///
+    /// Unwound from the **right**, because the folders nearest the file are the
+    /// ones that say which file it is: `app/models/user.rb` and
+    /// `spec/models/user.rb` differ at the left, but `a/m/user.rb` against
+    /// `a/models/user.rb` is the step that starts telling you something.
     ///
     /// - Parameters:
     ///   - url: the file this tab holds.
@@ -31,9 +37,8 @@ public enum FileTabLabel {
     ///     anything else is given up. A file outside it keeps an absolute path,
     ///     shortened at the home directory.
     ///   - siblings: every other open file. Consulted for one thing only —
-    ///     whether the bare filename is ambiguous, in which case it is not
-    ///     offered. A strip showing two tabs both reading `index.ts` has told
-    ///     the reader nothing.
+    ///     whether a label is ambiguous, in which case it is not offered. A strip
+    ///     showing two tabs both reading `index.ts` has told the reader nothing.
     public static func tiers(
         for url: URL,
         root: URL?,
@@ -42,37 +47,41 @@ public enum FileTabLabel {
         let relative = relativeOrAbbreviated(url, root: root)
         let others = siblings.filter { $0.path != url.path }
 
-        var candidates = [relative]
+        var parts = relative.split(separator: "/", omittingEmptySubsequences: false)
+            .map(String.init)
+        guard parts.count > 1 else { return [relative] }
+        let filename = parts.removeLast()
+        let folders = parts
 
-        // Offered only when it still tells two tabs apart. `web/` and `worker/`
-        // both squash to `w/`, so the same guard the bare filename needs
-        // applies one tier up — otherwise the strip narrows into two labels
-        // that read identically, which is worse than either staying wide.
-        let squashed = squashingFolders(relative)
-        let squashCollides = others.contains {
-            squashingFolders(relativeOrAbbreviated($0, root: root)) == squashed
+        // Widest first: everything spelled out, then one more folder initialled
+        // each step, from the left inwards.
+        var candidates: [String] = []
+        for spelled in stride(from: folders.count, through: 0, by: -1) {
+            let shown = folders.enumerated().map { index, folder in
+                index >= folders.count - spelled ? folder : initial(of: folder)
+            }
+            candidates.append((shown + [filename]).joined(separator: "/"))
         }
-        if !squashCollides { candidates.append(squashed) }
 
-        candidates.append(parentAndFilename(relative))
-
-        // The bare filename, on the same condition. Two tabs both reading
-        // `index.ts` have told the reader nothing.
-        let filename = url.lastPathComponent
-        let filenameCollides = others.contains {
-            $0.lastPathComponent == filename
+        // The all-initials form goes only when it still tells two tabs apart.
+        // `web/` and `worker/` both squash to `w/`, so two tabs would narrow into
+        // labels that read identically — worse than either staying wide.
+        if let allInitials = candidates.last,
+            others.contains(where: {
+                squashingFolders(relativeOrAbbreviated($0, root: root))
+                    == allInitials
+            })
+        {
+            candidates.removeLast()
         }
-        if !filenameCollides { candidates.append(filename) }
 
-        // Sorted by width rather than trusted to be in order. `models/user.rb`
-        // is *narrower* than `src/models/user.rb` and *wider* than
-        // `s/m/user.rb`, so the informative ordering and the width ordering are
-        // not the same one — and `ViewThatFits` takes the first that fits, so a
-        // list out of width order silently skips a label that would have fit.
+        // The bare filename, on the same condition.
+        if !others.contains(where: { $0.lastPathComponent == filename }) {
+            candidates.append(filename)
+        }
+
         var seen = Set<String>()
-        return candidates
-            .filter { seen.insert($0).inserted }
-            .sorted { $0.count > $1.count }
+        return candidates.filter { seen.insert($0).inserted }
     }
 
     /// The label for a tab too narrow for any tier, which is always the
@@ -121,16 +130,18 @@ public enum FileTabLabel {
             .map(String.init)
         guard parts.count > 1 else { return path }
         let filename = parts.removeLast()
-        let squashed = parts.map { part -> String in
-            // A leading dot is the identifying character of a dotfile
-            // directory, so `.github` squashes to `.g` rather than to `.`.
-            guard let first = part.first else { return part }
-            if first == ".", part.count > 1 {
-                return String(part.prefix(2))
-            }
-            return String(first)
-        }
+        let squashed = parts.map(initial(of:))
         return (squashed + [filename]).joined(separator: "/")
+    }
+
+    /// A folder reduced to the character that identifies it.
+    ///
+    /// A leading dot is part of that identity, so `.github` becomes `.g` rather
+    /// than a bare dot that could be anything.
+    static func initial(of folder: String) -> String {
+        guard let first = folder.first else { return folder }
+        if first == ".", folder.count > 1 { return String(folder.prefix(2)) }
+        return String(first)
     }
 
     /// The immediate directory and the filename, taken from the *relative*
