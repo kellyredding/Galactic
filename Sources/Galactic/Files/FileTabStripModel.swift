@@ -231,14 +231,27 @@ public struct FileTabStripModel: Equatable {
             .filter { !$0.isEmpty }
     }
 
-    /// Put a reopened tab back where it was, or at the end if that row is gone.
+    /// Put a reopened tab back where it was, giving up one coordinate at a time
+    /// as the strip has moved on.
     ///
-    /// Appending rather than recreating the row: a row that has since been
-    /// emptied and removed took its position with it, and inserting a row back
-    /// into the middle would move every tab the reader has looked at since.
+    /// Its own place in its own row, which is the point: closing the third of
+    /// five tabs and taking it straight back has undone nothing if it returns
+    /// fifth. Then the end of that row, when the row is still there but has
+    /// since shrunk past where the tab sat. Then the end of the strip, when the
+    /// row itself has gone.
+    ///
+    /// **A vanished row is not recreated.** A row that was emptied and removed
+    /// took its position with it, and inserting one back into the middle would
+    /// move every tab the reader has looked at since — which is a bigger
+    /// surprise than the tab arriving somewhere else.
+    ///
+    /// Unlike `open`, this ignores what is selected. Reopening is putting
+    /// something back where it was, not opening something new beside what you
+    /// are reading, and the remembered place is the better answer precisely
+    /// because the reader chose it.
     @discardableResult
     public mutating func reopen(
-        url: URL, preferredRow: Int
+        url: URL, preferredRow: Int, preferredColumn: Int = 0
     ) -> FileTab {
         if let existing = tab(forPath: url.path) {
             selectedID = existing.id
@@ -246,7 +259,11 @@ public struct FileTabStripModel: Equatable {
         }
         let tab = FileTab(url: url)
         if preferredRow >= 0, preferredRow < rows.count {
-            rows[preferredRow].append(tab)
+            // Clamped rather than refused: a column past the row's end means
+            // the row has shrunk since, and the end of the right row is a
+            // better answer than the end of the strip.
+            let column = min(max(0, preferredColumn), rows[preferredRow].count)
+            rows[preferredRow].insert(tab, at: column)
         } else if rows.isEmpty {
             rows.append([tab])
         } else {

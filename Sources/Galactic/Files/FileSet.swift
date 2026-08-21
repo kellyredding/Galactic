@@ -163,10 +163,14 @@ public final class FileSet: ObservableObject {
         guard let position = tabs.position(of: id) else { return nil }
         guard let closed = tabs.close(id: id) else { return nil }
 
-        closedTabs.push(url: closed.url, row: position.row)
+        closedTabs.push(
+            url: closed.url, row: position.row, column: position.column
+        )
         notes.drop(path: closed.path)
         frozen[closed.path] = nil
-        return ClosedTabStack.Entry(url: closed.url, row: position.row)
+        return ClosedTabStack.Entry(
+            url: closed.url, row: position.row, column: position.column
+        )
     }
 
     /// Reopen the most recently closed file, into the row it came from.
@@ -181,7 +185,10 @@ public final class FileSet: ObservableObject {
 
         let file = try ReaderFile.load(url: entry.url)
         frozen[entry.url.path] = file
-        let tab = tabs.reopen(url: entry.url, preferredRow: entry.row)
+        let tab = tabs.reopen(
+            url: entry.url, preferredRow: entry.row,
+            preferredColumn: entry.column
+        )
         recordRecent(entry.url)
         return tab
     }

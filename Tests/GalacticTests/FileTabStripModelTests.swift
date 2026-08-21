@@ -411,15 +411,39 @@ final class FileTabStripModelTests: XCTestCase {
 
     // MARK: - Reopening
 
-    func testReopeningReturnsATabToItsOriginalRow() {
+    /// Its own place, not the end of its row. Closing the second of four tabs
+    /// and taking it straight back has undone nothing if it returns fourth.
+    func testReopeningReturnsATabToItsOwnPlaceInItsRow() {
         var m = arranged([4, 2])
-        let fromSecondRow = m.rows[1][1]
+        let secondOfFour = m.rows[0][1]
+        let others = m.rows[0].map(\.path).filter { $0 != secondOfFour.path }
 
-        m.close(id: fromSecondRow.id)
-        m.reopen(url: fromSecondRow.url, preferredRow: 1)
+        m.close(id: secondOfFour.id)
+        m.reopen(url: secondOfFour.url, preferredRow: 0, preferredColumn: 1)
 
         XCTAssertEqual(m.rows.map(\.count), [4, 2])
-        XCTAssertEqual(m.rows[1].last?.path, fromSecondRow.path)
+        XCTAssertEqual(m.rows[0][1].path, secondOfFour.path)
+        XCTAssertEqual(
+            m.rows[0].map(\.path),
+            [others[0], secondOfFour.path, others[1], others[2]],
+            "and the tabs it sat between are still either side of it"
+        )
+    }
+
+    /// A row that has shrunk past where the tab sat gets it at the end — the
+    /// right row is a better answer than the right index in the wrong one.
+    func testReopeningClampsToTheEndOfARowThatHasShrunk() {
+        var m = arranged([4, 3])
+        let fromThirdPlace = m.rows[1][2]
+
+        m.close(id: fromThirdPlace.id)
+        m.close(id: m.rows[1][1].id)
+        XCTAssertEqual(m.rows[1].count, 1, "precondition: the row shrank")
+
+        m.reopen(url: fromThirdPlace.url, preferredRow: 1, preferredColumn: 2)
+
+        XCTAssertEqual(m.rows.map(\.count), [4, 2])
+        XCTAssertEqual(m.rows[1].last?.path, fromThirdPlace.path)
     }
 
     /// A row that emptied took its position with it, and inserting one back into

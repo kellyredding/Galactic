@@ -159,16 +159,27 @@ final class FileSetTests: XCTestCase {
 
     // MARK: - Reopening
 
-    func testReopeningTheLastClosedFileReturnsItToItsRow() throws {
+    /// End to end, which is what ⇧⌘T is: the place is remembered on the way out
+    /// and honoured on the way back, so taking a tab back undoes the close
+    /// rather than moving the tab.
+    func testReopeningTheLastClosedFileReturnsItToItsOwnPlace() throws {
         let set = makeSet()
-        let a = try set.open(url: try write("a.swift"))
-        try set.open(url: try write("b.swift"))
-        set.close(id: a.id)
+        try set.open(url: try write("a.swift"))
+        let middle = try set.open(url: try write("b.swift"))
+        try set.open(url: try write("c.swift"))
+        XCTAssertEqual(set.tabs.position(of: middle.id)?.column, 1)
 
+        set.close(id: middle.id)
         let reopened = try set.reopenLastClosed()
 
-        XCTAssertEqual(reopened?.url.lastPathComponent, "a.swift")
-        XCTAssertEqual(set.tabs.position(of: reopened!.id)?.row, 0)
+        XCTAssertEqual(reopened?.url.lastPathComponent, "b.swift")
+        let position = set.tabs.position(of: reopened!.id)
+        XCTAssertEqual(position?.row, 0)
+        XCTAssertEqual(position?.column, 1, "back between a and c, not after c")
+        XCTAssertEqual(
+            set.tabs.tabs.map(\.url.lastPathComponent),
+            ["a.swift", "b.swift", "c.swift"]
+        )
         XCTAssertTrue(set.closedTabs.isEmpty)
         XCTAssertNotNil(set.file(forPath: reopened!.path))
     }
