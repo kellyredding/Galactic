@@ -63,10 +63,26 @@ enum FileMatchAlignment {
     /// query `notes`: every letter landed after a `/` and collected a
     /// word-start bonus, and nothing charged for the distance between them.
     ///
-    /// Charged **within** a token only. The gap between two tokens is free,
-    /// and that is the whole content of what a space in the query means.
+    /// Charged **within** a token only. Between two tokens, distance is
+    /// answered by `tokenProximityBonus` instead — a space asks for a gap, so
+    /// charging for one would contradict what the reader typed.
     static let gapStartPenalty = 3
     static let gapExtensionPenalty = 1
+    /// Awarded per pair of consecutive tokens, decaying with the distance
+    /// between them.
+    ///
+    /// A free inter-token gap made `linear-sync-cli-fetch.md` and
+    /// `linear-cli.md` score *identically* for `linear cli` — measured, both
+    /// placed at 216, with only the recency bonus separating them. Someone
+    /// typing two runs means two runs that belong together, so landing them
+    /// beside each other has to be worth something.
+    ///
+    /// The award at one character's separation must clear `maxRecencyBonus`
+    /// against the award at a word's separation, or a recently-touched split
+    /// match still outranks an adjacent one — which is the bug, not a tie.
+    /// At a decay of 4 that margin is 16 against a recency span of 12.
+    static let tokenProximityBonus = 24
+    static let tokenProximityDecay = 4
     /// Deducted per character skipped before the first match, capped so a long
     /// path cannot drive a real match negative.
     static let maxLeadingPenalty = 12
@@ -146,10 +162,16 @@ enum FileMatchAlignment {
                     if index == 0 {
                         // A token's first character takes no contiguity award
                         // and no gap charge: the distance from the previous
-                        // token is the space the reader typed.
+                        // token is the space the reader typed. What it does
+                        // take is the proximity award — how near the reader's
+                        // two runs actually landed.
                         if first < 0 {
                             first = position
                             total -= min(position, maxLeadingPenalty)
+                        } else {
+                            total += proximity(
+                                separating: position - previous - 1
+                            )
                         }
                     } else if position == previous + 1 {
                         total += contiguousBonus
@@ -205,8 +227,14 @@ enum FileMatchAlignment {
                         total += wordStartBonus
                     }
                     if index == length - 1 {
-                        // The token's last character. Whatever follows it
-                        // belongs to the next token, so no award and no charge.
+                        // The token's last character. What follows belongs to
+                        // the next token, so no contiguity award and no gap
+                        // charge — only how near the two runs landed. `next`
+                        // still holds that token's first character, and the
+                        // last token has nothing after it to be near.
+                        if next >= 0 {
+                            total += proximity(separating: next - position - 1)
+                        }
                     } else if position == next - 1 {
                         total += contiguousBonus
                     } else {
@@ -350,14 +378,15 @@ enum FileMatchAlignment {
         }
     }
 
-    /// The last `/` in the candidate.
+    /// The candidate's last `/`.
     ///
-    /// The whole candidate, rather than the last one seen before the match
-    /// ended — which is what the pass this replaces compared against, and it
-    /// was an approximation that disagreed with its own documentation. Under
-    /// it, `docs` matching the *directory* in `docs/notes.md` collected the
-    /// bonus for having matched inside a filename, because the separator after
-    /// it had not been reached yet. Scanning backwards costs a basename.
+    /// Over the whole candidate, rather than the last one seen before the
+    /// match ended — which is what the pass this replaces compared against,
+    /// and it was an approximation that disagreed with its own documentation.
+    /// Under it, `docs` matching the *directory* in `docs/notes.md` collected
+    /// the bonus for having matched inside a filename, because the separator
+    /// after it had not been reached yet. Costs a basename, since it stops at
+    /// the first one it finds.
     @inline(__always)
     private static func lastSeparator(
         in candidate: UnsafeBufferPointer<UInt8>
@@ -368,5 +397,25 @@ enum FileMatchAlignment {
             position -= 1
         }
         return -1
+    }
+
+    /// How deep in the tree the candidate sits.
+    ///
+    /// Asked only of candidates that matched, rather than of every entry the
+    /// prefilter admits, because it is a whole-candidate walk where the
+    /// basename boundary above can stop early.
+    static func separatorCount(in candidate: UnsafeBufferPointer<UInt8>) -> Int {
+        var count = 0
+        for position in 0..<candidate.count where candidate[position] == 0x2F {
+            count += 1
+        }
+        return count
+    }
+
+    /// What a pair of consecutive tokens earns for landing `distance`
+    /// characters apart. Zero once they are far enough apart to be unrelated.
+    @inline(__always)
+    private static func proximity(separating distance: Int) -> Int {
+        max(0, tokenProximityBonus - distance * tokenProximityDecay)
     }
 }

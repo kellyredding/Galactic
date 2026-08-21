@@ -70,17 +70,37 @@ final class FileMatcherTests: XCTestCase {
         XCTAssertEqual(found.first, wanted)
     }
 
-    /// What the space costs is now only the separator the reader did not type:
-    /// its own match award, and the contiguity either side of it. Nothing
-    /// structural — no gap charge, no forfeited basename bonus. Stated against
-    /// the weights rather than a literal so a reweighting cannot make this
-    /// silently vacuous.
-    func testASpacedQueryLosesOnlyTheSeparatorItDidNotType() {
+    /// Typing the space costs less than typing a character, which is the
+    /// weakest form of "not a downgrade" that survives a reweighting. The
+    /// residue is the separator itself, offset by what the two runs earn for
+    /// landing next to each other.
+    func testASpacedQueryCostsLessThanACharacter() {
         let path = "projects/kajabi/agent-guidelines/linear-cli.md"
-        XCTAssertEqual(
+        XCTAssertLessThan(
             score(path, "linear-cli") - score(path, "linear cli"),
-            FileMatchAlignment.matchScore + 2 * FileMatchAlignment.contiguousBonus
+            FileMatchAlignment.matchScore
         )
+    }
+
+    /// Two runs that land beside each other are two runs that belong together.
+    /// Measured before proximity was weighed, these placed *identically* at
+    /// 216 and only the recency bonus separated them — so a fresher split
+    /// match outranked an adjacent one.
+    func testAdjacentTokensOutrankSplitOnes() {
+        let found = ranked(
+            ["docs/linear-sync-cli-fetch.md", "docs/linear-cli.md"],
+            "linear cli"
+        )
+        XCTAssertEqual(found.first, "docs/linear-cli.md")
+    }
+
+    /// And the award decays rather than switching off, so a near-miss still
+    /// beats a run split by a whole word.
+    func testANearerSplitOutranksAFartherOne() {
+        let found = ranked(
+            ["docs/linear-sync-cli.md", "docs/linear-x-cli.md"], "linear cli"
+        )
+        XCTAssertEqual(found.first, "docs/linear-x-cli.md")
     }
 
     func testEachTokenEarnsItsOwnWordStart() {
@@ -162,6 +182,45 @@ final class FileMatcherTests: XCTestCase {
     func testMatchingADirectoryDoesNotEarnTheBasenameBonus() {
         let found = ranked(["docs/notes.md", "notes/docs.md"], "docs")
         XCTAssertEqual(found.first, "notes/docs.md")
+    }
+
+    /// Shallower wins between two matches that placed equally well. Measured
+    /// before depth was a tier, the deep copies of an artifact ranked above the
+    /// shallow original on recency alone — which teaches a reader to scroll
+    /// when what they should do is re-root somewhere deeper.
+    func testAShallowerMatchOutranksADeeperOne() {
+        let found = ranked(
+            [
+                "a/b/c/d/e/495_aa-capture-linear-cli-fallback.md",
+                "projects/kajabi/agent-guidelines/linear-cli.md",
+            ],
+            "linear-cli"
+        )
+        XCTAssertEqual(
+            found.first, "projects/kajabi/agent-guidelines/linear-cli.md"
+        )
+    }
+
+    /// But depth is a tier below placement, so it cannot overturn a better
+    /// one. An additive depth penalty could and did: at four points a level it
+    /// flipped `lib/abuser.rb` above `src/models/user.rb` for `user`, by one
+    /// point, undoing the word-start rule two tests above.
+    func testDepthDoesNotOverturnABetterPlacement() {
+        let found = ranked(["lib/abuser.rb", "src/models/user.rb"], "user")
+        XCTAssertEqual(found.first, "src/models/user.rb")
+    }
+
+    /// And recency sits below depth, so it can no longer decide between two
+    /// matches at different depths — the measured cause of the deep artifact
+    /// copies outranking the shallow original.
+    func testRecencyDoesNotOverturnAShallowerMatch() {
+        let now = Date()
+        let old = Date(timeIntervalSinceNow: -400 * 86_400)
+        let found = ranked(
+            ["a/b/c/d/notes.md", "notes.md"], "notes",
+            modified: ["a/b/c/d/notes.md": now, "notes.md": old]
+        )
+        XCTAssertEqual(found.first, "notes.md")
     }
 
     func testShorterPathWinsAtEqualScore() {
