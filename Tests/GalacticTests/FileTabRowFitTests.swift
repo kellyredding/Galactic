@@ -117,6 +117,65 @@ final class FileTabRowFitTests: XCTestCase {
         )
     }
 
+    // MARK: - Whether the label on screen is the whole story
+
+    /// What the tooltip is gated on. A tab showing its full label has nothing
+    /// hidden, so hovering it must reveal nothing.
+    func testATabWithRoomForItsFullLabelIsNotShrunken() {
+        let sized = fit(
+            [candidate(["src/models/user.rb", "s/m/user.rb"])], available: 600
+        )
+
+        XCTAssertEqual(sized.first?.label, "src/models/user.rb")
+        XCTAssertEqual(sized.first?.full, "src/models/user.rb")
+        XCTAssertFalse(sized.first?.isShrunken ?? true)
+    }
+
+    /// And when the row could only afford a narrower tier, the full one is
+    /// carried alongside it — which is what the tooltip shows.
+    func testATabForcedToANarrowerTierReportsTheFullLabel() {
+        let sized = fit(
+            [
+                candidate(["src/models/user.rb", "s/m/user.rb"]),
+                candidate(["lib/workers/api.rb", "l/w/api.rb"]),
+            ],
+            available: 150
+        )
+
+        for entry in sized {
+            XCTAssertTrue(entry.isShrunken, "\(entry.label) had to give up folders")
+            XCTAssertNotEqual(entry.label, entry.full)
+        }
+        XCTAssertEqual(sized.first?.full, "src/models/user.rb")
+    }
+
+    /// The other way a label falls short: one tier and not enough room for it,
+    /// so it is truncated rather than downgraded. `label == full` here, and the
+    /// width is what says the reader cannot see all of it.
+    func testASingleTierTooWideForItsRowIsStillShrunken() {
+        let sized = fit(
+            [candidate(["a-very-long-file-name-indeed.swift"])], available: 90
+        )
+
+        XCTAssertEqual(sized.first?.label, sized.first?.full)
+        XCTAssertTrue(
+            sized.first?.isShrunken ?? false,
+            "the only tier there is does not fit, which the reader can see"
+        )
+    }
+
+    /// The full label is the widest tier, not a path spelled independently.
+    /// Spelling it separately is what let a tooltip name a file differently
+    /// than the tab it belonged to.
+    func testTheFullLabelIsTheWidestTierItWasOffered() {
+        let sized = fit([candidate(["w/x/y/z.rb", "wide/x/y/z.rb"])], available: 40)
+
+        XCTAssertEqual(
+            sized.first?.full, "wide/x/y/z.rb",
+            "widest by drawn width, whatever order the tiers arrived in"
+        )
+    }
+
     // MARK: - Crowded
 
     /// A crowded row divides what it has and lets the labels truncate. A tab

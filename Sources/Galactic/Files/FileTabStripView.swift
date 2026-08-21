@@ -27,6 +27,7 @@ public struct FileTabStripView: View {
 
     @State private var stripWidth: CGFloat = 0
     @State private var drag: FileTabDrag?
+    @State private var hover = FileTabHoverIntent()
 
     private let onSelect: (FileTab.ID) -> Void
     private let onClose: (FileTab.ID) -> Void
@@ -122,6 +123,7 @@ public struct FileTabStripView: View {
         // A width that comes from the container cannot be moved by what the fit
         // does with it, which is what makes spending all of it safe.
         .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .bottomLeading) { tooltip }
         .coordinateSpace(name: Self.space)
         .background(
             GeometryReader { geometry in
@@ -152,7 +154,16 @@ public struct FileTabStripView: View {
             isSelected: set.tabs.selectedID == tab.id,
             onSelect: { onSelect(tab.id) },
             onClose: { onClose(tab.id) },
-            onReload: { onReload(tab.id) }
+            onReload: { onReload(tab.id) },
+            onHoverChange: { inside in
+                // A tab showing its whole label has nothing to reveal, so it
+                // raises nothing — the tooltip answers "what is being hidden",
+                // not "what is this". Read from the entry the fit already
+                // returned for this pass rather than asked for again.
+                guard inside else { return apply(hover.exit(tab.id)) }
+                guard entry?.isShrunken == true else { return }
+                apply(hover.enter(tab.id))
+            }
         )
         // A resting tab is a tint and a border over whatever is behind it, which
         // is right until one is dragged across another and you can read both
@@ -201,6 +212,7 @@ public struct FileTabStripView: View {
                     // asked for, and every other way of touching a tab selects
                     // it.
                     if set.tabs.selectedID != id { onSelect(id) }
+                    apply(hover.suppress())
                     updated = FileTabDrag(
                         id: id,
                         grabX: value.startLocation.x - layoutX(of: id),
@@ -215,7 +227,10 @@ public struct FileTabStripView: View {
                 )
                 drag = updated
             }
-            .onEnded { _ in commitDrag() }
+            .onEnded { _ in
+                commitDrag()
+                hover.resume()
+            }
     }
 
     /// Hand the arrangement over, once.
@@ -363,6 +378,115 @@ public struct FileTabStripView: View {
         }
     }
 
+    // MARK: - The tooltip
+
+    /// Carry out what `FileTabHoverIntent` decided.
+    ///
+    /// The wait is served here rather than in the intent so the intent needs no
+    /// clock and stays testable as a sequence of calls. A task that outlives
+    /// its usefulness is safe rather than cancelled: `elapsed(for:)` refuses
+    /// any tab the pointer is no longer on, so overlapping waits from a fast
+    /// sweep resolve to at most one tooltip — the one for the tab still under
+    /// the cursor.
+    private func apply(_ action: FileTabHoverIntent.Action) {
+        switch action {
+        case .arm(let id):
+            // `@MainActor` spelled out rather than inherited. The package
+            // builds in language mode v5, so a bare `Task` here compiles
+            // without complaint and runs on the global executor — where
+            // touching `hover`, which is `@State`, is a race the compiler is
+            // not currently configured to report.
+            Task { @MainActor in
+                try? await Task.sleep(for: FileTabHoverIntent.delay)
+                apply(hover.elapsed(for: id))
+            }
+        case .show, .hide, .ignore:
+            break
+        }
+    }
+
+    /// The hovered tab's label with nothing given up, above the tab.
+    ///
+    /// **The string comes from the fit, not from the URL.** It is the widest
+    /// tier — the same list the drawn label was chosen from — so the tooltip
+    /// cannot name the file differently than the tab does. Spelling it here
+    /// instead is what made a tab reading `Sync/kelly/kajabi-files/AGENTS.md`
+    /// claim to be `~/projects/kajabi/CLAUDE.md`: both are true of that file,
+    /// and only one of them is what the strip said.
+    ///
+    /// **Positioned from arithmetic, not from a measurement.** Every number is
+    /// one the strip already computes to draw itself. A `GeometryReader` per tab
+    /// would answer the same question and re-open the cycle this view hangs in.
+    /// Its own height is never needed, because it hangs from its bottom edge —
+    /// see `bottomAnchoredOffset`.
+    @ViewBuilder
+    private var tooltip: some View {
+        if let id = hover.shown, let entry = sized[id],
+            let (row, _) = displayPosition(of: id)
+        {
+            Text(entry.full)
+                .font(.system(size: Metrics.fontSize))
+                .foregroundColor(.primary)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, Metrics.tooltipPaddingX)
+                .padding(.vertical, Metrics.tooltipPaddingY)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        // Opaque, and it has to be: this sits over the tabs and
+                        // over whatever is above the strip, and a translucent
+                        // panel with a path in it on top of more paths is
+                        // unreadable. So the lift is a second fill over an
+                        // opaque base rather than an opacity.
+                        .fill(Color(nsColor: .windowBackgroundColor))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.primary.opacity(Metrics.tooltipLift))
+                        )
+                        // No border. The contrast is the surface being lighter
+                        // than what it covers — which is how Sublime's reads —
+                        // and a stroke on top of that is a second edge saying
+                        // what the first one already said.
+                        .shadow(color: .black.opacity(0.28), radius: 3, y: 1)
+                )
+                .offset(
+                    x: FileTabTooltipPlacement.x(
+                        tabLeadingEdge: layoutX(of: id),
+                        tooltipWidth: tooltipWidth(of: entry.full),
+                        stripWidth: stripWidth,
+                        inset: Metrics.tooltipInset,
+                        padding: Metrics.stripPadding
+                    ),
+                    y: FileTabTooltipPlacement.offsetFromBottom(
+                        aboveRow: row,
+                        rowCount: displayRows.count,
+                        tabHeight: Metrics.tabHeight,
+                        rowSpacing: Metrics.rowSpacing,
+                        gap: Metrics.tooltipGap
+                    )
+                )
+                // **Never a hover target.** Under the pointer it would take the
+                // tab's hover, the tab would report an exit, the tooltip would
+                // go down, the tab would hover again — a loop that reads as
+                // flicker and is caused by the thing doing the flickering.
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// The panel's drawn width, so the placement can keep it on screen.
+    ///
+    /// **Computed, not measured** — and through the same text-width function
+    /// the fit uses to lay the strip out, so the number the tooltip is placed
+    /// by and the number the tabs are sized by come from one place. Measuring
+    /// the panel would be the obvious alternative and is the one thing this
+    /// view may not do: its measurements close a layout cycle that hangs the
+    /// app rather than looking wrong.
+    private func tooltipWidth(of label: String) -> CGFloat {
+        FileTabRowFit.width(
+            of: label, font: FileTabRowFit.font(ofSize: Metrics.fontSize)
+        ) + 2 * Metrics.tooltipPaddingX
+    }
+
     private static let space = "galactic.file-tab-strip"
 
     /// Every other open file, which is what decides whether a bare filename or a
@@ -382,6 +506,17 @@ public struct FileTabStripView: View {
         /// place. Measured against the drawn tab rather than guessed, because
         /// the fit pays for it out of the row's width.
         static let tabChrome: CGFloat = 6 + 6 + 4 + 13
+        /// Roomier than a tab: the tooltip is being read rather than scanned,
+        /// and the padding is part of what separates it from what it covers.
+        static let tooltipPaddingX: CGFloat = 8
+        static let tooltipPaddingY: CGFloat = 5
+        /// How far the panel is nudged right of the tab's leading edge, so its
+        /// left edge does not trace the tab's and read as the same object.
+        static let tooltipInset: CGFloat = 12
+        static let tooltipGap: CGFloat = 4
+        /// Lighter than the window in the dark, darker in the light — either way
+        /// further from the background than a tab is, which is the whole job.
+        static let tooltipLift: Double = 0.16
         static let badgeFontSize: CGFloat = 9
         /// The note badge's capsule padding and the gap before it.
         static let badgeChrome: CGFloat = 8 + 4
@@ -437,6 +572,11 @@ private struct FileTabView: View {
     let onSelect: () -> Void
     let onClose: () -> Void
     let onReload: () -> Void
+    /// Reported upward as well as kept locally, because the two consumers want
+    /// different things from it: the close button only needs "is the pointer on
+    /// me", while the tooltip needs the order these arrive in across tabs — see
+    /// `FileTabHoverIntent`.
+    let onHoverChange: (Bool) -> Void
 
     @State private var isHovering = false
     @Environment(\.colorScheme) private var colorScheme
@@ -513,11 +653,17 @@ private struct FileTabView: View {
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
-        .onHover { isHovering = $0 }
-        // The full path, on hover. A tab shows the shortest label that tells it
-        // apart, which is the right default and the wrong answer to "which file
-        // is this, exactly".
-        .help(tab.url.path)
+        .onHover {
+            isHovering = $0
+            onHoverChange($0)
+        }
+        // The full path is answered by the strip's own tooltip rather than by
+        // `.help()`, whose delay is long enough that the question has usually
+        // been abandoned before it answers and is not reachable from SwiftUI.
+        // The path stays on the accessibility surface, which is the other thing
+        // `.help()` was doing here.
+        .accessibilityLabel(label)
+        .accessibilityValue(tab.url.path)
         .contextMenu {
             Button("Copy Path") { copy(tab.url.path) }
             Button("Copy Relative Path") { copy(relativePath) }

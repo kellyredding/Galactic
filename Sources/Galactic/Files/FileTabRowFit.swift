@@ -43,6 +43,28 @@ public enum FileTabRowFit {
         public let id: FileTab.ID
         public let label: String
         public let width: CGFloat
+        /// The widest tier — this tab's label with nothing given up.
+        ///
+        /// Carried rather than recomputed by whoever wants it, because it is the
+        /// same string the label was chosen *from*. A second caller spelling the
+        /// path itself is how the tooltip came to disagree with the tab it
+        /// belonged to: `relativeOrAbbreviated` resolves symlinks when given a
+        /// root and does raw prefix arithmetic without one, so the two branches
+        /// name the same file differently — `~/projects/kajabi/CLAUDE.md` for
+        /// what the strip was calling `Sync/kelly/kajabi-files/AGENTS.md`.
+        public let full: String
+        /// What `full` would need, so a caller can tell whether the label on
+        /// screen is the whole story.
+        public let fullWidth: CGFloat
+
+        /// Whether this tab is showing less than its full label.
+        ///
+        /// True in both ways a label falls short: a narrower tier was chosen, or
+        /// the only tier there is does not fit and is being truncated. Both are
+        /// "the reader cannot see all of it", which is the one question a
+        /// tooltip exists to answer — and when it is false there is nothing to
+        /// reveal, so nothing should appear.
+        public var isShrunken: Bool { width < fullWidth }
     }
 
     /// What a strip costs around its labels.
@@ -171,7 +193,9 @@ public enum FileTabRowFit {
                 Sized(
                     id: candidate.id,
                     label: tiers[index].last?.label ?? "",
-                    width: widths[index][widths[index].count - 1]
+                    width: widths[index][widths[index].count - 1],
+                    full: tiers[index].first?.label ?? "",
+                    fullWidth: tiers[index].first?.width ?? 0
                 )
             }
         }
@@ -221,7 +245,9 @@ public enum FileTabRowFit {
                 Sized(
                     id: candidate.id,
                     label: tiers[index].last?.label ?? "",
-                    width: min(share, widths[index][chosen[index]])
+                    width: min(share, widths[index][chosen[index]]),
+                    full: tiers[index].first?.label ?? "",
+                    fullWidth: tiers[index].first?.width ?? 0
                 )
             }
         }
@@ -242,7 +268,9 @@ public enum FileTabRowFit {
             Sized(
                 id: candidate.id,
                 label: tiers[index][chosen[index]].label,
-                width: widths[index][chosen[index]]
+                width: widths[index][chosen[index]],
+                full: tiers[index].first?.label ?? "",
+                fullWidth: tiers[index].first?.width ?? 0
             )
         }
     }
