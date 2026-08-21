@@ -83,9 +83,27 @@ public struct FileTabStripModel: Equatable {
     /// a search, from a review — is one tab. Two tabs on one file would mean two
     /// sets of notes on one path and two answers to what the reader scrolled to.
     ///
-    /// It lands at the end of the **last** row. No count sends it to a row of
-    /// its own: a row is something a reader asks for, and a new file is not a
-    /// request for one. Tabs simply get narrower, which the label tiers answer.
+    /// It lands **immediately after the selected tab**, in that tab's row.
+    /// Opening a file is nearly always a move away from the one in front of
+    /// you — a definition, a test, the thing it imports — and the end of the
+    /// last row puts that somewhere else entirely. With nothing selected it
+    /// falls back to the end of the last row, which in practice means an empty
+    /// strip.
+    ///
+    /// A run of opens is unaffected by this, because each one selects what it
+    /// just opened: the next lands after it, which is where appending would
+    /// have put it anyway.
+    ///
+    /// **No count sends a tab to a row of its own, and a crowded row does not
+    /// push its tail onto the next.** Both were asked for and declined. A row
+    /// is something a reader asks for, and opening a file is not that request;
+    /// tabs simply get narrower, which the label tiers answer and the hover
+    /// tooltip covers. Reflowing is worse than merely unasked-for: inserting
+    /// into a full row would push its last tabs down, overfilling the row
+    /// below, pushing *its* tail down in turn — so one keystroke could
+    /// rearrange the entire strip, and the reader would have no idea where
+    /// anything went. Rows being explicit rather than reflowed is exactly what
+    /// keeps this insertion local to one of them.
     @discardableResult
     public mutating func open(url: URL) -> FileTab {
         if let existing = tab(forPath: url.path) {
@@ -94,7 +112,9 @@ public struct FileTabStripModel: Equatable {
         }
 
         let tab = FileTab(url: url)
-        if rows.isEmpty {
+        if let selectedID, let (r, c) = position(of: selectedID) {
+            rows[r].insert(tab, at: c + 1)
+        } else if rows.isEmpty {
             rows.append([tab])
         } else {
             rows[rows.count - 1].append(tab)

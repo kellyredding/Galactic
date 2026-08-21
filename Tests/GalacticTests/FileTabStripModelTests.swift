@@ -98,15 +98,68 @@ final class FileTabStripModelTests: XCTestCase {
         XCTAssertEqual(m.selected?.scrollOffset, 420)
     }
 
-    /// The last row, not the first with room in it: a new file joins the work in
-    /// progress at the bottom of the strip, where the reader is looking.
-    func testOpeningLandsAtTheEndOfTheLastRow() {
-        var m = arranged([2, 1])
+    /// Beside the file it came from, not at the far end of the strip. Opening a
+    /// file is nearly always a move away from the one in front of you, and the
+    /// end of the last row is somewhere else entirely.
+    func testOpeningLandsAfterTheSelectedTab() {
+        var m = arranged([3, 1])
+        let row = m.rows[0].map(\.id)
+        m.select(id: row[1])
 
         let opened = m.open(url: url("new.swift"))
 
-        XCTAssertEqual(m.rows.map(\.count), [2, 2])
-        XCTAssertEqual(m.rows[1].last?.id, opened.id)
+        XCTAssertEqual(
+            m.rows[0].map(\.id), [row[0], row[1], opened.id, row[2]]
+        )
+    }
+
+    /// The selected tab's row, which is not always the last one — that was the
+    /// whole of the old rule.
+    func testOpeningUsesTheSelectedTabsRowRatherThanTheLast() {
+        var m = arranged([2, 1])
+        let secondRow = m.rows[1].map(\.id)
+
+        m.open(url: url("new.swift"))
+
+        XCTAssertEqual(m.rows.map(\.count), [3, 1], "grew the first row")
+        XCTAssertEqual(m.rows[1].map(\.id), secondRow, "left the second alone")
+    }
+
+    /// A run of opens is unchanged by any of this, because each one selects what
+    /// it just opened — so the next lands after it, which is where appending
+    /// would have put it. This is why the common case did not have to move.
+    func testARunOfOpensStillArrivesInOrder() {
+        var m = FileTabStripModel()
+
+        for name in ["a", "b", "c"] { m.open(url: url("\(name).swift")) }
+
+        XCTAssertEqual(m.rows.count, 1)
+        XCTAssertEqual(
+            m.rows[0].map(\.url.lastPathComponent),
+            ["a.swift", "b.swift", "c.swift"]
+        )
+    }
+
+    /// Selecting the end of a row keeps the new tab in that row rather than
+    /// spilling it onto the next — insertion is local to one row, always.
+    func testOpeningAfterARowsLastTabStaysInThatRow() {
+        var m = arranged([2, 2])
+        m.select(id: m.rows[0].map(\.id)[1])
+
+        let opened = m.open(url: url("new.swift"))
+
+        XCTAssertEqual(m.rows.map(\.count), [3, 2])
+        XCTAssertEqual(m.rows[0].last?.id, opened.id)
+    }
+
+    /// Nothing selected means an empty strip, and the first file starts the
+    /// first row.
+    func testOpeningWithNothingSelectedStartsTheFirstRow() {
+        var m = FileTabStripModel()
+
+        let opened = m.open(url: url("a.swift"))
+
+        XCTAssertEqual(m.rows.map { $0.map(\.id) }, [[opened.id]])
     }
 
     /// **Settled: no count sends a tab to a row of its own.** A soft limit of
