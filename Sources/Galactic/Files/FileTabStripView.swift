@@ -482,11 +482,13 @@ private struct FileTabView: View {
             // Reserved rather than conditional: a close button that appears on
             // hover must not widen the tab as it does, or every label re-measures
             // and the strip twitches under the cursor.
-            // Holds the close button against the trailing edge once the pill
-            // is wider than its own label, which the fit's spare room makes
-            // routine.
-            Spacer(minLength: 0)
-
+            // **No spacer here.** One was tried, to hold the close button
+            // against the trailing edge once the pill grew past its label, and
+            // it opens a corridor of empty pill between the name and the ×
+            // — the wider the pill, the further the × travels from the thing it
+            // closes. Every content-sized tab puts it directly after the label,
+            // so a filled one does too, and the room the fit could not spend on
+            // a longer label simply trails off to the right.
             closeButton
                 .opacity(isHovering ? 1 : 0)
                 .allowsHitTesting(isHovering)

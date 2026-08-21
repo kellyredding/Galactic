@@ -30,35 +30,37 @@ final class FileTabRowFitTests: XCTestCase {
 
     // MARK: - Spending the row
 
-    /// The reported bug: a row with room to spare left it unspent, so three
-    /// short filenames in a wide strip read as squashed.
-    func testARowWithRoomToSpareSpendsAllOfIt() {
+    /// A tab is as wide as its label needs and no wider — `min(content, row)`,
+    /// with the row as the only cap.
+    ///
+    /// Handing the leftover out as padding was tried and is wrong twice over: it
+    /// grows the pill without growing the label, so a tab claims to have more to
+    /// say than it does; and spending a width that was measured from the content
+    /// closes a layout loop that hangs the app. What fills a row is the labels
+    /// growing into it.
+    func testATabIsNoWiderThanItsLabelNeeds() {
         let sized = fit(
             [
-                candidate(["a/TODO.md", "TODO.md"]),
-                candidate(["b/README.md", "README.md"]),
-                candidate(["c/main.swift", "main.swift"]),
+                candidate(["TODO.md"]),
+                candidate(["README.md"]),
             ],
             available: 900
         )
 
-        XCTAssertEqual(total(sized), 900, accuracy: 0.5)
+        let expected = [
+            FileTabRowFit.width(of: "TODO.md", font: font) + 29,
+            FileTabRowFit.width(of: "README.md", font: font) + 29,
+        ]
+        XCTAssertEqual(sized.map(\.width), expected)
+        XCTAssertLessThan(total(sized), 900, "the row keeps what it did not need")
     }
 
-    /// Evenly, so a tab's width does not depend on where in the row it sits —
-    /// the same file would otherwise be a different size for having been opened
-    /// later.
-    func testTheSpareRoomIsSharedRatherThanGivenToOneTab() {
-        let sized = fit(
-            [
-                candidate(["TODO.md"]),
-                candidate(["TODO.md"]),
-                candidate(["TODO.md"]),
-            ],
-            available: 900
-        )
+    /// And the row is the cap: a label wider than the row it sits in is cut to
+    /// the row rather than running off the end of the strip.
+    func testTheRowCapsATabThatWantsMore() {
+        let sized = fit([candidate(["a/very/long/path/to/a/file.swift"])], available: 120)
 
-        XCTAssertEqual(Set(sized.map(\.width)).count, 1)
+        XCTAssertLessThanOrEqual(sized[0].width, 120)
     }
 
     // MARK: - Choosing labels

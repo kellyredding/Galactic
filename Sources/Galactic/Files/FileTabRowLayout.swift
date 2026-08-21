@@ -3,18 +3,18 @@ import SwiftUI
 /// Places one row's tabs at widths decided before the layout ran.
 ///
 /// **This exists for one line: `sizeThatFits` reports the width it was
-/// *offered*, never the width its children add up to.** That is what lets the
-/// row spend every point it is given.
+/// *offered*, never the width its children add up to.**
 ///
-/// A stack cannot do it. Its size is the sum of its content, so handing the fit
-/// a width measured from the row and having the fit spend all of it closes a
-/// loop: the content grows to the measurement, the next pass measures the larger
-/// content, and — with label widths rounded up — each pass gains a fraction and
-/// the layout never settles. MEASURED, when it was a stack: 23,121 frames of
-/// recursive `-[NSView _layoutSubtreeWithOldSize:]` on the main thread at ~80%
-/// CPU, against 531 frames and idle once the row stopped filling. It hangs the
-/// app rather than looking wrong, which is why the fix has to be structural
-/// rather than a smaller number somewhere.
+/// That breaks a feedback loop rather than an aesthetic one. The width handed to
+/// `FileTabRowFit` decides which label each tab can afford, wider labels make
+/// wider content, and content is what a stack reports as its size — so measuring
+/// the row and feeding that measurement back to the fit lets each pass buy a
+/// little more than the last. It converges only because tiers run out. MEASURED,
+/// when the row was a stack and the fit also spent its remainder: 23,121 frames
+/// of recursive `-[NSView _layoutSubtreeWithOldSize:]` on the main thread at ~80%
+/// CPU, against 531 and idle without it. That failure mode is a hang, not a
+/// wrong-looking strip, so the cure belongs in the structure and not in a
+/// smaller number somewhere.
 ///
 /// `.frame(maxWidth: .infinity)` is not the same thing and was tried: it changes
 /// what a view will *accept*, while its ideal width stays the content sum — so

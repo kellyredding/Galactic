@@ -147,30 +147,23 @@ public enum FileTabRowFit {
             }
         }
 
-        // Whatever is unspent goes out evenly, so the row is used rather than
-        // ending early. Once every label is at its widest tier — the whole path,
-        // relative to the root — there is nothing further to *show*, and the
-        // extra goes into the pills themselves rather than beside them: a wider
-        // pill is the strip using its row, dead space around a content-sized
-        // pill is just a gap with a border drawn in the middle of it.
+        // **Unspent room stays unspent.** A tab is as wide as its label needs
+        // and no wider, capped by the row — `min(content, room)`, with the row
+        // as the only cap there is.
         //
-        // Evenly, not to the last tab: growing one of them would make a width
-        // depend on its position, so the same file would be a different size for
-        // having been opened later.
-        //
-        // **Only safe because the row reports the width it was offered rather
-        // than the width its tabs add up to** — see `FileTabRowLayout`. Spending
-        // the last point of a width measured *from* the content closes a layout
-        // loop, and it hangs rather than misbehaves: 23,121 frames of recursive
+        // Handing the remainder out as padding was tried and is wrong twice
+        // over. It grows the pill without growing the label, so a tab claims to
+        // have more to tell you and does not; and spending the last point of a
+        // width that is measured *from* the content closes a layout loop, which
+        // hangs rather than misbehaves — 23,121 frames of recursive
         // `-[NSView _layoutSubtreeWithOldSize:]` at ~80% CPU when this row was a
-        // stack.
-        let spare = max(0, room - total) / CGFloat(candidates.count)
-
+        // stack. What actually fills a row is the labels growing into it, which
+        // is what unwinding a folder at a time is for.
         return candidates.enumerated().map { index, candidate in
             Sized(
                 id: candidate.id,
                 label: tiers[index][chosen[index]].label,
-                width: widths[index][chosen[index]] + spare
+                width: widths[index][chosen[index]]
             )
         }
     }
