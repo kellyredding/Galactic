@@ -296,10 +296,15 @@ final class FileSetTests: XCTestCase {
         )
     }
 
-    /// The reader's rows are the reader's. Restoring through `open` would honour
-    /// the soft row limit and re-pack them, which is the same wrong answer as
-    /// reflowing on close, arriving a restart later.
-    func testRestoringRebuildsRowsRatherThanRepackingThem() throws {
+    /// Restoring rebuilds the arrangement rather than re-packing it.
+    ///
+    /// **Settled: this asserted flattening while rows were derived from the
+    /// strip's width**, when a persisted break described a window that might not
+    /// be this size. Nothing re-breaks a row now, so the rows in the file are
+    /// the reader's grouping and the only copy of it — and grouping is most of
+    /// what a named set is, so re-packing on the way back in would quietly undo
+    /// the thing the set was made for.
+    func testRestoringRebuildsTheArrangementRatherThanRepackingIt() throws {
         let a = try write("a.swift")
         let b = try write("b.swift")
         let c = try write("c.swift")
@@ -311,9 +316,12 @@ final class FileSetTests: XCTestCase {
         )
 
         XCTAssertTrue(dropped.isEmpty)
-        XCTAssertEqual(set.tabs.rows.count, 2)
-        XCTAssertEqual(set.tabs.rows[0].count, 1)
-        XCTAssertEqual(set.tabs.rows[1].count, 2)
+        XCTAssertEqual(
+            set.tabs.rows.map { $0.map(\.path) },
+            [[a.path], [b.path, c.path]],
+            "the written break between a and b is honoured"
+        )
+        XCTAssertEqual(set.tabs.tabs.map(\.path), [a.path, b.path, c.path])
         XCTAssertEqual(set.selectedPath, c.path)
         XCTAssertNotNil(set.file(forPath: b.path))
     }

@@ -227,12 +227,17 @@ public final class FileSet: ObservableObject {
 
     // MARK: - Rearranging and navigating
 
+    /// Take the whole arrangement a drag ended on.
+    public func rearrange(to arrangement: [[FileTab.ID]]) {
+        tabs.rearrange(to: arrangement)
+    }
+
     public func move(id: FileTab.ID, toRow row: Int, at index: Int) {
         tabs.move(id: id, toRow: row, at: index)
     }
 
-    public func selectNextInRow() { tabs.selectNextInRow() }
-    public func selectPreviousInRow() { tabs.selectPreviousInRow() }
+    public func selectNext() { tabs.selectNext() }
+    public func selectPrevious() { tabs.selectPrevious() }
     public func selectNextRow() { tabs.selectNextRow() }
     public func selectPreviousRow() { tabs.selectPreviousRow() }
 
