@@ -246,27 +246,38 @@ final class FileTabDragTests: XCTestCase {
         XCTAssertEqual(d.position(of: ids[0])?.row, 1)
     }
 
-    // MARK: - The new-row affordance
+    // MARK: - Room for a row that does not exist yet
 
-    func testTheNewRowTargetShowsOnlyWhenARowWouldAppear() {
-        let (ids, widths) = oneRow()
-        var d = drag(ids[0], from: 6, arrangement: [ids])
+    /// The strip is drawn from the arrangement as it was, so a row the drag
+    /// invented has no slot — and the tab offset down into it would be clipped
+    /// to its top edge. This is how the strip knows to make room.
+    func testAProposedRowIsReportedSoTheStripCanMakeRoom() {
+        let (ids, _) = oneRow()
+        var d = drag(ids[2], from: 212, arrangement: [ids])
+        XCTAssertFalse(d.proposesExtraRow, "nothing invented yet")
+
         d.update(
-            pointer: CGPoint(x: 6, y: metrics.pitch + metrics.newRowMargin / 2),
+            pointer: CGPoint(x: 212, y: metrics.pitch + metrics.newRowMargin / 2),
             stripWidth: stripWidth
         )
-        // It has already made the row, so there is no further one to promise.
-        XCTAssertFalse(d.isProposingNewRow())
 
-        // A tab alone in the last row asking for a row below it would take its
-        // own row with it and put an identical one back.
-        var lone = drag(ids[4], from: 6, arrangement: [Array(ids[0..<4]), [ids[4]]])
-        lone.update(
-            pointer: CGPoint(
-                x: 6, y: 2 * metrics.pitch + metrics.newRowMargin / 2
-            ),
-            stripWidth: stripWidth
+        XCTAssertTrue(d.proposesExtraRow)
+        XCTAssertEqual(d.proposal.count, 2)
+    }
+
+    /// Moving between rows that already exist needs no extra room.
+    func testMovingBetweenExistingRowsProposesNoExtraRow() {
+        let ids = (0..<4).map { _ in UUID() }
+        var d = drag(
+            ids[0], from: 6,
+            arrangement: [Array(ids[0..<2]), Array(ids[2..<4])]
         )
-        XCTAssertFalse(lone.isProposingNewRow())
+
+        d.update(
+            pointer: CGPoint(x: 6, y: middleOfRow(1)), stripWidth: stripWidth
+        )
+
+        XCTAssertEqual(d.position(of: ids[0])?.row, 1)
+        XCTAssertFalse(d.proposesExtraRow)
     }
 }

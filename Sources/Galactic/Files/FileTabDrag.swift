@@ -143,16 +143,15 @@ public struct FileTabDrag: Equatable {
         return nil
     }
 
-    /// Whether the pointer is asking for a row that does not exist yet, and
-    /// would get one.
-    public func isProposingNewRow() -> Bool {
-        guard let (row, _) = position(of: id) else { return false }
-        let count = proposal.count
-        guard band(of: pointer.y, rows: count) >= count else { return false }
-        // A lone tab dropped below its own last row takes its row with it and
-        // puts an identical one back, so the target would promise nothing.
-        return !(proposal[row].count == 1 && row == count - 1)
-    }
+    /// Whether the proposal holds a row the strip is not drawn with yet.
+    ///
+    /// **The strip has to make room for it.** Rows are drawn from `origin`, so a
+    /// row the drag has invented has no slot on screen — and the tab offset down
+    /// into it lands outside the strip's bounds and is clipped to its top border.
+    /// A dashed target used to stand in for this, which was a picture of a row
+    /// rather than a row; the tab itself is the better answer once there is
+    /// somewhere for it to be.
+    public var proposesExtraRow: Bool { proposal.count > origin.count }
 
     /// Where the dragged tab's leading edge is being asked to sit, clamped into
     /// the strip.

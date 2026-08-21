@@ -80,21 +80,17 @@ public struct FileTabStripView: View {
                 }
             }
 
-            // Where the row would be, shown only while a drag is asking for
-            // one. A drop target nobody can see is a feature nobody finds, and
-            // this is the only way to make a row — so it has to announce
-            // itself rather than being something a reader stumbles into.
-            if isProposingNewRow {
-                HStack(spacing: Metrics.tabSpacing) {
-                    RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(
-                            Color.accentColor.opacity(0.7),
-                            style: StrokeStyle(lineWidth: 1, dash: [3, 3])
-                        )
-                        .frame(width: Metrics.assumedTabWidth)
-                    Spacer(minLength: 0)
-                }
-                .frame(height: Metrics.tabHeight)
+            // Room for a row the drag has invented but the strip is not drawn
+            // with yet — rows come from the arrangement as it was, so a row
+            // the proposal added has no slot, and the tab offset down into it
+            // lands outside the strip's bounds and is clipped to its top edge.
+            //
+            // A dashed target used to stand here, back when the row did not
+            // appear until the drop. It was a picture of a row, and a row the
+            // tab is actually sitting in — and can be slid around inside — says
+            // the same thing better and needs no colour of its own.
+            if drag?.proposesExtraRow == true {
+                Color.clear.frame(height: Metrics.tabHeight)
             }
 
             // The strip carries no open affordance of its own. It had a `+`
@@ -352,12 +348,6 @@ public struct FileTabStripView: View {
         }
         return geometry(ofRow: displayRows[row].map(\.id)).minX(at: column)
     }
-    /// Whether the drag is over the new-row band and a row would actually
-    /// appear, which is what the dashed target promises.
-    private var isProposingNewRow: Bool {
-        drag?.isProposingNewRow() ?? false
-    }
-
 
     /// An opaque base and a shadow, for the tab being carried.
     ///
