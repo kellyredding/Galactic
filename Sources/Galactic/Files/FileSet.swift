@@ -238,8 +238,53 @@ public final class FileSet: ObservableObject {
 
     public func selectNext() { tabs.selectNext() }
     public func selectPrevious() { tabs.selectPrevious() }
-    public func selectNextRow() { tabs.selectNextRow() }
-    public func selectPreviousRow() { tabs.selectPreviousRow() }
+    public func selectNextRow() { stepRow(by: 1) }
+    public func selectPreviousRow() { stepRow(by: -1) }
+
+    /// The strip's measured width, told to the set by the strip.
+    ///
+    /// Not `@Published`: nothing renders differently for knowing it, and
+    /// republishing on every window resize would be a redraw for no reason.
+    /// Navigation is the only thing that reads it, once per keystroke.
+    public var stripWidth: CGFloat = 0
+
+    /// Up or down a row, landing under where the current tab actually is.
+    ///
+    /// Falls back to the model's column-for-column step before the strip has
+    /// been measured — the first keystroke of a session, when there is no
+    /// geometry to consult and an index is the only honest answer.
+    private func stepRow(by delta: Int) {
+        guard stripWidth > 0, let id = tabs.selectedID,
+            let position = tabs.position(of: id)
+        else {
+            delta > 0 ? tabs.selectNextRow() : tabs.selectPreviousRow()
+            return
+        }
+        let target = position.row + delta
+        guard tabs.rows.indices.contains(target) else { return }
+
+        let column = FileTabRowNavigation.column(
+            movingFrom: position.column,
+            in: widths(ofRow: position.row),
+            to: widths(ofRow: target),
+            spacing: FileTabRowFit.Metrics.standard.spacing,
+            leading: FileTabRowFit.Metrics.standard.padding
+        )
+        guard tabs.rows[target].indices.contains(column) else { return }
+        tabs.select(id: tabs.rows[target][column].id)
+    }
+
+    /// What the strip drew that row as, through the same fit it drew with.
+    private func widths(ofRow row: Int) -> [CGFloat] {
+        FileTabRowFit.fit(
+            row: tabs.rows[row],
+            root: root,
+            siblings: tabs.tabs.map(\.url),
+            noteCount: { [weak self] in self?.noteCount(forPath: $0.path) ?? 0 },
+            stripWidth: stripWidth
+        )
+        .map(\.width)
+    }
 
     // MARK: - The root
 

@@ -131,6 +131,9 @@ public struct FileTabStripView: View {
             GeometryReader { geometry in
                 Color.clear.onChange(of: geometry.size.width, initial: true) {
                     stripWidth = geometry.size.width
+                    // Handed over so a keystroke can ask where the tabs are.
+                    // The strip is the only thing that knows this number.
+                    set.stripWidth = geometry.size.width
                 }
             }
         )
@@ -286,11 +289,14 @@ public struct FileTabStripView: View {
     }
 
     private func fit(_ row: [FileTab]) -> [FileTabRowFit.Sized] {
+        // The shared entry point, which navigation also calls — so the tab the
+        // keystroke says is below this one is the tab drawn below this one.
         FileTabRowFit.fit(
-            row.map(candidate(for:)),
-            available: max(0, stripWidth - 2 * Metrics.stripPadding),
-            spacing: Metrics.tabSpacing,
-            font: FileTabRowFit.font(ofSize: Metrics.fontSize)
+            row: row,
+            root: set.root,
+            siblings: set.tabs.tabs.map(\.url),
+            noteCount: { set.noteCount(forPath: $0.path) },
+            stripWidth: stripWidth
         )
     }
 

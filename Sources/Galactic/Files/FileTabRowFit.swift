@@ -45,6 +45,85 @@ public enum FileTabRowFit {
         public let width: CGFloat
     }
 
+    /// What a strip costs around its labels.
+    ///
+    /// Public and shared because two callers have to agree: the strip draws with
+    /// these, and navigation asks where the tabs *are* with them. Two copies of
+    /// the same numbers is two answers to "which tab is below this one".
+    public struct Metrics: Equatable {
+        /// Padding at both ends of a tab, the gap before the close button, and
+        /// the button's reserved place.
+        public let chrome: CGFloat
+        /// A note badge's capsule padding and the gap before it.
+        public let badgeChrome: CGFloat
+        public let fontSize: CGFloat
+        public let spacing: CGFloat
+        /// Inset at both ends of the strip.
+        public let padding: CGFloat
+
+        public init(
+            chrome: CGFloat,
+            badgeChrome: CGFloat,
+            fontSize: CGFloat,
+            spacing: CGFloat,
+            padding: CGFloat
+        ) {
+            self.chrome = chrome
+            self.badgeChrome = badgeChrome
+            self.fontSize = fontSize
+            self.spacing = spacing
+            self.padding = padding
+        }
+
+        public static let standard = Metrics(
+            chrome: 6 + 6 + 4 + 13,
+            badgeChrome: 8 + 4,
+            fontSize: 11,
+            spacing: 3,
+            padding: 6
+        )
+    }
+
+    /// Fit one row of open files, from the tabs themselves.
+    ///
+    /// The entry point both callers use, so the strip and the keystroke that
+    /// asks which tab is below this one are looking at the same geometry.
+    public static func fit(
+        row: [FileTab],
+        root: URL?,
+        siblings: [URL],
+        noteCount: (FileTab) -> Int,
+        stripWidth: CGFloat,
+        metrics: Metrics = .standard
+    ) -> [Sized] {
+        let font = font(ofSize: metrics.fontSize)
+        let candidates = row.map { tab -> Candidate in
+            var tiers = FileTabLabel.tiers(
+                for: tab.url, root: root,
+                siblings: siblings.filter { $0.path != tab.url.path }
+            )
+            let floor = FileTabLabel.floor(for: tab.url)
+            if tiers.last != floor { tiers.append(floor) }
+
+            var chrome = metrics.chrome
+            let notes = noteCount(tab)
+            if notes > 0 {
+                chrome +=
+                    width(
+                        of: "\(notes)",
+                        font: Self.font(ofSize: metrics.fontSize - 2)
+                    ) + metrics.badgeChrome
+            }
+            return Candidate(id: tab.id, tiers: tiers, chrome: chrome)
+        }
+        return fit(
+            candidates,
+            available: max(0, stripWidth - 2 * metrics.padding),
+            spacing: metrics.spacing,
+            font: font
+        )
+    }
+
     /// The font labels are drawn in. Measuring has to agree with drawing, so
     /// both come from here.
     public static func font(ofSize size: CGFloat) -> NSFont {
