@@ -75,6 +75,27 @@ public enum FileTabLabel {
             .sorted { $0.count > $1.count }
     }
 
+    /// The label for a tab too narrow for any tier, which is always the
+    /// filename.
+    ///
+    /// **Separate from the tiers because the collision guard must not reach
+    /// here, and that is a deliberate reversal.** Above this width, withholding
+    /// an ambiguous filename is right: two tabs reading `index.ts` have said
+    /// nothing, and a path that distinguishes them is worth the room. At the
+    /// floor there is no room to be worth, and the choice is between two labels
+    /// that are both ambiguous — so it goes to the one that is ambiguous about
+    /// *which* file rather than about *what kind of thing* it is.
+    ///
+    /// The failure this replaces: two tabs reading `S/k/…S.md` and `S/k/…E.md`.
+    /// Middle-truncating a path keeps the squashed folders the two tabs have in
+    /// common and cuts away the filename that tells them apart — it preserves
+    /// exactly the half with no information in it. Paired with tail truncation
+    /// at the call site, the head of the name survives instead, which is the
+    /// part a reader scans.
+    public static func floor(for url: URL) -> String {
+        url.lastPathComponent
+    }
+
     /// Relative to the root when under it; otherwise absolute with the home
     /// directory shortened to `~`.
     static func relativeOrAbbreviated(_ url: URL, root: URL?) -> String {

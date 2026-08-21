@@ -25,9 +25,8 @@ public struct FileTabStripView: View {
 
     @ObservedObject private var set: FileSet
 
-    @State private var widths: [FileTab.ID: CGFloat] = [:]
     @State private var stripWidth: CGFloat = 0
-    @State private var drag: Drag?
+    @State private var drag: FileTabDrag?
 
     private let onSelect: (FileTab.ID) -> Void
     private let onClose: (FileTab.ID) -> Void
@@ -39,78 +38,56 @@ public struct FileTabStripView: View {
     /// spare for an affordance nobody reaches for twice a day.
     private let onReload: (FileTab.ID) -> Void
 
-    /// Put a tab somewhere else in the strip.
+    /// Take the whole arrangement the drag ended on.
     ///
-    /// Defaulted away, so a host that has not wired reordering gets a strip that
+    /// One arrangement rather than one tab's destination, because a tab crossing
+    /// rows changes two rows at once and a single move left the host
+    /// reconstructing indices against a strip that had already shifted.
+    ///
+    /// Defaulted away, so a host that has not wired rearranging gets a strip that
     /// simply does not drag rather than one that drags and silently drops the
     /// result on the floor.
-    private let onMove: ((FileTab.ID, Int, Int) -> Void)?
+    private let onRearrange: (([[FileTab.ID]]) -> Void)?
 
     public init(
         set: FileSet,
         onSelect: @escaping (FileTab.ID) -> Void,
         onClose: @escaping (FileTab.ID) -> Void,
         onReload: @escaping (FileTab.ID) -> Void,
-        onMove: ((FileTab.ID, Int, Int) -> Void)? = nil
+        onRearrange: (([[FileTab.ID]]) -> Void)? = nil
     ) {
         self.set = set
         self.onSelect = onSelect
         self.onClose = onClose
         self.onReload = onReload
-        self.onMove = onMove
+        self.onRearrange = onRearrange
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: Metrics.rowSpacing) {
-            ForEach(Array(set.tabs.rows.enumerated()), id: \.offset) {
-                index, row in
+            let widths = sized
+            ForEach(Array(displayRows.enumerated()), id: \.offset) { _, row in
                 HStack(spacing: Metrics.tabSpacing) {
-                    ForEach(row) { tab in
-                        FileTabView(
-                            tab: tab,
-                            root: set.root,
-                            siblings: siblings(excluding: tab),
-                            noteCount: set.noteCount(forPath: tab.path),
-                            isSelected: set.tabs.selectedID == tab.id,
-                            onSelect: { onSelect(tab.id) },
-                            onClose: { onClose(tab.id) },
-                            onReload: { onReload(tab.id) }
-                        )
-                        .background(frameReporter(for: tab.id))
-                        // A resting tab is a tint and a border over whatever is
-                        // behind it, which is right until one is dragged across
-                        // another and you can read both through each other. The
-                        // base goes on only while it moves, so nothing about the
-                        // strip at rest changes.
-                        .background(liftedBackdrop(for: tab.id))
-                        // Carried by the tab itself rather than by a dragged
-                        // copy of it.
-                        .offset(x: offset(for: tab.id))
-                        // The curve goes on this property, never on the
-                        // transaction. Attaching it here is what the refresh
-                        // spinners already do and why they repeat forever
-                        // without leaking: a transaction curve is inherited by
-                        // every animatable change in the same pass, including
-                        // the `ViewThatFits` re-measure that once left rows
-                        // sliding back and forth on a loop with nothing to
-                        // return them.
-                        //
-                        // Only the tabs being displaced animate. The one under
-                        // the cursor is tracking a pointer and must not lag it —
-                        // easing that would put the tab behind the hand moving
-                        // it, which reads as the drag being dropped.
-                        .animation(
-                            drag?.id == tab.id ? nil : Metrics.slide,
-                            value: offset(for: tab.id)
-                        )
-                        // Above its neighbours while it is the one moving, so
-                        // passing over them does not clip it.
-                        .zIndex(drag?.id == tab.id ? 1 : 0)
-                        .gesture(dragGesture(for: tab.id))
-                    }
-
+                    ForEach(row) { tab in tabView(tab, widths) }
                     Spacer(minLength: 0)
                 }
+            }
+
+            // Where the row would be, shown only while a drag is asking for
+            // one. A drop target nobody can see is a feature nobody finds, and
+            // this is the only way to make a row — so it has to announce
+            // itself rather than being something a reader stumbles into.
+            if isProposingNewRow {
+                HStack(spacing: Metrics.tabSpacing) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(
+                            Color.accentColor.opacity(0.7),
+                            style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+                        )
+                        .frame(width: Metrics.assumedTabWidth)
+                    Spacer(minLength: 0)
+                }
+                .frame(height: Metrics.tabHeight)
             }
 
             // The strip carries no open affordance of its own. It had a `+`
@@ -130,8 +107,19 @@ public struct FileTabStripView: View {
         }
         .padding(.horizontal, Metrics.stripPadding)
         .padding(.vertical, Metrics.rowSpacing)
+        // **Filled to the parent before anything measures it, and that is load
+        // bearing.** Left content-sized, this view's width is the sum of the
+        // widths the fit just chose — so measuring it and then handing that
+        // measurement back to the fit is a cycle: the fit spends every point it
+        // is given, the content grows to match, the next pass measures the
+        // larger content and gives it away again. With label widths rounded up,
+        // each pass gains a fraction and the layout never converges. It hangs
+        // the app rather than looking wrong.
+        //
+        // A width that comes from the container cannot be moved by what the fit
+        // does with it, which is what makes spending all of it safe.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .coordinateSpace(name: Self.space)
-        .onPreferenceChange(TabWidthsKey.self) { widths = $0 }
         .background(
             GeometryReader { geometry in
                 Color.clear.onChange(of: geometry.size.width, initial: true) {
@@ -141,236 +129,229 @@ public struct FileTabStripView: View {
         )
     }
 
-    // MARK: - Dragging a tab into place
-
-    /// A drag in progress, and the order it is proposing.
+    /// One tab, at the width the fit gave it.
     ///
-    /// **The proposed order is not the model's.** The model is left alone until
-    /// the drag ends, and that is what makes the exchange animatable at all: a
-    /// tab displaced by a reorder moves because the row *re-lays-out*, and the
-    /// only way to put a curve on a layout change is to put it on the
-    /// transaction — which in a view whose labels re-measure is the mechanism
-    /// that once left rows sliding forever. Holding the layout still and drawing
-    /// every tab at an offset turns the same movement into a property change,
-    /// which a curve can be attached to safely.
-    ///
-    /// It also stops a reorder per crossing: the host persists on every move, so
-    /// dragging across six tabs used to be six writes.
-    private struct Drag {
-        let id: FileTab.ID
-        /// Where inside the tab it was picked up, so it does not snap its
-        /// leading edge to the cursor.
-        let grabX: CGFloat
-        var pointer: CGPoint
-        /// The row this is arranging within, as the model has it.
-        var row: Int
-        /// The row's ids in the order the drag is asking for.
-        var order: [FileTab.ID]
-
-        func index(of id: FileTab.ID) -> Int? {
-            order.firstIndex(of: id)
-        }
+    /// Broken out because the whole strip in one expression stopped
+    /// type-checking in reasonable time once the fit was threaded through it.
+    private func tabView(
+        _ tab: FileTab, _ widths: [FileTab.ID: FileTabRowFit.Sized]
+    ) -> some View {
+        let entry = widths[tab.id]
+        return FileTabView(
+            tab: tab,
+            label: entry?.label ?? FileTabLabel.floor(for: tab.url),
+            root: set.root,
+            noteCount: set.noteCount(forPath: tab.path),
+            isSelected: set.tabs.selectedID == tab.id,
+            onSelect: { onSelect(tab.id) },
+            onClose: { onClose(tab.id) },
+            onReload: { onReload(tab.id) }
+        )
+        // The width the fit decided, so what is drawn and what the drag reasons
+        // about are the same number rather than two that usually agree.
+        .frame(width: entry?.width ?? Metrics.assumedTabWidth)
+        // A resting tab is a tint and a border over whatever is behind it, which
+        // is right until one is dragged across another and you can read both
+        // through each other. The base goes on only while it moves, so nothing
+        // about the strip at rest changes.
+        .background(liftedBackdrop(for: tab.id))
+        // Carried by the tab itself rather than by a dragged copy of it.
+        .offset(x: offset(for: tab.id))
+        // The curve goes on this property, never on the transaction: a
+        // transaction curve is inherited by every animatable change in the same
+        // pass, which is what once left rows sliding back and forth on a loop
+        // with nothing to return them.
+        .animation(
+            drag?.id == tab.id ? nil : Metrics.slide, value: offset(for: tab.id)
+        )
+        // Above its neighbours while it is the one moving, so passing over them
+        // does not clip it.
+        .zIndex(drag?.id == tab.id ? 1 : 0)
+        .gesture(dragGesture(for: tab.id))
     }
+
+    // MARK: - Dragging a tab into place
 
     private func dragGesture(for id: FileTab.ID) -> some Gesture {
         // A threshold, so a click still selects. Below it nothing is a drag and
         // the tap gesture on the tab answers as it always did.
         DragGesture(minimumDistance: 4, coordinateSpace: .named(Self.space))
             .onChanged { value in
-                guard onMove != nil else { return }
-                if drag?.id != id {
-                    guard let position = position(of: id) else { return }
+                guard onRearrange != nil else { return }
+                let widths = sized.mapValues(\.width)
+
+                // **Mutated as a local and assigned once.** Reading `@State`
+                // back after writing it returns the value from before the write
+                // until the next update, so settling the row and then the column
+                // through the property meant the second half reasoned about the
+                // arrangement the first half had just replaced — which is what
+                // locked a tab up the moment it crossed a row. One value, one
+                // assignment, no window for the two to disagree.
+                var updated: FileTabDrag
+                if let drag, drag.id == id {
+                    updated = drag
+                } else {
                     // Picking a tab up is also choosing it. Rearranging the
                     // strip while looking at a different file is a thing nobody
                     // asked for, and every other way of touching a tab selects
                     // it.
                     if set.tabs.selectedID != id { onSelect(id) }
-                    drag = Drag(
+                    updated = FileTabDrag(
                         id: id,
                         grabX: value.startLocation.x - layoutX(of: id),
                         pointer: value.location,
-                        row: position.row,
-                        order: set.tabs.rows[position.row].map(\.id)
+                        arrangement: set.tabs.rows.map { $0.map(\.id) },
+                        metrics: Metrics.drag
                     )
-                } else {
-                    drag?.pointer = value.location
                 }
-                settle()
+                updated.update(
+                    pointer: value.location,
+                    widths: widths,
+                    stripWidth: stripWidth
+                )
+                drag = updated
             }
             .onEnded { _ in commitDrag() }
     }
 
-    /// Write the proposed order down, once.
+    /// Hand the arrangement over, once.
     private func commitDrag() {
         defer { drag = nil }
-        guard let drag, let onMove, let index = drag.index(of: drag.id),
-            let current = position(of: drag.id),
-            current.row != drag.row || current.column != index
+        guard let drag, let onRearrange,
+            drag.proposal != set.tabs.rows.map({ $0.map(\.id) })
         else { return }
-        onMove(drag.id, drag.row, index)
+        onRearrange(drag.proposal)
     }
 
     /// How far a tab is drawn from where the layout put it.
     ///
-    /// The dragged one follows the pointer. Every other tab in the same row sits
-    /// at the difference between the slot the drag is proposing for it and the
-    /// slot the model still has it in — which is zero until something is
-    /// displaced, and one tab's width plus a gap once something is.
+    /// **Only the dragged one is offset now, and that is the simplification the
+    /// proposal bought.** Displaced tabs used to be drawn at the difference
+    /// between the slot the drag proposed and the slot the model still had,
+    /// because the model was what the strip was laid out from. The strip is laid
+    /// out from the proposal, so a displaced tab is already where it belongs and
+    /// has nothing to correct.
+    ///
+    /// What that gives up is the slide: displacement is a layout change again,
+    /// and a curve on a layout change in this view is the mechanism behind the
+    /// sliding-rows bug. Correct and discrete beat smooth and wrong; the slide
+    /// can come back as an animated offset *within* the proposal if it earns it.
     private func offset(for id: FileTab.ID) -> CGFloat {
-        guard let drag else { return 0 }
-        if drag.id == id { return leadingEdge(of: drag) - layoutX(of: id) }
-        guard let proposed = drag.index(of: id),
-            let current = position(of: id), current.row == drag.row
-        else { return 0 }
-        return proposedGeometry(of: drag).minX(at: proposed)
-            - geometry(ofRow: current.row).minX(at: current.column)
+        guard let drag, drag.id == id else { return 0 }
+        return leadingEdge(of: drag) - layoutX(of: id)
     }
-
-    /// Move the dragged tab through the proposed order as far as the pointer has
-    /// earned, one place at a time.
-    ///
-    /// **The test is an edge against a neighbour's midline, not a centre against
-    /// it.** Dragging right, the tab's trailing edge has to pass the midline of
-    /// the tab on its right; dragging left, its leading edge has to pass the
-    /// midline of the tab on its left. That asymmetry is the whole point: the two
-    /// conditions cannot both hold, so a tab that has just changed places is not
-    /// immediately eligible to change back. Comparing a centre to a midline has
-    /// no such gap, and the exchange it produces oscillates every frame the
-    /// pointer holds still near a boundary.
-    ///
-    /// Looped, because one frame of a fast drag can earn several places, and the
-    /// geometry is rebuilt from the proposed order each time round — held across
-    /// the loop it describes the row as it was before the step, and the reversed
-    /// condition then measures against the dragged tab's own width sitting in the
-    /// slot it just left. A wide tab passing a narrow one moved, immediately read
-    /// itself as owed a move back, and stayed put.
-    private func settle() {
-        guard let drag, onMove != nil else { return }
-        let rows = set.tabs.rows
-        guard !rows.isEmpty else { return }
-
-        // Changing rows is decided by the pointer alone — the rows are one tab
-        // tall, so there is no midline to earn vertically. Committed rather than
-        // proposed, because a row change moves the tab out of the arrangement
-        // the proposal describes.
-        let row = nearestRow(to: drag.pointer.y, of: rows.count)
-        if row != drag.row {
-            commitDrag()
-            guard let onMove else { return }
-            onMove(drag.id, row, slot(for: drag.pointer.x, in: row))
-            if let position = position(of: drag.id) {
-                self.drag = Drag(
-                    id: drag.id, grabX: drag.grabX, pointer: drag.pointer,
-                    row: position.row,
-                    order: set.tabs.rows[position.row].map(\.id)
-                )
-            }
-            return
-        }
-
-        let edge = leadingEdge(of: drag)
-        for _ in 0..<drag.order.count {
-            guard let current = self.drag?.index(of: drag.id),
-                let proposal = self.drag
-            else { return }
-            guard
-                let step = proposedGeometry(of: proposal).step(
-                    draggedAt: current, leadingEdge: edge
-                )
-            else { return }
-            self.drag?.order.remove(at: current)
-            self.drag?.order.insert(drag.id, at: step)
-        }
-    }
-
-    private func proposedGeometry(of drag: Drag) -> FileTabRowGeometry {
-        FileTabRowGeometry(
-            widths: drag.order.map(width(of:)),
-            spacing: Metrics.tabSpacing,
-            leading: Metrics.stripPadding
-        )
-    }
-
     /// Where the dragged tab's leading edge is being asked to sit.
-    ///
-    /// Clamped into the strip. Nothing good happens past either end: the tab
-    /// leaves the row it belongs to, there is no slot out there to earn, and the
-    /// only way back is to drag it in again.
-    private func leadingEdge(of drag: Drag) -> CGFloat {
-        guard let position = position(of: drag.id) else { return 0 }
-        return geometry(ofRow: position.row).clamped(
-            leadingEdge: drag.pointer.x - drag.grabX,
-            width: width(of: drag.id),
-            stripWidth: stripWidth
+    private func leadingEdge(of drag: FileTabDrag) -> CGFloat {
+        drag.leadingEdge(
+            widths: sized.mapValues(\.width), stripWidth: stripWidth
         )
     }
 
-    // MARK: - Geometry, computed rather than read back
 
-    private func geometry(ofRow row: Int) -> FileTabRowGeometry {
-        FileTabRowGeometry(
-            widths: set.tabs.rows[row].map(width(of:)),
+    // MARK: - What is on screen, and how wide each of it is
+
+    /// The rows being drawn: the drag's proposal while one is in progress, the
+    /// model's otherwise.
+    ///
+    /// **Drawing the proposal is the point.** The alternative — model on screen,
+    /// proposal in the drag's head — is exactly what let the two disagree about
+    /// which row a tab was in, and every stuck drag came from that gap.
+    private var displayRows: [[FileTab]] {
+        guard let drag else { return set.tabs.rows }
+        let byID = Dictionary(
+            set.tabs.tabs.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }
+        )
+        return drag.proposal
+            .map { $0.compactMap { byID[$0] } }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Each tab's chosen label and width, for the arrangement on screen.
+    ///
+    /// Computed from the arrangement rather than read back from the layout. Read
+    /// back, a width described the arrangement of a frame ago — fine while a
+    /// drag stayed in one row, and wrong the moment it crossed, because crossing
+    /// re-measures every label in both rows at once.
+    private var sized: [FileTab.ID: FileTabRowFit.Sized] {
+        var result: [FileTab.ID: FileTabRowFit.Sized] = [:]
+        for row in displayRows {
+            for entry in fit(row) { result[entry.id] = entry }
+        }
+        return result
+    }
+
+    private func fit(_ row: [FileTab]) -> [FileTabRowFit.Sized] {
+        FileTabRowFit.fit(
+            row.map(candidate(for:)),
+            available: max(0, stripWidth - 2 * Metrics.stripPadding),
             spacing: Metrics.tabSpacing,
-            leading: Metrics.stripPadding
+            font: FileTabRowFit.font(ofSize: Metrics.fontSize)
         )
     }
 
-    /// Where a tab's leading edge sits, from the order and the widths.
-    ///
-    /// Only the widths come from the layout, and they change when a label picks a
-    /// different tier rather than when the order changes — so they are stable
-    /// across exactly the thing a drag does.
-    private func layoutX(of id: FileTab.ID) -> CGFloat {
-        guard let position = position(of: id) else { return Metrics.stripPadding }
-        return geometry(ofRow: position.row).minX(at: position.column)
+    private func candidate(for tab: FileTab) -> FileTabRowFit.Candidate {
+        var tiers = FileTabLabel.tiers(
+            for: tab.url, root: set.root, siblings: siblings(excluding: tab)
+        )
+        // The floor last, so a tab too narrow for any tier still says which file
+        // it is. Often already there, when the filename tells them apart.
+        let floor = FileTabLabel.floor(for: tab.url)
+        if tiers.last != floor { tiers.append(floor) }
+        return FileTabRowFit.Candidate(
+            id: tab.id, tiers: tiers, chrome: chrome(for: tab)
+        )
     }
 
-    private func width(of tab: FileTab) -> CGFloat { width(of: tab.id) }
+    /// Everything a tab spends that is not its label.
+    private func chrome(for tab: FileTab) -> CGFloat {
+        var total = Metrics.tabChrome
+        let notes = set.noteCount(forPath: tab.path)
+        if notes > 0 {
+            total +=
+                FileTabRowFit.width(
+                    of: "\(notes)",
+                    font: FileTabRowFit.font(ofSize: Metrics.badgeFontSize)
+                ) + Metrics.badgeChrome
+        }
+        return total
+    }
 
     private func width(of id: FileTab.ID) -> CGFloat {
-        widths[id] ?? Metrics.assumedTabWidth
+        sized[id]?.width ?? Metrics.assumedTabWidth
     }
 
-    private func position(of id: FileTab.ID) -> (row: Int, column: Int)? {
-        for (row, tabs) in set.tabs.rows.enumerated() {
-            if let column = tabs.firstIndex(where: { $0.id == id }) {
-                return (row, column)
-            }
+    private func displayPosition(of id: FileTab.ID) -> (row: Int, column: Int)? {
+        for (r, row) in displayRows.enumerated() {
+            if let c = row.firstIndex(where: { $0.id == id }) { return (r, c) }
         }
         return nil
     }
 
-    /// Which row a vertical position is over, clamped.
-    ///
-    /// Arithmetic rather than measured: every row is one tab tall, so the bands
-    /// are known. Clamping means dragging above or below the strip still means
-    /// the nearest row rather than nothing.
-    private func nearestRow(to y: CGFloat, of count: Int) -> Int {
-        let pitch = Metrics.tabHeight + Metrics.rowSpacing
-        let raw = Int(((y - Metrics.rowSpacing) / pitch).rounded(.down))
-        return max(0, min(count - 1, raw))
-    }
-
-    /// Where a tab arriving from another row lands.
-    ///
-    /// Measured against the row without it in, which is the order
-    /// `FileTabStripModel.move` inserts into — it takes the tab out first.
-    private func slot(for x: CGFloat, in row: Int) -> Int {
-        let others = set.tabs.rows[row].filter { $0.id != drag?.id }
-        return FileTabRowGeometry(
-            widths: others.map(width(of:)),
+    private func geometry(ofRow row: [FileTab.ID]) -> FileTabRowGeometry {
+        FileTabRowGeometry(
+            widths: row.map(width(of:)),
             spacing: Metrics.tabSpacing,
             leading: Metrics.stripPadding
-        ).slot(forLeadingEdge: x)
+        )
     }
 
-    private func frameReporter(for id: FileTab.ID) -> some View {
-        GeometryReader { geometry in
-            Color.clear.preference(
-                key: TabWidthsKey.self, value: [id: geometry.size.width]
-            )
-        }
+    private func position(of id: FileTab.ID) -> (row: Int, column: Int)? {
+        displayPosition(of: id)
     }
+
+    /// Where a tab's leading edge sits in the arrangement on screen.
+    private func layoutX(of id: FileTab.ID) -> CGFloat {
+        guard let (row, column) = displayPosition(of: id) else {
+            return Metrics.stripPadding
+        }
+        return geometry(ofRow: displayRows[row].map(\.id)).minX(at: column)
+    }
+    /// Whether the drag is over the new-row band and a row would actually
+    /// appear, which is what the dashed target promises.
+    private var isProposingNewRow: Bool {
+        drag?.isProposingNewRow(widths: sized.mapValues(\.width)) ?? false
+    }
+
 
     /// An opaque base and a shadow, for the tab being carried.
     ///
@@ -400,6 +381,29 @@ public struct FileTabStripView: View {
         static let stripPadding: CGFloat = 6
         static let fontSize: CGFloat = 11
         static let tabHeight: CGFloat = 20
+        /// What a tab costs around its label: the horizontal padding at both
+        /// ends, the gap before the close button, and the button's reserved
+        /// place. Measured against the drawn tab rather than guessed, because
+        /// the fit pays for it out of the row's width.
+        static let tabChrome: CGFloat = 6 + 6 + 4 + 13
+        static let badgeFontSize: CGFloat = 9
+        /// The note badge's capsule padding and the gap before it.
+        static let badgeChrome: CGFloat = 8 + 4
+
+        /// The same numbers, handed to the drag so its arithmetic and this
+        /// view's layout cannot drift apart.
+        static let drag = FileTabDrag.Metrics(
+            tabSpacing: tabSpacing,
+            rowSpacing: rowSpacing,
+            stripPadding: stripPadding,
+            tabHeight: tabHeight,
+            newRowMargin: newRowDropMargin
+        )
+        /// How far below the last row a drop still counts as asking for a new
+        /// one. Generous, because the gesture is deliberate and a reader aiming
+        /// at empty space below the strip should not have to be precise about
+        /// it.
+        static let newRowDropMargin: CGFloat = 14
         /// Stands in for a width not yet reported, which is only ever the frame
         /// before the first layout pass. Wrong by a little for one frame beats
         /// zero, which would put every midline in the same place.
@@ -411,33 +415,19 @@ public struct FileTabStripView: View {
     }
 }
 
-// MARK: - Where each tab is
-
-/// Every tab's width.
-///
-/// Widths and not frames, deliberately. A width is what `ViewThatFits` decided
-/// and nothing outside the layout can guess it from a character count — but it
-/// changes only when a label picks a different tier, so it survives a reorder.
-/// A *position* read back the same way does not: it arrives a pass late, which
-/// during the update that reorders the strip is the difference between a tab
-/// tracking the cursor and a tab jumping its own width.
-private struct TabWidthsKey: PreferenceKey {
-    static let defaultValue: [FileTab.ID: CGFloat] = [:]
-
-    static func reduce(
-        value: inout [FileTab.ID: CGFloat],
-        nextValue: () -> [FileTab.ID: CGFloat]
-    ) {
-        value.merge(nextValue()) { _, latest in latest }
-    }
-}
-
-// MARK: - One tab
-
 private struct FileTabView: View {
     let tab: FileTab
+    /// What to draw, already chosen and already paid for by `FileTabRowFit`.
+    ///
+    /// Handed in rather than worked out here, because choosing a label needs to
+    /// know what the whole row can afford and a tab can only see itself. That is
+    /// the whole reason a `ViewThatFits` per tab could not do it: it picks from
+    /// the width the stack proposes, which is a guess made before the leftover
+    /// is known.
+    let label: String
+    /// Only for the context menu's relative-path copy. The label no longer needs
+    /// it, since the row's fit resolved that already.
     let root: URL
-    let siblings: [URL]
     let noteCount: Int
     let isSelected: Bool
     let onSelect: () -> Void
@@ -458,13 +448,10 @@ private struct FileTabView: View {
 
     private var hasNotes: Bool { noteCount > 0 }
 
-    private var tiers: [String] {
-        FileTabLabel.tiers(for: tab.url, root: root, siblings: siblings)
-    }
 
     var body: some View {
         HStack(spacing: 4) {
-            label
+            labelText
 
             if hasNotes {
                 Text("\(noteCount)")
@@ -487,6 +474,15 @@ private struct FileTabView: View {
                 .allowsHitTesting(isHovering)
         }
         .padding(.horizontal, 6)
+        // No floor and no cap. A tab is as wide as its label wants and as
+        // narrow as the row makes it, and the row is the only cap there is.
+        //
+        // **A hard `minWidth` here is what broke wrapping once**: ten tabs at an
+        // 88pt floor demand 907pt whatever they are offered, and an `HStack`
+        // that cannot compress below its children's minimums does not wrap, it
+        // overflows — so the strip measured its own overflowing content, sized
+        // rows from that, and grew. Nothing here may claim a width the row
+        // cannot refuse.
         .frame(height: Metrics.tabHeight)
         .background(
             RoundedRectangle(cornerRadius: 4)
@@ -519,31 +515,17 @@ private struct FileTabView: View {
         }
     }
 
-    /// Every tier as its own `ViewThatFits` child, widest first.
+    /// The label, at the width the row's fit assigned this tab.
     ///
-    /// Spelled out rather than looped because a `ForEach` inside `ViewThatFits`
-    /// is one child, and one child is one candidate. Short tier lists repeat
-    /// their narrowest entry into the spare slots — never an `EmptyView`, which
-    /// fits everything and would render a blank tab.
-    private var label: some View {
-        let t = tiers
-        return ViewThatFits(in: .horizontal) {
-            tierText(t, 0)
-            tierText(t, 1)
-            tierText(t, 2)
-            // The last slot truncates, so a tab narrower than even the filename
-            // shows part of it rather than nothing.
-            tierText(t, FileTabLabel.tierCount - 1)
-                .truncationMode(.middle)
-        }
-    }
-
-    private func tierText(_ tiers: [String], _ index: Int) -> some View {
-        Text(tiers.isEmpty ? tab.url.lastPathComponent
-            : tiers[min(index, tiers.count - 1)])
+    /// Truncated at the tail rather than the middle: the head of a filename is
+    /// what a reader scans, and middle-truncating a path keeps the folders two
+    /// tabs share while cutting away the name that tells them apart.
+    private var labelText: some View {
+        Text(label)
             .font(.system(size: Metrics.fontSize))
             .foregroundColor(isSelected ? .primary : .secondary)
             .lineLimit(1)
+            .truncationMode(.tail)
     }
 
     private var closeButton: some View {
