@@ -60,7 +60,7 @@ public enum FilePickerRanking {
         cancellation: FileMatcher.Cancellation? = nil
     ) -> [FilePickerItem] {
         let prepared = FileMatcher.PreparedQuery(query)
-        guard !prepared.needle.isEmpty else { return [] }
+        guard !prepared.isEmpty else { return [] }
 
         let matched = FileMatcher.matches(
             in: slices,

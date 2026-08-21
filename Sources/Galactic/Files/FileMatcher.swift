@@ -92,32 +92,10 @@ public enum FileMatcher {
 
     // MARK: - Scoring weights
 
-    /// Any matched character. The unit the other weights are proportioned
-    /// against, kept large so the bonuses can be integers.
-    private static let matchScore = 16
-    /// A character landing at the start of a path segment or a word inside
-    /// one.
-    private static let wordStartBonus = 8
-    /// A character that continues an unbroken run.
-    private static let contiguousBonus = 4
-    /// Skipping characters costs, or spreading a query across a path would be
-    /// free. Without these, `n/o/t/e/s/unrelated.md` beat `notes.md` for the
-    /// query `notes`: every letter landed after a `/` and collected a
-    /// word-start bonus, and nothing charged for the distance between them.
-    private static let gapStartPenalty = 3
-    private static let gapExtensionPenalty = 1
-    /// Deducted per character skipped before the first match, capped so a long
-    /// path cannot drive a real match negative.
-    private static let maxLeadingPenalty = 12
-    /// Awarded when the whole query matched inside the file's own name rather
-    /// than being spread across the directories above it.
+    /// Placement and contiguity are weighed by `FileMatchAlignment`, which is
+    /// where the alignment they describe is chosen. This one stays here
+    /// because it is not a property of the alignment at all.
     ///
-    /// The structural fix for the same problem the gap penalties address, and
-    /// the more honest one: someone typing `notes` means a file called notes,
-    /// not five directories whose initials spell it. Large enough to be
-    /// decisive, which is the point — VS Code separates these into two scoring
-    /// tiers for the same reason.
-    private static let basenameBonus = 40
     /// The most a recently-touched file can gain. Deliberately small against a
     /// well-placed character: recency breaks ties, it does not outrank a
     /// better name match.
@@ -165,7 +143,7 @@ public enum FileMatcher {
         cancellation: Cancellation? = nil
     ) -> [Match] {
         let prepared = PreparedQuery(query)
-        guard !prepared.needle.isEmpty, !slices.isEmpty else { return [] }
+        guard !prepared.isEmpty, !slices.isEmpty else { return [] }
 
         var chunks: [(slice: Int, range: Range<Int>)] = []
         for (position, slice) in slices.enumerated() {
@@ -278,96 +256,65 @@ public enum FileMatcher {
         var sinceCheck = 0
         var stopped = false
 
-        corpus.forEachEntry(in: range) { index, bytes in
-            if sinceCheck >= FileCorpus.restartInterval {
-                sinceCheck = 0
-                if cancellation?.isCancelled == true {
-                    stopped = true
-                    return false
+        // The query's buffers are borrowed once for the whole chunk rather
+        // than per candidate. Taking them inside the loop would put an
+        // exclusivity check and a retain on the hot path, which over most of a
+        // million entries is not a rounding error — see `FileMatchAlignment`
+        // on the hundredfold this file has already paid once.
+        query.needle.withUnsafeBufferPointer { needle in
+            query.tokenLengths.withUnsafeBufferPointer { lengths in
+                corpus.forEachEntry(in: range) { index, bytes in
+                    if sinceCheck >= FileCorpus.restartInterval {
+                        sinceCheck = 0
+                        if cancellation?.isCancelled == true {
+                            stopped = true
+                            return false
+                        }
+                    }
+                    sinceCheck += 1
+
+                    // Deleted since the shard was written. Checked before
+                    // anything else, because a removed entry must be invisible
+                    // rather than merely ranked low.
+                    if target.isRemoved(index) { return true }
+                    if !includingDirectories, corpus.isDirectory(at: index) {
+                        return true
+                    }
+                    let bag = corpus.bags[index]
+                    guard FileCharBag.isSuperset(bag, of: query.bag) else {
+                        return true
+                    }
+
+                    let hasNonASCII = bag & FileCharBag.nonASCIIBit != 0
+                    let score: Int?
+                    if hasNonASCII && !query.diacriticSensitive {
+                        score = foldedScore(
+                            of: bytes, needle: needle, lengths: lengths,
+                            caseSensitive: query.caseSensitive
+                        )
+                    } else {
+                        score = FileMatchAlignment.score(
+                            needle: needle, lengths: lengths, in: bytes,
+                            caseSensitive: query.caseSensitive
+                        )
+                    }
+                    guard var total = score else { return true }
+
+                    total += recencyBonus(
+                        days: corpus.modifiedDays[index], today: today
+                    )
+                    best.offer(
+                        Match(
+                            slice: slice, index: index, score: total,
+                            length: bytes.count
+                        )
+                    )
+                    return true
                 }
             }
-            sinceCheck += 1
-
-            // Deleted since the shard was written. Checked before anything
-            // else, because a removed entry must be invisible rather than
-            // merely ranked low.
-            if target.isRemoved(index) { return true }
-            if !includingDirectories, corpus.isDirectory(at: index) {
-                return true
-            }
-            let bag = corpus.bags[index]
-            guard FileCharBag.isSuperset(bag, of: query.bag) else { return true }
-
-            let hasNonASCII = bag & FileCharBag.nonASCIIBit != 0
-            let score: Int?
-            if hasNonASCII && !query.diacriticSensitive {
-                score = foldedScore(of: bytes, query: query)
-            } else {
-                score = asciiScore(of: bytes, query: query)
-            }
-            guard var total = score else { return true }
-
-            total += recencyBonus(
-                days: corpus.modifiedDays[index], today: today
-            )
-            best.offer(
-                Match(
-                    slice: slice, index: index, score: total,
-                    length: bytes.count
-                )
-            )
-            return true
         }
 
         return stopped ? [] : best.sorted()
-    }
-
-    /// The fast path: one pass over the bytes, folding case with a single OR.
-    private static func asciiScore(
-        of bytes: UnsafeBufferPointer<UInt8>, query: PreparedQuery
-    ) -> Int? {
-        var needleIndex = 0
-        var total = 0
-        var previousMatch = -1
-        var firstMatch = -1
-        var lastSlash = -1
-        let needle = query.needle
-        let count = bytes.count
-
-        var position = 0
-        while position < count, needleIndex < needle.count {
-            let raw = bytes[position]
-            if raw == 0x2F { lastSlash = position }
-
-            var character = raw
-            if !query.caseSensitive, character >= 0x41, character <= 0x5A {
-                character |= 0x20
-            }
-            if character == needle[needleIndex] {
-                total += matchScore
-                if position == 0 || isBoundary(bytes[position - 1]) {
-                    total += wordStartBonus
-                }
-                if previousMatch < 0 {
-                    firstMatch = position
-                    total -= min(position, maxLeadingPenalty)
-                } else if previousMatch == position - 1 {
-                    total += contiguousBonus
-                } else {
-                    let skipped = position - previousMatch - 1
-                    total -= gapStartPenalty + (skipped - 1) * gapExtensionPenalty
-                }
-                previousMatch = position
-                needleIndex += 1
-            }
-            position += 1
-        }
-        guard needleIndex == needle.count else { return nil }
-
-        // Every matched character sat after the final separator, so the match
-        // is in the file's own name.
-        if firstMatch > lastSlash { total += basenameBonus }
-        return total
     }
 
     /// The path for entries carrying accents, when the query did not.
@@ -377,23 +324,21 @@ public enum FileMatcher {
     /// reader typed plain letters for an accented name, which is exactly the
     /// case they expect to work.
     private static func foldedScore(
-        of bytes: UnsafeBufferPointer<UInt8>, query: PreparedQuery
+        of bytes: UnsafeBufferPointer<UInt8>,
+        needle: UnsafeBufferPointer<UInt8>,
+        lengths: UnsafeBufferPointer<Int>,
+        caseSensitive: Bool
     ) -> Int? {
         let text = String(decoding: bytes, as: UTF8.self)
         let folded = text.folding(
             options: [.diacriticInsensitive, .caseInsensitive], locale: nil
         )
-        var scratch = Array(folded.utf8)
+        let scratch = Array(folded.utf8)
         return scratch.withUnsafeBufferPointer {
-            asciiScore(of: $0, query: query)
-        }
-    }
-
-    @inline(__always)
-    private static func isBoundary(_ byte: UInt8) -> Bool {
-        switch byte {
-        case 0x2F, 0x5F, 0x2D, 0x2E, 0x20: return true  // / _ - . space
-        default: return false
+            FileMatchAlignment.score(
+                needle: needle, lengths: lengths, in: $0,
+                caseSensitive: caseSensitive
+            )
         }
     }
 
@@ -409,8 +354,28 @@ public enum FileMatcher {
 
     /// A query resolved once for a pass over many candidates.
     public struct PreparedQuery {
-        /// Lowercased, folded, whitespace removed.
+        /// Every token's bytes, concatenated.
+        ///
+        /// Flat, with `tokenLengths` carrying the divisions, rather than an
+        /// array of arrays. The scan touches this once per candidate across
+        /// most of a million of them, and an array of arrays would retain and
+        /// release an inner array every time.
         let needle: [UInt8]
+        /// One length per whitespace-separated run, in the order typed.
+        ///
+        /// Ordered and non-overlapping: a later token is placed after the
+        /// previous one ends. A space therefore still means "then, somewhere
+        /// later" — which is what it has always meant here, except that it
+        /// used to mean it by being *deleted*, which cost the runs either side
+        /// their contiguity. Measured, that made typing the space strictly
+        /// worse than eliding it: `linear cli` scored a path holding
+        /// `linear-cli` below what `linear-cli` scored it.
+        let tokenLengths: [Int]
+        /// The union of every token's characters.
+        ///
+        /// The same characters the condensed needle had, minus a space, which
+        /// never had a bit worth having — so tokenizing cannot narrow the
+        /// prefilter, which is what keeps the match set unchanged.
         let bag: UInt64
         /// Any uppercase in the query makes the whole query case-sensitive —
         /// ripgrep's rule, and what a reader's fingers already expect.
@@ -420,21 +385,34 @@ public enum FileMatcher {
         /// than two rules to remember.
         let diacriticSensitive: Bool
 
-        public init(_ query: String) {
-            let condensed = query.filter { !$0.isWhitespace }
-            caseSensitive = condensed.contains { $0.isUppercase }
-            diacriticSensitive = condensed.unicodeScalars.contains { $0.value > 127 }
+        var isEmpty: Bool { tokenLengths.isEmpty }
 
-            let normalised =
-                diacriticSensitive
-                ? condensed
-                : condensed.folding(
-                    options: [.diacriticInsensitive], locale: nil
+        public init(_ query: String) {
+            let runs = query.split(whereSeparator: { $0.isWhitespace })
+            caseSensitive = runs.contains { $0.contains { $0.isUppercase } }
+            diacriticSensitive = runs.contains {
+                $0.unicodeScalars.contains { $0.value > 127 }
+            }
+
+            var flat: [UInt8] = []
+            var divisions: [Int] = []
+            for run in runs {
+                let normalised =
+                    diacriticSensitive
+                    ? String(run)
+                    : String(run).folding(
+                        options: [.diacriticInsensitive], locale: nil
+                    )
+                let bytes = Array(
+                    (caseSensitive ? normalised : normalised.lowercased()).utf8
                 )
-            needle = Array(
-                (caseSensitive ? normalised : normalised.lowercased()).utf8
-            )
-            bag = FileCharBag.bag(of: needle)
+                guard !bytes.isEmpty else { continue }
+                flat.append(contentsOf: bytes)
+                divisions.append(bytes.count)
+            }
+            needle = flat
+            tokenLengths = divisions
+            bag = FileCharBag.bag(of: flat)
         }
     }
 
@@ -510,32 +488,59 @@ extension FileMatcher {
     /// the benefit of the hundred that are shown.
     ///
     /// So the scan answers *whether* and *how well*, and this answers *where*,
-    /// for the rows that survived. It walks characters rather than bytes,
-    /// because that is what the view indexes.
+    /// for the rows that survived.
+    ///
+    /// **It runs the same alignment the score came from.** It used to walk
+    /// greedily on its own, which meant the picker highlighted one alignment
+    /// and ranked by another — the same defect twice, and the visible half of
+    /// it. Sharing the routine rather than carrying the scan's offsets is
+    /// deliberate: `display` may have been trimmed to a browse root and is
+    /// indexed by character, so the scan's byte positions do not address it.
     public static func highlightOffsets(in display: String, query: PreparedQuery)
         -> [Int]
     {
-        guard !query.needle.isEmpty else { return [] }
-        var offsets: [Int] = []
-        var needleIndex = 0
+        guard !query.isEmpty else { return [] }
+
+        // The map is built alongside the folded bytes rather than
+        // reconstructed after. Folding can change a character's byte length,
+        // which is exactly why the two cannot be assumed to correspond.
+        var bytes: [UInt8] = []
+        var characterOfByte: [Int] = []
+        bytes.reserveCapacity(display.utf8.count)
+        characterOfByte.reserveCapacity(display.utf8.count)
 
         for (index, character) in display.enumerated() {
-            guard needleIndex < query.needle.count else { break }
-            var candidate = String(character)
+            var piece = String(character)
             if !query.diacriticSensitive {
-                candidate = candidate.folding(
+                piece = piece.folding(
                     options: [.diacriticInsensitive], locale: nil
                 )
             }
-            if !query.caseSensitive { candidate = candidate.lowercased() }
-            if candidate.utf8.first == query.needle[needleIndex] {
-                offsets.append(index)
-                needleIndex += 1
+            if !query.caseSensitive { piece = piece.lowercased() }
+            for byte in piece.utf8 {
+                bytes.append(byte)
+                characterOfByte.append(index)
             }
         }
-        // A partial walk means the display string and the matched bytes
-        // disagree, which is possible for a fold that changes length. Nothing
+
+        let matched = bytes.withUnsafeBufferPointer { candidate in
+            query.needle.withUnsafeBufferPointer { needle in
+                query.tokenLengths.withUnsafeBufferPointer { lengths in
+                    FileMatchAlignment.positions(
+                        needle: needle, lengths: lengths, in: candidate,
+                        caseSensitive: query.caseSensitive
+                    )
+                }
+            }
+        }
+        // No alignment means the display string and the scanned entry
+        // disagree, which a length-changing fold can produce. Nothing
         // highlighted is better than the wrong letters highlighted.
-        return needleIndex == query.needle.count ? offsets : []
+        guard let matched else { return [] }
+
+        var seen = Set<Int>()
+        return matched
+            .map { characterOfByte[$0] }
+            .filter { seen.insert($0).inserted }
     }
 }

@@ -144,6 +144,44 @@ final class FilePickerRankingTests: XCTestCase {
         XCTAssertEqual(row?.relativePath, "src/a.rb")
     }
 
+    /// The highlight must mark the letters the score was computed from. It
+    /// used to re-derive its own greedy alignment, so the picker highlighted
+    /// one thing and ranked by another — visible as scattered letters on the
+    /// row a reader was aiming at.
+    func testHighlightMarksTheAlignmentThatWasScored() throws {
+        let items = try index(["projects/kajabi/agent-guidelines/linear-cli.md"])
+
+        XCTAssertEqual(marked(items, "linear-cli"), "linear-cli")
+    }
+
+    /// Each token highlighted where it sits, rather than the first letters
+    /// that happen to accept it.
+    func testHighlightMarksEachTokenWhereItLands() throws {
+        let items = try index(["src/file/picker.swift"])
+
+        XCTAssertEqual(marked(items, "file picker"), "filepicker")
+    }
+
+    /// Folding an accented character changes its byte length, which is the
+    /// case the byte-to-character map exists for.
+    func testHighlightOffsetsAddressCharactersNotBytes() throws {
+        let items = try index(["notes/café-menu.md"])
+
+        XCTAssertEqual(marked(items, "cafe"), "café")
+    }
+
+    /// The characters the first row's offsets point at, in order.
+    private func marked(_ corpus: FileCorpus, _ query: String) -> String {
+        guard let row = FilePickerRanking.matches(corpus, query: query).first
+        else { return "" }
+        let offsets = Set(row.matchedOffsets)
+        return String(
+            row.relativePath.enumerated()
+                .filter { offsets.contains($0.offset) }
+                .map(\.element)
+        )
+    }
+
     func testAMatchedRowSaysItWasMatched() throws {
         let items = try index(["a.rb"])
 
