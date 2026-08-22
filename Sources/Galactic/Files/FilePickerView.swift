@@ -277,18 +277,37 @@ public struct FilePickerView: View {
                                 isSelected: index == presenter.selectedIndex
                             )
                             .id(row.id)
+                            .reportingTopRow(id: row.id, in: Self.space)
                             .onTapGesture { presenter.open(row) }
                         }
                     }
                 }
+                .coordinateSpace(name: Self.space)
                 .frame(height: listHeight)
+                .onPreferenceChange(TopRowPreference.self) { top in
+                    // A plain property, not published state: this fires every
+                    // scroll frame and only a later reopen reads it.
+                    presenter.noteScrollTop(top?.id, in: .search)
+                }
                 .onChange(of: presenter.selectedIndex) { _, new in
                     guard presenter.rows.indices.contains(new) else { return }
                     proxy.scrollTo(presenter.rows[new].id)
                 }
+                .onChange(of: presenter.scrollTarget, initial: true) { _, target in
+                    guard let target, target.mode == .search else { return }
+                    // Deferred, for the reason `FileTreeView` documents: a row a
+                    // `LazyVStack` has not built yet cannot be scrolled to, and
+                    // the attempt fails silently.
+                    Task { @MainActor in
+                        proxy.scrollTo(target.id, anchor: .top)
+                        presenter.clearScrollTarget()
+                    }
+                }
             }
         }
     }
+
+    private static let space = "galactic.file-picker-results"
 
     /// Whether the tree is what is on screen, which is what the arrows and
     /// Return have to follow — Browse showing a folder chooser is a list, and

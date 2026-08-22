@@ -706,6 +706,72 @@ final class FilePickerPresenterTests: XCTestCase {
         XCTAssertEqual(p.query, "userthing")
     }
 
+    /// Scrolling a long way is not the same act as selecting, and coming back
+    /// to the selection would undo the scroll a reader is asking to keep.
+    func testReopeningAsksToScrollBackToWhereItWas() throws {
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("app"),
+            withIntermediateDirectories: true
+        )
+        _ = try write("app/one.rb")
+        let root = FilePaths.canonical(dir)
+
+        let p = opened(owner: "one", root: dir)
+        p.selectMode(.browse)
+        settle("the root to be read") { p.treeRows.count > 1 }
+        p.noteScrollTop(root + "/app", in: .browse)
+        p.dismiss()
+
+        p.present()
+        settle("the scroll target to be claimed") { p.scrollTarget != nil }
+
+        XCTAssertEqual(
+            p.scrollTarget,
+            .init(mode: .browse, id: root + "/app")
+        )
+        p.clearScrollTarget()
+        XCTAssertNil(p.scrollTarget, "taken once, by whoever scrolled")
+    }
+
+    /// With nothing scrolled, the selection is the honest fallback — it is
+    /// where the reader last acted.
+    func testAReaderWhoNeverScrolledComesBackToTheirSelection() throws {
+        _ = try write("only.rb")
+        let root = FilePaths.canonical(dir)
+
+        let p = opened(owner: "one", root: dir)
+        p.selectMode(.browse)
+        settle("the root to be read") { p.treeRows.count > 1 }
+        p.moveTreeSelection(by: 1)
+        let selected = p.treeRows[p.treeSelectedIndex].path
+        p.dismiss()
+
+        p.present()
+        settle("the scroll target to be claimed") { p.scrollTarget != nil }
+
+        XCTAssertEqual(p.scrollTarget, .init(mode: .browse, id: selected))
+        XCTAssertNotEqual(selected, root)
+    }
+
+    /// Both tabs remember their own place, and the target says which list it is
+    /// for — only one of them is on screen to act on it.
+    func testTheRankedListRemembersItsOwnScrollPosition() throws {
+        _ = try write("userthing.rb")
+        // The canonical spelling, which is what a corpus row carries.
+        let wanted = FilePaths.canonical(dir) + "/userthing.rb"
+
+        let p = opened(owner: "one", root: dir)
+        p.query = "userthing"
+        settle("the scan to land") { !p.rows.isEmpty }
+        p.noteScrollTop(wanted, in: .search)
+        p.dismiss()
+
+        p.present()
+        settle("the scroll target to be claimed") { p.scrollTarget != nil }
+
+        XCTAssertEqual(p.scrollTarget, .init(mode: .search, id: wanted))
+    }
+
     /// One picker, one state per set — a session's tree is not another's.
     func testEachOwnerKeepsItsOwnState() {
         let p = FilePickerPresenter()

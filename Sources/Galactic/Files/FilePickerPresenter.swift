@@ -61,6 +61,30 @@ public final class FilePickerPresenter: ObservableObject {
     @Published public private(set) var treeRows: [FileTreeOutline.Row] = []
     @Published public private(set) var treeSelectedIndex = 0
 
+    /// A row to bring to the top of a list, once it exists.
+    ///
+    /// Carries which list it is for, because both tabs remember their own place
+    /// and only one of them is on screen to act on it. A row id rather than an
+    /// offset: both lists fill in after the fact — the tree as directories are
+    /// read, the ranked list when the scan lands — so an offset into a list
+    /// still being built points at whatever happens to be there.
+    public struct ScrollTarget: Equatable {
+        public let mode: FilePickerMode
+        public let id: String
+    }
+
+    @Published public private(set) var scrollTarget: ScrollTarget?
+
+    /// The row currently at the top of each list.
+    ///
+    /// **Deliberately not `@Published`.** These are written on every scroll
+    /// frame, and publishing them would invalidate the view once per frame to
+    /// record something only a later reopen ever reads.
+    private var treeScrollTop: String?
+    private var searchScrollTop: String?
+    private var pendingTreeScroll: String?
+    private var pendingSearchScroll: String?
+
     private var outline = FileTreeOutline()
 
     /// Directory contents already read, by absolute path.
@@ -93,6 +117,12 @@ public final class FilePickerPresenter: ObservableObject {
         /// same shape — a folder may have gone — and an index into a list that
         /// changed points at whatever moved into that slot.
         var selectedPath: String?
+        /// Where the tree was scrolled to, which is not the same question as
+        /// what was selected: a reader scrolls a long way with the wheel
+        /// without moving the selection at all, and coming back to the
+        /// selection would undo the scroll they are asking to keep.
+        var treeScrollTop: String?
+        var searchScrollTop: String?
         var children: [String: [FileTreeOutline.Entry]]
         /// The root it all describes. Every path above is relative to it, so a
         /// host that has re-rooted since invalidates the whole thing.
@@ -248,6 +278,8 @@ public final class FilePickerPresenter: ObservableObject {
             query: query,
             expanded: outline.expandedByReader,
             selectedPath: selected,
+            treeScrollTop: treeScrollTop,
+            searchScrollTop: searchScrollTop,
             children: childCache,
             root: FilePaths.canonical(root)
         )
@@ -272,6 +304,8 @@ public final class FilePickerPresenter: ObservableObject {
         loadingChildren = []
         outline = FileTreeOutline(expandedByReader: state.expanded)
         pendingSelection = state.selectedPath
+        pendingTreeScroll = state.treeScrollTop ?? state.selectedPath
+        pendingSearchScroll = state.searchScrollTop
         query = state.query
     }
 
@@ -296,6 +330,20 @@ public final class FilePickerPresenter: ObservableObject {
     private func resetSelection() {
         selectedIndex = 0
         selectionIsExplicit = false
+        claimSearchScroll()
+    }
+
+    /// Ask to scroll the ranked list back, the first pass its row appears on.
+    ///
+    /// Later than the tree's equivalent by necessity: these rows are the answer
+    /// to a scan that runs off the main actor, so on the pass that opens the
+    /// picker there is nothing yet for a remembered row to be found in.
+    private func claimSearchScroll() {
+        guard let wanted = pendingSearchScroll,
+            rows.contains(where: { $0.id == wanted })
+        else { return }
+        pendingSearchScroll = nil
+        scrollTarget = ScrollTarget(mode: .search, id: wanted)
     }
 
     /// Act on the selection, or re-root to what has been typed.
@@ -422,6 +470,9 @@ public final class FilePickerPresenter: ObservableObject {
         loadingChildren = []
         treeRows = []
         treeSelectedIndex = 0
+        treeScrollTop = nil
+        pendingTreeScroll = nil
+        scrollTarget = nil
         // The root opens with the picker. A tree whose only row is its own root,
         // collapsed, offers nothing to browse and one keystroke of ceremony
         // before it does.
@@ -506,7 +557,12 @@ public final class FilePickerPresenter: ObservableObject {
         loadingChildren.insert(path)
         Task { @MainActor in
             let entries = await Task.detached(priority: .userInitiated) {
-                Self.childEntries(of: path)
+                // **Sorted here, off the main actor.** The flatten used to do
+                // it, which meant re-sorting the same unchanged names on every
+                // refresh — measured at 194 ms per draw for a 2,392-entry
+                // directory. A directory's contents do not change between
+                // draws, so this belongs with the read.
+                Self.childEntries(of: path).sorted(by: FileTreeOutline.precedes)
             }.value
             self.loadingChildren.remove(path)
             self.childCache[path] = entries
@@ -526,6 +582,17 @@ public final class FilePickerPresenter: ObservableObject {
         // may be several passes after opening: the tree fills in as directories
         // are read, so the row a reader left selected does not exist yet on the
         // pass that draws the root.
+        // Claimed the first time the row actually appears, which may be several
+        // passes after opening: the tree fills in as directories are read, so
+        // the row a reader left at the top does not exist yet on the pass that
+        // draws the root.
+        if let wanted = pendingTreeScroll,
+            treeRows.contains(where: { $0.path == wanted })
+        {
+            pendingTreeScroll = nil
+            scrollTarget = ScrollTarget(mode: .browse, id: wanted)
+        }
+
         if let wanted = pendingSelection,
             let index = treeRows.firstIndex(where: { $0.path == wanted })
         {
@@ -541,6 +608,19 @@ public final class FilePickerPresenter: ObservableObject {
         treeSelectedIndex = min(
             max(0, treeSelectedIndex + delta), treeRows.count - 1
         )
+    }
+
+    /// Told by the view which row is at the top, as the reader scrolls.
+    public func noteScrollTop(_ id: String?, in mode: FilePickerMode) {
+        switch mode {
+        case .browse: treeScrollTop = id
+        case .search: searchScrollTop = id
+        }
+    }
+
+    /// Taken by the view once it has scrolled there.
+    public func clearScrollTarget() {
+        scrollTarget = nil
     }
 
     public func selectTreeRow(_ row: FileTreeOutline.Row) {

@@ -124,8 +124,19 @@ public struct FileTreeOutline {
 
     /// Rows for browsing: what is expanded decides what is visible.
     ///
-    /// - Parameter children: a directory's entries. Called only for directories
-    ///   that are open, which is the whole of the laziness.
+    /// - Parameter children: a directory's entries, **already ordered by
+    ///   `precedes`**. Called only for directories that are open, which is the
+    ///   whole of the laziness.
+    ///
+    ///   Ordered by the caller rather than here, and the reason is measured: a
+    ///   flatten sorts the children of *every* open directory, and it runs on
+    ///   every refresh — each expand, each directory read landing, each restored
+    ///   selection. On a real 2,392-entry directory that was 194 ms of main-actor
+    ///   work per refresh, essentially all of it the sort, where the same
+    ///   directory's contents never change between one refresh and the next. Sorted
+    ///   once where it is read — in the task that reads it — the cost leaves the
+    ///   main actor entirely and is paid once per directory instead of once per
+    ///   draw.
     public func rows(
         root: String, children: (String) -> [Entry]
     ) -> [Row] {
@@ -154,7 +165,7 @@ public struct FileTreeOutline {
             )
         )
         guard open else { return }
-        for entry in children(path).sorted(by: Self.precedes) {
+        for entry in children(path) {
             append(
                 path: entry.path, depth: depth + 1,
                 isDirectory: entry.isDirectory, revealed: false,

@@ -14,6 +14,8 @@ struct FileTreeView: View {
 
     private typealias Metrics = FilePickerView.Metrics
 
+    private static let space = "galactic.file-tree"
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -26,6 +28,7 @@ struct FileTreeView: View {
                             isSelected: index == presenter.treeSelectedIndex
                         )
                         .id(row.id)
+                        .reportingTopRow(id: row.id, in: Self.space)
                         .onTapGesture {
                             presenter.selectTreeRow(row)
                             presenter.activateSelectedTreeRow()
@@ -33,10 +36,30 @@ struct FileTreeView: View {
                     }
                 }
             }
+            .coordinateSpace(name: Self.space)
             .frame(height: height)
+            .onPreferenceChange(TopRowPreference.self) { top in
+                // Handed to a plain property rather than to published state.
+                // This fires on every scroll frame, and invalidating the view
+                // each time — to record something only a later reopen reads —
+                // is how a long list comes to stutter while being scrolled.
+                presenter.noteScrollTop(top?.id, in: .browse)
+            }
             .onChange(of: presenter.treeSelectedIndex) { _, new in
                 guard presenter.treeRows.indices.contains(new) else { return }
                 proxy.scrollTo(presenter.treeRows[new].id)
+            }
+            .onChange(of: presenter.scrollTarget, initial: true) { _, target in
+                guard let target, target.mode == .browse else { return }
+                // **Deferred a turn, and that is the bug this had.** Asking a
+                // `LazyVStack` to scroll to a row it has not built yet does
+                // nothing at all — silently, leaving the list at the top — and
+                // on the pass that opens the picker none of them are built. One
+                // hop puts the request after the layout that realises them.
+                Task { @MainActor in
+                    proxy.scrollTo(target.id, anchor: .top)
+                    presenter.clearScrollTarget()
+                }
             }
         }
     }

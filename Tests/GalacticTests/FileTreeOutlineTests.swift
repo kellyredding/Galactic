@@ -31,8 +31,11 @@ final class FileTreeOutlineTests: XCTestCase {
         ],
     ]
 
+    /// Ordered, because that is the provider's contract — the flatten consumes
+    /// the order it is given rather than sorting on every draw. See
+    /// `FileTreeOutline.rows(root:children:)` for the measurement behind that.
     private func children(_ path: String) -> [FileTreeOutline.Entry] {
-        tree[path] ?? []
+        (tree[path] ?? []).sorted(by: FileTreeOutline.precedes)
     }
 
     private func paths(_ rows: [FileTreeOutline.Row]) -> [String] {
@@ -70,6 +73,10 @@ final class FileTreeOutlineTests: XCTestCase {
 
     /// Folders before files, each in Finder order. Finder interleaves them; a
     /// tree reads better grouped.
+    ///
+    /// The rule lives in `precedes` and is applied where a directory is read, so
+    /// this asserts the comparator through a provider that uses it — which is
+    /// exactly how the presenter uses it.
     func testFoldersComeBeforeFilesEachInFinderOrder() {
         let outline = FileTreeOutline(expandedByReader: [root])
 
@@ -87,16 +94,34 @@ final class FileTreeOutlineTests: XCTestCase {
     }
 
     func testDigitRunsAreComparedAsNumbers() {
+        let unordered: [FileTreeOutline.Entry] = [
+            .init(path: "/n/Photo10.png", isDirectory: false),
+            .init(path: "/n/Photo9.png", isDirectory: false),
+        ]
+
+        XCTAssertEqual(
+            unordered.sorted(by: FileTreeOutline.precedes).map(\.path),
+            ["/n/Photo9.png", "/n/Photo10.png"]
+        )
+    }
+
+    /// **The flatten does not sort.** It draws the order it was handed, which is
+    /// what lets the sort happen once per directory read instead of once per
+    /// draw — measured at 194 ms a draw for a real 2,392-entry directory,
+    /// against 0.1 ms once this moved.
+    func testTheFlattenDrawsTheOrderItIsGiven() {
         let outline = FileTreeOutline(expandedByReader: ["/n"])
+
         let rows = outline.rows(root: "/n") { _ in
             [
-                .init(path: "/n/Photo10.png", isDirectory: false),
-                .init(path: "/n/Photo9.png", isDirectory: false),
+                .init(path: "/n/zebra.md", isDirectory: false),
+                .init(path: "/n/apple.md", isDirectory: false),
             ]
         }
 
         XCTAssertEqual(
-            paths(rows), ["/n", "/n/Photo9.png", "/n/Photo10.png"]
+            paths(rows), ["/n", "/n/zebra.md", "/n/apple.md"],
+            "given out of order, drawn out of order — the caller orders"
         )
     }
 
