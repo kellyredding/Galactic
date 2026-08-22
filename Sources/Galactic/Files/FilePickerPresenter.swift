@@ -42,12 +42,62 @@ public final class FilePickerPresenter: ObservableObject {
     @Published public var query = "" {
         didSet {
             guard query != oldValue else { return }
-            refreshRows()
+            // Only the mode on screen is rebuilt. Both would mean two corpus
+            // scans per keystroke to show one of them.
+            refreshApplicableRows()
         }
     }
 
     @Published public private(set) var rows: [FilePickerItem] = []
     @Published public private(set) var selectedIndex = 0
+
+    /// Which of the two ways of finding a file is on screen.
+    ///
+    /// Always `.search` when the picker opens. ⌘T is the fast path and the one
+    /// there is muscle memory for; a picker that reopened in whatever mode was
+    /// last used would make one keystroke mean two things.
+    @Published public private(set) var mode: FilePickerMode = .search
+
+    @Published public private(set) var treeRows: [FileTreeOutline.Row] = []
+    @Published public private(set) var treeSelectedIndex = 0
+
+    private var outline = FileTreeOutline()
+
+    /// Directory contents already read, by absolute path.
+    ///
+    /// Expanding is user-initiated, so this is filled on demand rather than
+    /// ahead of time, and a directory is read once per opening of the picker.
+    /// Dropped with the rest of the browse state on open, because a folder
+    /// created since the last look should appear.
+    private var childCache: [String: [FileTreeOutline.Entry]] = [:]
+    private var loadingChildren: Set<String> = []
+
+    /// What the picker was left showing, per file set.
+    ///
+    /// The picker is one object serving every set, so this is what makes it
+    /// behave like one picker per set: reopening it is returning to a place
+    /// rather than starting over. Held here rather than on `FileSet` because it
+    /// is presentation state — where a reader had got to in a panel — and a set
+    /// is a list of open files.
+    ///
+    /// In memory only. Surviving a relaunch would mean persisting an expansion
+    /// set whose folders may since have gone, and the reader has no way to see
+    /// why the tree looks the way it does after a restart.
+    private var saved: [String: SessionState] = [:]
+
+    private struct SessionState {
+        var mode: FilePickerMode
+        var query: String
+        var expanded: Set<String>
+        /// By path, not by index. A restored tree is not guaranteed to be the
+        /// same shape — a folder may have gone — and an index into a list that
+        /// changed points at whatever moved into that slot.
+        var selectedPath: String?
+        var children: [String: [FileTreeOutline.Entry]]
+        /// The root it all describes. Every path above is relative to it, so a
+        /// host that has re-rooted since invalidates the whole thing.
+        var root: String
+    }
 
     /// Whether the reader moved to the selection, rather than it being the
     /// highlighted first row of a list they have not touched.
@@ -107,6 +157,13 @@ public final class FilePickerPresenter: ObservableObject {
     /// does not own the root; it only asks for one and reports a change.
     public var onChangeRoot: (URL) -> Void = { _ in }
 
+    /// Which file set the picker is being opened for.
+    ///
+    /// `FileSet.ownerID` — a session id in Galaxy, a constant in Assist Ant.
+    /// What it keys is the state below: reopening the picker returns to what it
+    /// was left showing, and one session's tree is not another's.
+    public var ownerProvider: () -> String = { "" }
+
     // MARK: - Internals
 
     /// Shared with the cheat sheet and the inbox modal — see `ModalFocusCapture`
@@ -143,13 +200,16 @@ public final class FilePickerPresenter: ObservableObject {
 
     public func present() {
         guard !isPresented else { return }
-        query = ""
         rows = []
         resetSelection()
         // Dropped on open rather than on a timer: a folder created since the
         // last look should appear, and opening is the moment a reader asks.
+        // Dropped whatever else is restored: this is the completion aid for a
+        // path being typed, and a folder created since the last look should
+        // appear in it.
         folderCache = nil
         root = rootProvider()
+        restoreState()
         focus.capture()
         isPresented = true
         focus.installEscape(
@@ -162,16 +222,61 @@ public final class FilePickerPresenter: ObservableObject {
         // owes the corpus nothing, so making a reader watch a tree be indexed
         // before they can press Return on the file they just closed would be a
         // wait for no reason.
-        refreshRows()
+        // **Mode-aware, and that is not a tidiness point.** `refreshRows` begins
+        // by cancelling the running scan, so calling it unconditionally here
+        // killed the scan that a restored Browse filter had just started — and
+        // the tree was left holding the unfiltered rows from the pass before it,
+        // with the query still in the field claiming to have been applied.
+        refreshApplicableRows()
         buildIndex()
     }
 
     public func dismiss() {
+        rememberState()
         isPresented = false
         filterTask?.cancel()
         filterTask = nil
         focus.removeEscape()
     }
+
+    private func rememberState() {
+        guard let root else { return }
+        let selected = treeRows.indices.contains(treeSelectedIndex)
+            ? treeRows[treeSelectedIndex].path : nil
+        saved[ownerProvider()] = SessionState(
+            mode: mode,
+            query: query,
+            expanded: outline.expandedByReader,
+            selectedPath: selected,
+            children: childCache,
+            root: FilePaths.canonical(root)
+        )
+    }
+
+    /// Put the picker back where it was left, or start it fresh.
+    ///
+    /// The **root decides** whether there is anything to restore. Every path in
+    /// a saved tree is under the root it was saved against, so a host that has
+    /// re-rooted since is offering a tree of somewhere else — and restoring it
+    /// would show a reader folders that are not in the tree they are looking at.
+    private func restoreState() {
+        let canonical = root.map { FilePaths.canonical($0) }
+        guard let state = saved[ownerProvider()], state.root == canonical else {
+            mode = .search
+            query = ""
+            resetBrowseState()
+            return
+        }
+        mode = state.mode
+        childCache = state.children
+        loadingChildren = []
+        outline = FileTreeOutline(expandedByReader: state.expanded)
+        pendingSelection = state.selectedPath
+        query = state.query
+    }
+
+    /// The row to land on once the tree has been rebuilt, by path.
+    private var pendingSelection: String?
 
     /// Called by `FilePickerView` as it disappears, not by `dismiss` — see
     /// `ModalFocusCapture.restore` for why that ordering is the whole argument.
@@ -285,6 +390,227 @@ public final class FilePickerPresenter: ObservableObject {
         query = completed
     }
 
+    // MARK: - Browsing
+
+    /// Whether what is typed is a path rather than something to match.
+    ///
+    /// Exposed so the view can decide what Return means without keeping its own
+    /// copy of the rule — two answers to "is this a path" is how the field and
+    /// the list come to disagree about what the reader is doing.
+    public var queryIsPath: Bool {
+        FilePickerRootInput.isRootChange(query, route: route)
+    }
+
+    public func selectMode(_ next: FilePickerMode) {
+        guard next != mode else { return }
+        mode = next
+        // The outgoing mode's scan is poisoned on the way out, the same way a
+        // keystroke poisons the previous one: switching tabs is as much a
+        // change of question as typing is.
+        filterTask?.cancel()
+        filterCancellation.cancel()
+        refreshApplicableRows()
+    }
+
+    /// Move to the other tab. Two modes, so there is only ever one other.
+    public func toggleMode() {
+        selectMode(mode == .search ? .browse : .search)
+    }
+
+    private func resetBrowseState() {
+        childCache = [:]
+        loadingChildren = []
+        treeRows = []
+        treeSelectedIndex = 0
+        // The root opens with the picker. A tree whose only row is its own root,
+        // collapsed, offers nothing to browse and one keystroke of ceremony
+        // before it does.
+        outline = FileTreeOutline(
+            expandedByReader: root.map { [FilePaths.canonical($0)] } ?? []
+        )
+    }
+
+    /// Rebuild the tree from whichever source the query calls for.
+    ///
+    /// A filter is answered by the **index** and browsing by the **disk**, and
+    /// they are never both answering — see `FileTreeOutline` for why that means
+    /// they never have to be reconciled.
+    private func refreshTree() {
+        guard let root else {
+            treeRows = []
+            return
+        }
+        let canonical = FilePaths.canonical(root)
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // A path in the field is the field's business, not the mode's: it
+        // completes on Tab and re-roots on Return in both tabs, and while it is
+        // being typed both tabs offer the same folders to choose between. The
+        // tree is what the *root* holds, so it has nothing to say about a root
+        // the reader has not arrived at yet.
+        if FilePickerRootInput.isRootChange(query, route: route) {
+            treeRows = []
+            refreshFolderRows()
+            return
+        }
+
+        guard !trimmed.isEmpty else {
+            treeRows = outline.rows(root: canonical) { [weak self] path in
+                self?.children(of: path) ?? []
+            }
+            clampTreeSelection()
+            return
+        }
+
+        let slices = FileCorpusStore.shared.slices(forCanonicalRoot: canonical)
+        guard !slices.isEmpty else {
+            treeRows = []
+            return
+        }
+
+        filterCancellation.cancel()
+        let cancellation = FileMatcher.Cancellation()
+        filterCancellation = cancellation
+        filterTask = Task {
+            let matched = await Task.detached(priority: .userInitiated) {
+                FilePickerRanking.matches(
+                    slices, query: trimmed, relativeTo: canonical,
+                    cancellation: cancellation
+                )
+            }.value
+            guard !Task.isCancelled, !cancellation.isCancelled else { return }
+            treeRows = outline.rows(
+                root: canonical,
+                matching: matched.map {
+                    // `relativePath` is what the offsets index, which is the
+                    // same string the ranked list highlights — so one match is
+                    // highlighted identically whichever tab shows it.
+                    FileTreeOutline.Match(
+                        path: $0.url.path, highlighted: $0.matchedOffsets
+                    )
+                }
+            )
+            clampTreeSelection()
+        }
+    }
+
+    /// A directory's entries, read once and remembered.
+    ///
+    /// Answers immediately from the cache and starts a read when there is
+    /// nothing cached, so expanding never blocks the main actor on a `readdir`
+    /// — which is the shape of the beach ball this whole feature was once fixed
+    /// for, where `stat` accounted for 213 ms of a 218 ms burst.
+    private func children(of path: String) -> [FileTreeOutline.Entry] {
+        if let cached = childCache[path] { return cached }
+        guard !loadingChildren.contains(path) else { return [] }
+        loadingChildren.insert(path)
+        Task { @MainActor in
+            let entries = await Task.detached(priority: .userInitiated) {
+                Self.childEntries(of: path)
+            }.value
+            self.loadingChildren.remove(path)
+            self.childCache[path] = entries
+            // Only the browsing tree reads this cache; a filter's rows come
+            // from the index and would be rebuilt from nothing.
+            if self.mode == .browse { self.refreshTree() }
+        }
+        return []
+    }
+
+    private func clampTreeSelection() {
+        guard !treeRows.isEmpty else {
+            treeSelectedIndex = 0
+            return
+        }
+        // A remembered row is claimed the first time it actually appears, which
+        // may be several passes after opening: the tree fills in as directories
+        // are read, so the row a reader left selected does not exist yet on the
+        // pass that draws the root.
+        if let wanted = pendingSelection,
+            let index = treeRows.firstIndex(where: { $0.path == wanted })
+        {
+            pendingSelection = nil
+            treeSelectedIndex = index
+            return
+        }
+        treeSelectedIndex = min(max(0, treeSelectedIndex), treeRows.count - 1)
+    }
+
+    public func moveTreeSelection(by delta: Int) {
+        guard !treeRows.isEmpty else { return }
+        treeSelectedIndex = min(
+            max(0, treeSelectedIndex + delta), treeRows.count - 1
+        )
+    }
+
+    public func selectTreeRow(_ row: FileTreeOutline.Row) {
+        guard let index = treeRows.firstIndex(where: { $0.id == row.id }) else {
+            return
+        }
+        treeSelectedIndex = index
+    }
+
+    private var selectedTreeRow: FileTreeOutline.Row? {
+        treeRows.indices.contains(treeSelectedIndex)
+            ? treeRows[treeSelectedIndex] : nil
+    }
+
+    /// The right arrow: open a folder. Nothing on a file.
+    public func expandSelectedTreeRow() {
+        guard let row = selectedTreeRow, row.isDirectory, !row.isExpanded else {
+            return
+        }
+        outline.expand(row.path)
+        refreshTree()
+    }
+
+    /// The left arrow: close a folder, or step out to the parent when there is
+    /// nothing to close.
+    ///
+    /// A folder the *filter* opened is not closed, because closing it would hide
+    /// the match that put it on screen — so it steps to the parent instead,
+    /// which is what `isRevealedByFilter` is read for.
+    public func collapseSelectedTreeRow() {
+        guard let row = selectedTreeRow else { return }
+        if row.isDirectory, row.isExpanded, !row.isRevealedByFilter {
+            outline.collapse(row.path)
+            refreshTree()
+            return
+        }
+        selectParentOfSelectedTreeRow()
+    }
+
+    private func selectParentOfSelectedTreeRow() {
+        guard let row = selectedTreeRow, row.depth > 0 else { return }
+        // The nearest row above it that is shallower is its parent, because the
+        // list is depth-first — no parent pointer needed, and none stored.
+        for index in stride(from: treeSelectedIndex - 1, through: 0, by: -1)
+        where treeRows[index].depth < row.depth {
+            treeSelectedIndex = index
+            return
+        }
+    }
+
+    /// Return: open a file, or toggle a folder.
+    public func activateSelectedTreeRow() {
+        guard let row = selectedTreeRow else { return }
+        guard row.isDirectory else {
+            dismiss()
+            onOpen(URL(fileURLWithPath: row.path))
+            return
+        }
+        if row.isExpanded, row.isRevealedByFilter { return }
+        outline.toggle(row.path)
+        refreshTree()
+    }
+
+    /// ⌘Return: browse this folder as the root, which is the same act as typing
+    /// its path into the field.
+    public func rerootToSelectedTreeRow() {
+        guard let row = selectedTreeRow, row.isDirectory else { return }
+        changeRoot(to: URL(fileURLWithPath: row.path))
+    }
+
     private func changeRoot(to url: URL) {
         var isDirectory: ObjCBool = false
         guard
@@ -297,7 +623,12 @@ public final class FilePickerPresenter: ObservableObject {
         root = url
         onChangeRoot(url)
         query = ""
+        // The tree was a view of the old root, so it is rebuilt rather than
+        // re-rooted: every expansion in it names a path that is no longer where
+        // the reader is.
+        resetBrowseState()
         buildIndex()
+        if mode == .browse { refreshTree() }
     }
 
 
@@ -365,11 +696,23 @@ public final class FilePickerPresenter: ObservableObject {
                 self.indexedCount = FileCorpusStore.shared
                     .indexedCount(forCanonicalRoot: canonical)
                 self.isIndexing = false
-                self.refreshRows()
+                self.refreshApplicableRows()
             }
         )
 
-        refreshRows()
+        refreshApplicableRows()
+    }
+
+    /// Rebuild whichever of the two answers is on screen.
+    ///
+    /// Every caller that used to say `refreshRows` unconditionally was making
+    /// the same mistake twice over: it left the other tab holding a stale
+    /// answer, and because refreshing cancels the running scan, it *killed* the
+    /// other tab's in-flight one. A filter typed in Browse while the walk was
+    /// still going never came back, because the walk finishing refreshed a list
+    /// nobody was looking at.
+    private func refreshApplicableRows() {
+        if mode == .browse { refreshTree() } else { refreshRows() }
     }
 
     private func refreshRows() {
@@ -519,6 +862,25 @@ public final class FilePickerPresenter: ObservableObject {
     private nonisolated static func childDirectories(
         of path: String
     ) -> [String] {
+        childEntries(of: path)
+            .filter { $0.isDirectory }
+            .map { $0.path }
+    }
+
+    /// Everything in a directory, files included, each flagged.
+    ///
+    /// What the tree expands with. Both notes above apply to it unchanged —
+    /// they are the reason this is not three lines — and it is the one reader
+    /// for both callers so that a directory cannot be listed two ways.
+    ///
+    /// **Answered from disk rather than from the index, deliberately.** The
+    /// index skips names a browser must still show: `node_modules`, `.git`,
+    /// `build`, and `Library` under a home directory. A corpus-answered
+    /// expansion could not reach any of them, and a file browser that omits
+    /// directories visibly on disk is lying rather than filtering.
+    nonisolated static func childEntries(
+        of path: String
+    ) -> [FileTreeOutline.Entry] {
         guard
             let contents = try? FileManager.default.contentsOfDirectory(
                 at: URL(fileURLWithPath: path),
@@ -529,9 +891,12 @@ public final class FilePickerPresenter: ObservableObject {
             )
         else { return [] }
         let prefix = path.hasSuffix("/") ? path : path + "/"
-        return contents
-            .filter(isBrowsableDirectory)
-            .map { prefix + $0.lastPathComponent }
+        return contents.map { url in
+            FileTreeOutline.Entry(
+                path: prefix + url.lastPathComponent,
+                isDirectory: isBrowsableDirectory(url)
+            )
+        }
     }
 
     /// Whether a directory entry is somewhere the picker can browse into.

@@ -603,4 +603,154 @@ final class FilePickerPresenterTests: XCTestCase {
             presenter.rows.map(\.relativePath), ["user_model.swift"]
         )
     }
+
+    // MARK: - Remembering where it was left
+
+    private func opened(owner: String, root: URL) -> FilePickerPresenter {
+        let p = FilePickerPresenter()
+        p.rootProvider = { root }
+        p.ownerProvider = { owner }
+        p.present()
+        return p
+    }
+
+    /// Reopening the picker is returning to a place, not starting over.
+    func testReopeningRestoresTheModeAndTheQuery() {
+        let p = opened(owner: "one", root: dir)
+        p.selectMode(.browse)
+        p.query = "create"
+        p.dismiss()
+
+        p.present()
+
+        XCTAssertEqual(p.mode, .browse)
+        XCTAssertEqual(p.query, "create")
+    }
+
+    /// Spin the main loop until a condition holds. Expanding reads a directory
+    /// off the main actor, so a tree arrives over several passes rather than in
+    /// the call that asked for it.
+    private func settle(
+        _ description: String, until condition: () -> Bool
+    ) {
+        let deadline = Date().addingTimeInterval(2)
+        while !condition(), Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertTrue(condition(), "timed out waiting for \(description)")
+    }
+
+    /// **The whole point of the Browse tab.** The folders a reader opened are
+    /// still open, and they are there on the pass that draws the panel rather
+    /// than filling in afterwards — the directories that were read are restored
+    /// with the expansion that needed them.
+    func testReopeningRestoresTheExpandedFoldersAtOnce() throws {
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("app/models"),
+            withIntermediateDirectories: true
+        )
+        let root = FilePaths.canonical(dir)
+        let p = opened(owner: "one", root: dir)
+        p.selectMode(.browse)
+
+        settle("the root to be read") { p.treeRows.count > 1 }
+        p.moveTreeSelection(by: 1)
+        XCTAssertEqual(p.treeRows[p.treeSelectedIndex].path, root + "/app")
+        p.expandSelectedTreeRow()
+        settle("app to be read") { p.treeRows.count > 2 }
+
+        p.dismiss()
+        p.present()
+
+        XCTAssertEqual(
+            p.treeRows.map(\.path),
+            [root, root + "/app", root + "/app/models"],
+            "restored whole, without waiting to be read again"
+        )
+        XCTAssertEqual(
+            p.treeRows[p.treeSelectedIndex].path, root + "/app",
+            "and on the row it was left on"
+        )
+    }
+
+    /// **The reported defect.** Opening restored the query and then ran the
+    /// ranked-list refresh unconditionally — which begins by cancelling the
+    /// running scan, so it killed the one the restored filter had just started.
+    /// The field showed the query and the tree showed everything.
+    func testReopeningReappliesARestoredFilter() throws {
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("app"),
+            withIntermediateDirectories: true
+        )
+        _ = try write("app/userthing.rb")
+        _ = try write("unrelated.md")
+
+        let p = opened(owner: "one", root: dir)
+        p.selectMode(.browse)
+        // Typed while the walk is still going, which is the ordinary case and
+        // used to leave the tree empty for good: the walk finishing refreshed
+        // the ranked list instead of the tree.
+        p.query = "userthing"
+        settle("the filter to land") { p.treeRows.count > 1 }
+        let filtered = p.treeRows.map(\.path)
+        XCTAssertFalse(
+            filtered.contains { $0.hasSuffix("unrelated.md") },
+            "precondition: the filter is actually filtering"
+        )
+
+        p.dismiss()
+        p.present()
+        settle("the filter to be reapplied") { p.treeRows.count > 1 }
+
+        XCTAssertEqual(p.treeRows.map(\.path), filtered)
+        XCTAssertEqual(p.query, "userthing")
+    }
+
+    /// One picker, one state per set — a session's tree is not another's.
+    func testEachOwnerKeepsItsOwnState() {
+        let p = FilePickerPresenter()
+        var owner = "one"
+        p.rootProvider = { self.dir }
+        p.ownerProvider = { owner }
+
+        p.present()
+        p.selectMode(.browse)
+        p.query = "first"
+        p.dismiss()
+
+        owner = "two"
+        p.present()
+
+        XCTAssertEqual(p.mode, .search, "a set nobody has opened starts fresh")
+        XCTAssertEqual(p.query, "")
+
+        p.dismiss()
+        owner = "one"
+        p.present()
+
+        XCTAssertEqual(p.mode, .browse, "and the first set is still where it was")
+        XCTAssertEqual(p.query, "first")
+    }
+
+    /// **The root decides whether there is anything to restore.** Every saved
+    /// path is under the root it was saved against, so a host that has re-rooted
+    /// since is being offered a tree of somewhere else.
+    func testAChangedRootDiscardsTheSavedState() throws {
+        let elsewhere = try sibling("rerooted")
+        let p = FilePickerPresenter()
+        var root = dir!
+        p.rootProvider = { root }
+        p.ownerProvider = { "one" }
+
+        p.present()
+        p.selectMode(.browse)
+        p.query = "create"
+        p.dismiss()
+
+        root = elsewhere
+        p.present()
+
+        XCTAssertEqual(p.mode, .search)
+        XCTAssertEqual(p.query, "", "nothing carried over to a different tree")
+    }
 }

@@ -20,6 +20,8 @@ import SwiftUI
 public struct FilePickerView: View {
     @ObservedObject private var presenter: FilePickerPresenter
     @FocusState private var fieldFocused: Bool
+    /// How tall the host's overlay area is, so the card can use all of it.
+    @State private var available: CGFloat = 0
 
     /// A default argument expression is read in a nonisolated context whatever
     /// the initialiser's isolation, so `= .shared` cannot name main-actor state
@@ -32,7 +34,18 @@ public struct FilePickerView: View {
     public var body: some View {
         ZStack(alignment: .top) {
             scrim
-            card
+            // The height the host is offering, read from the overlay area rather
+            // than from the card. That direction is what makes it safe: the area
+            // is sized by the window, so nothing the card does can move it, and
+            // the reverse — sizing a container from its content and then the
+            // content from the container — is the cycle that hangs the tab strip.
+            GeometryReader { geometry in
+                card
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .onChange(of: geometry.size.height, initial: true) {
+                        available = geometry.size.height
+                    }
+            }
         }
         .onAppear { fieldFocused = true }
         .onDisappear {
@@ -58,9 +71,13 @@ public struct FilePickerView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
+            FilePickerModeTabs(selected: presenter.mode) {
+                presenter.selectMode($0)
+            }
+            Divider()
             field
             Divider()
-            results
+            body(for: presenter.mode)
         }
         .frame(width: Metrics.width)
         // Sized by its content, in both directions. The height this replaced —
@@ -86,8 +103,31 @@ public struct FilePickerView: View {
         /// measurement — a list that has to be laid out before it can be sized
         /// is a list that resizes after it is drawn.
         static let rowHeight: CGFloat = 26
-        /// How many rows show before the list scrolls.
-        static let visibleRows = 10
+        /// The fewest rows the list is ever given, so a narrow window still
+        /// shows something to choose from rather than a sliver.
+        static let minimumRows = 4
+        /// Everything above the list: the header, the mode tabs, the field, and
+        /// the three dividers between them.
+        ///
+        /// A constant rather than a measurement, and the error it can carry is
+        /// bounded and harmless — a few points out makes the list a few points
+        /// shorter, which costs at most one row. Measuring it would mean reading
+        /// back a height in order to decide a height.
+        static let chromeHeight: CGFloat = 31 + 27 + 38 + 3
+        /// As tall as `rows` needs, capped by what the window is offering.
+        static func listHeight(rows: Int, available: CGFloat) -> CGFloat {
+            let wanted = CGFloat(max(1, rows)) * rowHeight
+            guard available > 0 else {
+                return CGFloat(minimumRows) * rowHeight
+            }
+            let room = available - chromeHeight - topInset - 12
+            return min(wanted, max(CGFloat(minimumRows) * rowHeight, room))
+        }
+        /// One level of nesting in the tree.
+        static let treeIndent: CGFloat = 14
+        /// The disclosure column, drawn empty for files so their names line up
+        /// with the folder names rather than with the chevrons.
+        static let treeGutter: CGFloat = 16
     }
 
     /// Which tree is being searched, said out loud so a reader wondering why a
@@ -159,19 +199,66 @@ public struct FilePickerView: View {
             .focused($fieldFocused)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .onSubmit { presenter.commit() }
+            .onSubmit {
+                // A path in the field outranks the tree's selection, in both
+                // modes: the reader typed it, and the tree is showing where they
+                // were rather than where they said they are going.
+                if treeIsShowing {
+                    presenter.activateSelectedTreeRow()
+                } else {
+                    presenter.commit()
+                }
+            }
             .onKeyPress(.downArrow) {
-                presenter.moveSelection(by: 1)
+                move(by: 1)
                 return .handled
             }
             .onKeyPress(.upArrow) {
-                presenter.moveSelection(by: -1)
+                move(by: -1)
                 return .handled
             }
+            // **The horizontal arrows are the field's, in both modes.** They
+            // were briefly the tree's expand and collapse, which took ←/→,
+            // ⌥←/⌥→ and ⌘←/⌘→ away from a field the reader is always able to
+            // type into — so moving the caret through a path meant reaching for
+            // the mouse. Return already opens and closes a folder, which is
+            // what makes giving these up cost nothing.
+            // Both modes. Completing a typed path belongs to the field, not to
+            // whichever way the answer is being shown — and Browse is where a
+            // reader is most likely to be typing a path in the first place.
             .onKeyPress(.tab) {
                 presenter.completePath()
                 return .handled
             }
+            // ⌘H / ⌘L, the same pair that steps between file tabs when the
+            // picker is closed. It is closed-or-open that decides which, and the
+            // host already stands its own pair down for a modal — see
+            // `GalacticModals`.
+            .onKeyPress(keys: ["h", "l", "\r"]) { press in
+                guard press.modifiers.contains(.command) else { return .ignored }
+                switch press.key {
+                case "h": presenter.selectMode(.search)
+                case "l": presenter.selectMode(.browse)
+                default:
+                    guard treeIsShowing else { return .ignored }
+                    presenter.rerootToSelectedTreeRow()
+                }
+                return .handled
+            }
+    }
+
+    /// One field above two ways of answering it.
+    ///
+    /// A typed path is answered the same way in both, because it is a question
+    /// about the field rather than about the mode — so Browse shows the folders
+    /// being chosen between rather than a tree of a root nobody has arrived at.
+    @ViewBuilder
+    private func body(for mode: FilePickerMode) -> some View {
+        if mode == .browse, !presenter.queryIsPath {
+            FileTreeView(presenter: presenter, available: available)
+        } else {
+            results
+        }
     }
 
     @ViewBuilder
@@ -203,11 +290,25 @@ public struct FilePickerView: View {
         }
     }
 
-    /// As tall as the rows it has, up to the cap. Arithmetic rather than a
-    /// measurement, which is what `rowHeight` is fixed for.
+    /// Whether the tree is what is on screen, which is what the arrows and
+    /// Return have to follow — Browse showing a folder chooser is a list, and
+    /// driving the tree behind it would move a selection nobody can see.
+    private var treeIsShowing: Bool {
+        presenter.mode == .browse && !presenter.queryIsPath
+    }
+
+    private func move(by delta: Int) {
+        if treeIsShowing {
+            presenter.moveTreeSelection(by: delta)
+        } else {
+            presenter.moveSelection(by: delta)
+        }
+    }
+
+    /// As tall as the rows it has, up to the room there is. Arithmetic rather
+    /// than a measurement, which is what `rowHeight` is fixed for.
     private var listHeight: CGFloat {
-        let shown = min(presenter.rows.count, Metrics.visibleRows)
-        return CGFloat(shown) * Metrics.rowHeight
+        Metrics.listHeight(rows: presenter.rows.count, available: available)
     }
 
     /// Says which of the several nothings this is — see `FilePickerEmptyState`,

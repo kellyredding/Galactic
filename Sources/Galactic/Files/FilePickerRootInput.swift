@@ -151,12 +151,29 @@ public enum FilePickerRootInput {
         let matching = directories.filter { continues($0, typed: typed) }
         guard !matching.isEmpty else { return nil }
 
-        // The extension is built from the matched directories' own spelling, so
-        // a leniently-matched segment is *corrected* rather than preserved:
-        // `~/lib` completes to `~/Library/`, leaving a path in the field that
-        // exists. Nothing extra is needed for that — it falls out of taking the
-        // prefix from the candidates rather than from what was typed.
-        var extended = longestCommonPrefix(matching)
+        // **The shared prefix is measured under the same case rule that chose
+        // the candidates.** Measured case-sensitively while they were chosen
+        // leniently, `kaj` against a folder holding both `kajabi-dev` and
+        // `Kajabi-Dash-App-iOS` shares nothing at all — `K` and `k` differ at
+        // the first character — so Tab did nothing in a directory where six
+        // characters were obviously common.
+        //
+        // Which spelling those characters are taken from is a separate
+        // question, and the answer is a candidate that matches what the reader
+        // typed when one exists: their own letters are left alone, and only the
+        // part they have not typed yet is spelled by the disk. Finder order
+        // decides between equals, because enumeration order is not stable and a
+        // completion that varies between presses is worse than one that is
+        // occasionally the wrong sibling's capital.
+        let ordered = matching.sorted(by: FilePickerFolderList.precedes)
+        let source = ordered.first { $0.hasPrefix(typed) } ?? ordered[0]
+        let sensitive = (typed as NSString).lastPathComponent
+            .contains { $0.isUppercase }
+        var extended = String(
+            source.prefix(
+                sharedPrefixLength(of: ordered, caseSensitive: sensitive)
+            )
+        )
 
         // The separator is what says "keep going", and having to type it at
         // every level is the friction this exists to remove. Withheld unless
@@ -166,7 +183,9 @@ public enum FilePickerRootInput {
         // `/work/project/` when `/work/projections` is also there would commit
         // a choice the reader had not made and put the sibling out of reach.
         let settled =
-            matching.count == 1 || (extended == typed && matching.contains(typed))
+            matching.count == 1
+            || (extended.count == typed.count
+                && matching.contains { begins($0, with: typed) && $0.count == typed.count })
         if settled, !extended.hasSuffix("/") { extended += "/" }
 
         guard extended.count > typed.count else { return nil }
@@ -239,16 +258,33 @@ public enum FilePickerRootInput {
 
     /// The longest prefix shared by every string, compared by character.
     static func longestCommonPrefix(_ strings: [String]) -> String {
-        guard var prefix = strings.first else { return "" }
+        guard let first = strings.first else { return "" }
+        return String(
+            first.prefix(sharedPrefixLength(of: strings, caseSensitive: true))
+        )
+    }
+
+    /// How many leading characters every string agrees on.
+    ///
+    /// A length rather than a prefix, because when case is being folded there is
+    /// no single right *spelling* of those characters — the caller decides whose
+    /// to use, and only it knows what the reader typed.
+    static func sharedPrefixLength(
+        of strings: [String], caseSensitive: Bool
+    ) -> Int {
+        guard let first = strings.first else { return 0 }
+        var length = first.count
         for string in strings.dropFirst() {
-            var candidate = ""
-            for (a, b) in zip(prefix, string) {
-                if a != b { break }
-                candidate.append(a)
+            var shared = 0
+            for (a, b) in zip(first, string) {
+                if caseSensitive ? a != b : a.lowercased() != b.lowercased() {
+                    break
+                }
+                shared += 1
             }
-            prefix = candidate
-            if prefix.isEmpty { break }
+            length = min(length, shared)
+            if length == 0 { break }
         }
-        return prefix
+        return length
     }
 }

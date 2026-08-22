@@ -76,15 +76,60 @@ final class FilePickerRootInputTests: XCTestCase {
         )
     }
 
-    /// Lenience costs ambiguity, and that is the honest answer rather than a
-    /// bug: `d` names four things once case stops separating them, so one press
-    /// moves nowhere and the folder list shows the choice.
-    func testCompletionRefusesWhenLenienceMakesTheSegmentAmbiguous() {
-        XCTAssertNil(
+    /// Lenience *gains* a completion here rather than costing one, which is the
+    /// opposite of what this test asserted while the shared prefix was still
+    /// measured case-sensitively: `Desktop` and `dev` agree on two characters
+    /// once case stops separating them, so Tab advances by both instead of
+    /// sitting still.
+    func testCompletionSharesWhatMixedCasingStillAgreesOn() {
+        XCTAssertEqual(
             FilePickerRootInput.completion(
                 for: "/work/d",
                 directories: ["/work/Desktop", "/work/dev"]
-            )
+            ),
+            "/work/de"
+        )
+    }
+
+    /// **The reported defect.** Once candidates were chosen leniently, the
+    /// shared prefix was still measured case-sensitively — so a folder holding
+    /// both `kajabi-dev` and `Kajabi-Dash` shared nothing at all for `kaj`, and
+    /// Tab did nothing where six characters were obviously common.
+    func testCompletionSharesAPrefixAcrossMixedCasing() {
+        XCTAssertEqual(
+            FilePickerRootInput.completion(
+                for: "/work/kaj",
+                directories: [
+                    "/work/kajabi-dev", "/work/Kajabi-Dash", "/work/kajabi_theme",
+                ]
+            ),
+            "/work/kajabi"
+        )
+    }
+
+    /// And the letters come from a candidate matching what was typed, so the
+    /// reader's own casing is not rewritten out from under them.
+    func testCompletionSpellsTheSharedPartAsTheReaderTypedIt() {
+        XCTAssertEqual(
+            FilePickerRootInput.completion(
+                for: "/work/Kaj",
+                directories: ["/work/Kajabi-Dash", "/work/Kajabi-Mobile"]
+            ),
+            "/work/Kajabi-",
+            "uppercase typed, so only the uppercase siblings are candidates"
+        )
+    }
+
+    /// Names that share nothing complete to nothing, however the case falls.
+    /// Folding case widens what counts as agreement; it does not invent any.
+    func testNamesSharingNothingStillCompleteToNothing() {
+        XCTAssertEqual(
+            FilePickerRootInput.completion(
+                for: "/work/",
+                directories: ["/work/Beta", "/work/alpha"]
+            ),
+            nil,
+            "two names sharing nothing complete to nothing"
         )
     }
 
