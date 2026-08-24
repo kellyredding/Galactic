@@ -4,7 +4,7 @@ import Foundation
 ///
 /// ### Children are supplied, not read
 ///
-/// The same division `FilePickerFolderList` draws, for the same reason: reading
+/// The same division `FileFolderList` draws, for the same reason: reading
 /// a directory is the presenter's business, and keeping it out of here is what
 /// lets the ordering, the indentation, the expansion and the filter rules all
 /// be tested without a filesystem. It is also what makes the tree lazy by
@@ -285,11 +285,11 @@ public struct FileTreeOutline {
     /// Two rules, and the grouping is the one worth naming: Finder itself
     /// interleaves directories with files, and a browser reads better when they
     /// are grouped — which is what every file tree worth copying does. Within
-    /// each group the comparison is `FilePickerFolderList.precedes`, so this and
+    /// each group the comparison is `FileFolderList.precedes`, so this and
     /// the root-change list cannot disagree about where a name sits.
     public static func precedes(_ a: Entry, _ b: Entry) -> Bool {
         if a.isDirectory != b.isDirectory { return a.isDirectory }
-        return FilePickerFolderList.precedes(
+        return FileFolderList.precedes(
             (a.path as NSString).lastPathComponent,
             (b.path as NSString).lastPathComponent
         )

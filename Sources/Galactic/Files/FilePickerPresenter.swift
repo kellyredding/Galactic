@@ -369,7 +369,7 @@ public final class FilePickerPresenter: ObservableObject {
             activate(rows[selectedIndex])
             return
         }
-        if let path = FilePickerRootInput.expandedPath(query, route: route),
+        if let path = FileRootInput.expandedPath(query, route: route),
             path.hasSuffix("/")
         {
             changeRoot(to: URL(fileURLWithPath: path))
@@ -379,7 +379,7 @@ public final class FilePickerPresenter: ObservableObject {
             activate(rows[selectedIndex])
             return
         }
-        if let path = FilePickerRootInput.expandedPath(query, route: route) {
+        if let path = FileRootInput.expandedPath(query, route: route) {
             changeRoot(to: URL(fileURLWithPath: path))
         }
     }
@@ -421,7 +421,7 @@ public final class FilePickerPresenter: ObservableObject {
     /// Extend a partly-typed path, the way a shell's Tab does.
     public func completePath() {
         guard
-            let parent = FilePickerRootInput.candidateParent(
+            let parent = FileRootInput.candidateParent(
                 of: query, route: route
             )
         else { return }
@@ -431,9 +431,9 @@ public final class FilePickerPresenter: ObservableObject {
         let candidates =
             folderCache?.parent == parent
             ? folderCache?.children ?? []
-            : Self.childDirectories(of: parent)
+            : FileDirectoryReader.childDirectories(of: parent)
         guard
-            let completed = FilePickerRootInput.completion(
+            let completed = FileRootInput.completion(
                 for: query, directories: candidates, route: route
             )
         else { return }
@@ -448,7 +448,7 @@ public final class FilePickerPresenter: ObservableObject {
     /// copy of the rule — two answers to "is this a path" is how the field and
     /// the list come to disagree about what the reader is doing.
     public var queryIsPath: Bool {
-        FilePickerRootInput.isRootChange(query, route: route)
+        FileRootInput.isRootChange(query, route: route)
     }
 
     public func selectMode(_ next: FilePickerMode) {
@@ -501,7 +501,7 @@ public final class FilePickerPresenter: ObservableObject {
         // being typed both tabs offer the same folders to choose between. The
         // tree is what the *root* holds, so it has nothing to say about a root
         // the reader has not arrived at yet.
-        if FilePickerRootInput.isRootChange(query, route: route) {
+        if FileRootInput.isRootChange(query, route: route) {
             treeRows = []
             refreshFolderRows()
             return
@@ -564,7 +564,8 @@ public final class FilePickerPresenter: ObservableObject {
                 // refresh — measured at 194 ms per draw for a 2,392-entry
                 // directory. A directory's contents do not change between
                 // draws, so this belongs with the read.
-                Self.childEntries(of: path).sorted(by: FileTreeOutline.precedes)
+                FileDirectoryReader.childEntries(of: path)
+                    .sorted(by: FileTreeOutline.precedes)
             }.value
             self.loadingChildren.remove(path)
             self.childCache[path] = entries
@@ -803,7 +804,7 @@ public final class FilePickerPresenter: ObservableObject {
         // A path being typed is still not a filter — the corpus is still not
         // consulted — but the reader now sees the folders they are choosing
         // between rather than a hint describing them.
-        if FilePickerRootInput.isRootChange(query, route: route) {
+        if FileRootInput.isRootChange(query, route: route) {
             refreshFolderRows()
             return
         }
@@ -873,7 +874,7 @@ public final class FilePickerPresenter: ObservableObject {
 
     private func refreshFolderRows() {
         guard
-            let parent = FilePickerRootInput.candidateParent(
+            let parent = FileRootInput.candidateParent(
                 of: query, route: route
             )
         else {
@@ -883,7 +884,7 @@ public final class FilePickerPresenter: ObservableObject {
         }
 
         if let cached = folderCache, cached.parent == parent {
-            rows = FilePickerFolderList.rows(
+            rows = FileFolderList.rows(
                 for: query, children: cached.children, route: route
             )
             resetSelection()
@@ -899,7 +900,7 @@ public final class FilePickerPresenter: ObservableObject {
 
         filterTask = Task {
             let children = await Task.detached(priority: .userInitiated) {
-                Self.childDirectories(of: parent)
+                FileDirectoryReader.childDirectories(of: parent)
             }.value
             guard !Task.isCancelled else { return }
             folderCache = (parent, children)
@@ -908,104 +909,15 @@ public final class FilePickerPresenter: ObservableObject {
             // it, because more may have been typed while the directory was
             // read — and the rows must answer the field as it stands, not as it
             // was. Still the same parent, or a later refresh already owns this.
-            guard FilePickerRootInput.isRootChange(query, route: route),
-                FilePickerRootInput.candidateParent(of: query, route: route)
+            guard FileRootInput.isRootChange(query, route: route),
+                FileRootInput.candidateParent(of: query, route: route)
                     == parent
             else { return }
-            rows = FilePickerFolderList.rows(
+            rows = FileFolderList.rows(
                 for: query, children: children, route: route
             )
             resetSelection()
         }
     }
 
-    /// The child directories of a path.
-    ///
-    /// `nonisolated static` so the detached read above cannot reach presenter
-    /// state, which is what keeps this off the main actor by construction
-    /// rather than by remembering to.
-    ///
-    /// Hidden entries are included — `options: []` does not pass
-    /// `.skipsHiddenFiles` — and that is wanted: `~/.claude` is somewhere a
-    /// reader goes.
-    ///
-    /// **Each child is spelled against the parent it was asked for, not taken
-    /// from the enumerated URL.** Measured: asked for
-    /// `/var/folders/…/T/x`, `contentsOfDirectory` answers
-    /// `/private/var/folders/…/T/x/alpha`, because `/var` is a symlink. Every
-    /// caller here matches these against what the reader typed, so a resolved
-    /// spelling fails `hasPrefix` against an unresolved one and the folder list
-    /// silently comes back empty. `/tmp`, `/var` and `/etc` are all symlinks on
-    /// macOS, which is why `/tmp/` has never tab-completed.
-    ///
-    /// Resolving the reader's text instead would be the other repair and is
-    /// worse: it rewrites the field under them, and `~` is deliberately kept
-    /// unexpanded there for exactly that reason.
-    private nonisolated static func childDirectories(
-        of path: String
-    ) -> [String] {
-        childEntries(of: path)
-            .filter { $0.isDirectory }
-            .map { $0.path }
-    }
-
-    /// Everything in a directory, files included, each flagged.
-    ///
-    /// What the tree expands with. Both notes above apply to it unchanged —
-    /// they are the reason this is not three lines — and it is the one reader
-    /// for both callers so that a directory cannot be listed two ways.
-    ///
-    /// **Answered from disk rather than from the index, deliberately.** The
-    /// index skips names a browser must still show: `node_modules`, `.git`,
-    /// `build`, and `Library` under a home directory. A corpus-answered
-    /// expansion could not reach any of them, and a file browser that omits
-    /// directories visibly on disk is lying rather than filtering.
-    nonisolated static func childEntries(
-        of path: String
-    ) -> [FileTreeOutline.Entry] {
-        guard
-            let contents = try? FileManager.default.contentsOfDirectory(
-                at: URL(fileURLWithPath: path),
-                includingPropertiesForKeys: [
-                    .isDirectoryKey, .isSymbolicLinkKey,
-                ],
-                options: []
-            )
-        else { return [] }
-        let prefix = path.hasSuffix("/") ? path : path + "/"
-        return contents.map { url in
-            FileTreeOutline.Entry(
-                path: prefix + url.lastPathComponent,
-                isDirectory: isBrowsableDirectory(url)
-            )
-        }
-    }
-
-    /// Whether a directory entry is somewhere the picker can browse into.
-    ///
-    /// **`isDirectoryKey` has `lstat` semantics: it is false for every symlink,
-    /// including one pointing straight at a directory.** Measured — `/tmp`,
-    /// `/var`, `/etc` and `~/projects/implementation-plans` all answer false,
-    /// so enumerating `/` with that predicate alone yields no `tmp`, `var` or
-    /// `etc` at all, and a symlinked project folder is invisible.
-    ///
-    /// `resolvingSymlinksInPath()` is not the repair: measured, it answers
-    /// false for `/tmp` and true for `implementation-plans`, so it disagrees
-    /// with itself. `fileExists(atPath:isDirectory:)` follows the link and was
-    /// true for every case above, so the link is settled with a `stat` — but
-    /// only when the entry *is* a link, which keeps one syscall off the
-    /// overwhelming majority of entries that are ordinary directories.
-    private nonisolated static func isBrowsableDirectory(_ url: URL) -> Bool {
-        let values = try? url.resourceValues(
-            forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
-        )
-        if values?.isDirectory == true { return true }
-        guard values?.isSymbolicLink == true else { return false }
-
-        var isDirectory: ObjCBool = false
-        let exists = FileManager.default.fileExists(
-            atPath: url.path, isDirectory: &isDirectory
-        )
-        return exists && isDirectory.boolValue
-    }
 }

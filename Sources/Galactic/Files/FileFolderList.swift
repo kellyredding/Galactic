@@ -8,12 +8,12 @@ import Foundation
 /// on to what is inside.
 ///
 /// The children are **supplied**, not listed here, which is the same division
-/// `FilePickerRootInput.completion(for:directories:)` already draws: reading a
+/// `FileRootInput.completion(for:directories:)` already draws: reading a
 /// directory is the presenter's business, and keeping it out of this type is
 /// what lets every rule below be tested without a filesystem. It is also what
 /// lets the presenter read one directory per parent and filter here on every
 /// keystroke after — see `FilePickerPresenter.refreshFolderRows`.
-public enum FilePickerFolderList {
+public enum FileFolderList {
 
     /// Rows offered for a path being typed. More than this cannot be scanned by
     /// eye, and the field is how a reader narrows rather than scrolling.
@@ -35,14 +35,14 @@ public enum FilePickerFolderList {
         limit: Int = rowLimit
     ) -> [FilePickerItem] {
         guard
-            let typed = FilePickerRootInput.expandedPath(query, route: route)
+            let typed = FileRootInput.expandedPath(query, route: route)
         else { return [] }
 
         let matching =
             typed.hasSuffix("/")
             ? children
             : children.filter {
-                FilePickerRootInput.continues($0, typed: typed)
+                FileRootInput.continues($0, typed: typed)
             }
 
         return matching

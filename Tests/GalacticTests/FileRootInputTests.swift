@@ -6,56 +6,56 @@ import XCTest
 ///
 /// One field does both, told apart by how the query starts — the shell's
 /// convention, which keeps the common case free of a mode to be in.
-final class FilePickerRootInputTests: XCTestCase {
+final class FileRootInputTests: XCTestCase {
 
     func testAQueryStartingWithASlashIsARootChange() {
-        XCTAssertTrue(FilePickerRootInput.isRootChange("/work/project"))
-        XCTAssertTrue(FilePickerRootInput.isRootChange("~"))
-        XCTAssertTrue(FilePickerRootInput.isRootChange("~/projects"))
+        XCTAssertTrue(FileRootInput.isRootChange("/work/project"))
+        XCTAssertTrue(FileRootInput.isRootChange("~"))
+        XCTAssertTrue(FileRootInput.isRootChange("~/projects"))
     }
 
     func testAnOrdinaryQueryIsAFilter() {
-        XCTAssertFalse(FilePickerRootInput.isRootChange("usermodel"))
-        XCTAssertFalse(FilePickerRootInput.isRootChange("src/user.rb"))
-        XCTAssertFalse(FilePickerRootInput.isRootChange(""))
+        XCTAssertFalse(FileRootInput.isRootChange("usermodel"))
+        XCTAssertFalse(FileRootInput.isRootChange("src/user.rb"))
+        XCTAssertFalse(FileRootInput.isRootChange(""))
     }
 
     /// A relative path that happens to contain a slash is still a filter — the
     /// distinction is the *leading* character, so typing a path fragment to
     /// narrow results keeps working.
     func testASlashInTheMiddleDoesNotMakeItAPath() {
-        XCTAssertFalse(FilePickerRootInput.isRootChange("models/user"))
+        XCTAssertFalse(FileRootInput.isRootChange("models/user"))
     }
 
     // MARK: - Expansion
 
     func testTildeExpandsToHome() {
         XCTAssertEqual(
-            FilePickerRootInput.expandedPath("~"), NSHomeDirectory()
+            FileRootInput.expandedPath("~"), NSHomeDirectory()
         )
         XCTAssertEqual(
-            FilePickerRootInput.expandedPath("~/projects"),
+            FileRootInput.expandedPath("~/projects"),
             NSHomeDirectory() + "/projects"
         )
     }
 
     func testAnAbsolutePathIsTakenAsGiven() {
         XCTAssertEqual(
-            FilePickerRootInput.expandedPath("/work/project"), "/work/project"
+            FileRootInput.expandedPath("/work/project"), "/work/project"
         )
     }
 
     /// Nil rather than a guess, so a caller can use this as the test rather than
     /// asking two questions.
     func testAFilterExpandsToNothing() {
-        XCTAssertNil(FilePickerRootInput.expandedPath("usermodel"))
+        XCTAssertNil(FileRootInput.expandedPath("usermodel"))
     }
 
     // MARK: - Completion
 
     func testCompletionExtendsToTheSharedPrefix() {
         XCTAssertEqual(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "/work/pro",
                 directories: ["/work/project", "/work/projections"]
             ),
@@ -69,7 +69,7 @@ final class FilePickerRootInputTests: XCTestCase {
     /// the field is a path that exists.
     func testCompletionCorrectsTheCaseOfWhatWasTyped() {
         XCTAssertEqual(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "/work/lib", directories: ["/work/Library"]
             ),
             "/work/Library/"
@@ -83,7 +83,7 @@ final class FilePickerRootInputTests: XCTestCase {
     /// sitting still.
     func testCompletionSharesWhatMixedCasingStillAgreesOn() {
         XCTAssertEqual(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "/work/d",
                 directories: ["/work/Desktop", "/work/dev"]
             ),
@@ -97,7 +97,7 @@ final class FilePickerRootInputTests: XCTestCase {
     /// Tab did nothing where six characters were obviously common.
     func testCompletionSharesAPrefixAcrossMixedCasing() {
         XCTAssertEqual(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "/work/kaj",
                 directories: [
                     "/work/kajabi-dev", "/work/Kajabi-Dash", "/work/kajabi_theme",
@@ -111,7 +111,7 @@ final class FilePickerRootInputTests: XCTestCase {
     /// reader's own casing is not rewritten out from under them.
     func testCompletionSpellsTheSharedPartAsTheReaderTypedIt() {
         XCTAssertEqual(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "/work/Kaj",
                 directories: ["/work/Kajabi-Dash", "/work/Kajabi-Mobile"]
             ),
@@ -124,7 +124,7 @@ final class FilePickerRootInputTests: XCTestCase {
     /// Folding case widens what counts as agreement; it does not invent any.
     func testNamesSharingNothingStillCompleteToNothing() {
         XCTAssertEqual(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "/work/",
                 directories: ["/work/Beta", "/work/alpha"]
             ),
@@ -135,7 +135,7 @@ final class FilePickerRootInputTests: XCTestCase {
 
     func testCompletionKeepsAnUppercaseSegmentExact() {
         XCTAssertNil(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "/work/LIB", directories: ["/work/Library"]
             )
         )
@@ -146,7 +146,7 @@ final class FilePickerRootInputTests: XCTestCase {
     /// reader learns they have to choose.
     func testCandidatesDivergingAtTheNextCharacterAddNothing() {
         XCTAssertNil(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "/work/pro",
                 directories: ["/work/project", "/work/prototype"]
             )
@@ -157,7 +157,7 @@ final class FilePickerRootInputTests: XCTestCase {
     /// the segment is settled, so the next thing typed belongs to the next one.
     func testASingleCandidateCompletesFullyAndClosesTheSegment() {
         XCTAssertEqual(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "/work/pro", directories: ["/work/project"]
             ),
             "/work/project/"
@@ -170,7 +170,7 @@ final class FilePickerRootInputTests: XCTestCase {
     /// equalled what was typed and the guard refused it.
     func testATildeAloneCompletesToATildeSlash() {
         XCTAssertEqual(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "~", directories: [NSHomeDirectory()]
             ),
             "~/"
@@ -181,7 +181,7 @@ final class FilePickerRootInputTests: XCTestCase {
     /// is what makes a second press move rather than sit there.
     func testANameTypedInFullClosesDespiteLongerSiblings() {
         XCTAssertEqual(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "/work/project",
                 directories: ["/work/project", "/work/projections"]
             ),
@@ -195,7 +195,7 @@ final class FilePickerRootInputTests: XCTestCase {
     /// reach by typing.
     func testASharedPrefixNamingADirectoryIsNotClosed() {
         XCTAssertEqual(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "/work/pro",
                 directories: ["/work/project", "/work/projections"]
             ),
@@ -208,7 +208,7 @@ final class FilePickerRootInputTests: XCTestCase {
     /// the field not moving is the answer.
     func testCandidatesThatDisagreeImmediatelyAddNothing() {
         XCTAssertNil(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "/work/", directories: ["/work/alpha", "/work/beta"]
             )
         )
@@ -216,7 +216,7 @@ final class FilePickerRootInputTests: XCTestCase {
 
     func testNoCandidatesCompleteToNothing() {
         XCTAssertNil(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "/work/zzz", directories: ["/work/alpha"]
             )
         )
@@ -224,7 +224,7 @@ final class FilePickerRootInputTests: XCTestCase {
 
     func testAFilterIsNeverCompleted() {
         XCTAssertNil(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "usermodel", directories: ["/work/usermodels"]
             )
         )
@@ -234,7 +234,7 @@ final class FilePickerRootInputTests: XCTestCase {
     /// path would be correct and would read as the field rewriting them.
     func testATildeQueryIsCompletedBackIntoATildeQuery() {
         let home = NSHomeDirectory()
-        let completed = FilePickerRootInput.completion(
+        let completed = FileRootInput.completion(
             for: "~/pro", directories: ["\(home)/projects"]
         )
 
@@ -251,20 +251,20 @@ final class FilePickerRootInputTests: XCTestCase {
     func testTheCandidateParentFollowsTheTrailingSeparator() {
         let home = NSHomeDirectory()
         XCTAssertEqual(
-            FilePickerRootInput.candidateParent(of: "~/pro"), home
+            FileRootInput.candidateParent(of: "~/pro"), home
         )
         XCTAssertEqual(
-            FilePickerRootInput.candidateParent(of: "~/projects/"),
+            FileRootInput.candidateParent(of: "~/projects/"),
             "\(home)/projects"
         )
     }
 
     func testTheCandidateParentOfTheFilesystemRootIsItself() {
-        XCTAssertEqual(FilePickerRootInput.candidateParent(of: "/"), "/")
+        XCTAssertEqual(FileRootInput.candidateParent(of: "/"), "/")
     }
 
     func testAFilterHasNoCandidateParent() {
-        XCTAssertNil(FilePickerRootInput.candidateParent(of: "usermodel"))
+        XCTAssertNil(FileRootInput.candidateParent(of: "usermodel"))
     }
 
     // MARK: - Relative paths
@@ -277,41 +277,41 @@ final class FilePickerRootInputTests: XCTestCase {
     /// as the file not existing.
     func testADotfileQueryIsStillAFilter() {
         XCTAssertFalse(
-            FilePickerRootInput.isRootChange(".env", route: route)
+            FileRootInput.isRootChange(".env", route: route)
         )
         XCTAssertFalse(
-            FilePickerRootInput.isRootChange(".gitignore", route: route)
+            FileRootInput.isRootChange(".gitignore", route: route)
         )
         XCTAssertFalse(
-            FilePickerRootInput.isRootChange("..foo", route: route)
+            FileRootInput.isRootChange("..foo", route: route)
         )
     }
 
     func testDotAndDotDotAreRelativePaths() {
-        XCTAssertTrue(FilePickerRootInput.isRootChange(".", route: route))
-        XCTAssertTrue(FilePickerRootInput.isRootChange("..", route: route))
-        XCTAssertTrue(FilePickerRootInput.isRootChange("./src", route: route))
-        XCTAssertTrue(FilePickerRootInput.isRootChange("../src", route: route))
+        XCTAssertTrue(FileRootInput.isRootChange(".", route: route))
+        XCTAssertTrue(FileRootInput.isRootChange("..", route: route))
+        XCTAssertTrue(FileRootInput.isRootChange("./src", route: route))
+        XCTAssertTrue(FileRootInput.isRootChange("../src", route: route))
     }
 
     /// Without a route there is nothing for them to be relative *to*, so they
     /// stay filters rather than resolving against a guess.
     func testARelativePathNeedsARoute() {
-        XCTAssertFalse(FilePickerRootInput.isRootChange(".."))
-        XCTAssertNil(FilePickerRootInput.expandedPath(".."))
+        XCTAssertFalse(FileRootInput.isRootChange(".."))
+        XCTAssertNil(FileRootInput.expandedPath(".."))
     }
 
     func testDotDotGoesUpFromTheRoute() {
         XCTAssertEqual(
-            FilePickerRootInput.expandedPath("..", route: route),
+            FileRootInput.expandedPath("..", route: route),
             "/Users/someone"
         )
         XCTAssertEqual(
-            FilePickerRootInput.expandedPath("../Documents", route: route),
+            FileRootInput.expandedPath("../Documents", route: route),
             "/Users/someone/Documents"
         )
         XCTAssertEqual(
-            FilePickerRootInput.expandedPath("../../shared", route: route),
+            FileRootInput.expandedPath("../../shared", route: route),
             "/Users/shared",
             "each leading .. consumes one component of the route"
         )
@@ -319,10 +319,10 @@ final class FilePickerRootInputTests: XCTestCase {
 
     func testASingleDotIsTheRouteItself() {
         XCTAssertEqual(
-            FilePickerRootInput.expandedPath(".", route: route), route
+            FileRootInput.expandedPath(".", route: route), route
         )
         XCTAssertEqual(
-            FilePickerRootInput.expandedPath("./src", route: route),
+            FileRootInput.expandedPath("./src", route: route),
             "\(route)/src"
         )
     }
@@ -331,7 +331,7 @@ final class FilePickerRootInputTests: XCTestCase {
     /// list reads, so resolving must not eat it.
     func testATrailingSeparatorSurvivesResolution() {
         XCTAssertEqual(
-            FilePickerRootInput.expandedPath("../", route: route),
+            FileRootInput.expandedPath("../", route: route),
             "/Users/someone/"
         )
     }
@@ -342,7 +342,7 @@ final class FilePickerRootInputTests: XCTestCase {
     /// resolved spelling matches none of them.
     func testAnInteriorDotDotIsLeftAlone() {
         XCTAssertEqual(
-            FilePickerRootInput.expandedPath("../a/../b", route: route),
+            FileRootInput.expandedPath("../a/../b", route: route),
             "/Users/someone/a/../b"
         )
     }
@@ -352,7 +352,7 @@ final class FilePickerRootInputTests: XCTestCase {
     /// and change what a following `..` means.
     func testARelativeCompletionStaysRelative() {
         XCTAssertEqual(
-            FilePickerRootInput.completion(
+            FileRootInput.completion(
                 for: "../Doc",
                 directories: ["/Users/someone/Documents"],
                 route: route
@@ -363,7 +363,7 @@ final class FilePickerRootInputTests: XCTestCase {
 
     func testTheCandidateParentOfARelativePathResolves() {
         XCTAssertEqual(
-            FilePickerRootInput.candidateParent(of: "../Doc", route: route),
+            FileRootInput.candidateParent(of: "../Doc", route: route),
             "/Users/someone"
         )
     }
@@ -372,14 +372,14 @@ final class FilePickerRootInputTests: XCTestCase {
 
     func testLongestCommonPrefix() {
         XCTAssertEqual(
-            FilePickerRootInput.longestCommonPrefix(["abcd", "abce"]), "abc"
+            FileRootInput.longestCommonPrefix(["abcd", "abce"]), "abc"
         )
         XCTAssertEqual(
-            FilePickerRootInput.longestCommonPrefix(["abc"]), "abc"
+            FileRootInput.longestCommonPrefix(["abc"]), "abc"
         )
         XCTAssertEqual(
-            FilePickerRootInput.longestCommonPrefix(["abc", "xyz"]), ""
+            FileRootInput.longestCommonPrefix(["abc", "xyz"]), ""
         )
-        XCTAssertEqual(FilePickerRootInput.longestCommonPrefix([]), "")
+        XCTAssertEqual(FileRootInput.longestCommonPrefix([]), "")
     }
 }

@@ -6,7 +6,7 @@ import Foundation
 /// `/` or `~` is a path being typed, anything else is a filter. That is the
 /// shell's convention and needs no explaining to anyone who has used one — and
 /// it keeps the common case, filtering, free of a mode to be in.
-public enum FilePickerRootInput {
+public enum FileRootInput {
 
     /// Whether this query is a path being typed rather than a filter.
     ///
@@ -165,7 +165,7 @@ public enum FilePickerRootInput {
         // decides between equals, because enumeration order is not stable and a
         // completion that varies between presses is worse than one that is
         // occasionally the wrong sibling's capital.
-        let ordered = matching.sorted(by: FilePickerFolderList.precedes)
+        let ordered = matching.sorted(by: FileFolderList.precedes)
         let source = ordered.first { $0.hasPrefix(typed) } ?? ordered[0]
         let sensitive = (typed as NSString).lastPathComponent
             .contains { $0.isUppercase }

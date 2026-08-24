@@ -6,7 +6,7 @@ import XCTest
 ///
 /// Children are supplied rather than read, so every rule here is exercised
 /// without a filesystem — which is the point of the split.
-final class FilePickerFolderListTests: XCTestCase {
+final class FileFolderListTests: XCTestCase {
 
     private let home = NSHomeDirectory()
 
@@ -14,7 +14,7 @@ final class FilePickerFolderListTests: XCTestCase {
 
     /// A finished segment asks about what is inside, so everything is offered.
     func testATrailingSeparatorOffersEveryChild() {
-        let rows = FilePickerFolderList.rows(
+        let rows = FileFolderList.rows(
             for: "~/projects/",
             children: [
                 "\(home)/projects/alpha",
@@ -27,7 +27,7 @@ final class FilePickerFolderListTests: XCTestCase {
 
     /// A partial segment narrows to it.
     func testAPartialSegmentFiltersByPrefix() {
-        let rows = FilePickerFolderList.rows(
+        let rows = FileFolderList.rows(
             for: "~/pro",
             children: [
                 "\(home)/projects",
@@ -43,7 +43,7 @@ final class FilePickerFolderListTests: XCTestCase {
 
     /// The reported bug: `~/lib` found nothing while `Library` sat right there.
     func testALowercaseSegmentReachesACapitalisedFolder() {
-        let rows = FilePickerFolderList.rows(
+        let rows = FileFolderList.rows(
             for: "~/lib",
             children: ["\(home)/Library", "\(home)/Documents"]
         )
@@ -53,7 +53,7 @@ final class FilePickerFolderListTests: XCTestCase {
 
     /// Smart case, the matcher's rule: typing a capital asks for one.
     func testAnUppercaseSegmentIsMatchedExactly() {
-        let rows = FilePickerFolderList.rows(
+        let rows = FileFolderList.rows(
             for: "~/LIB",
             children: ["\(home)/Library", "\(home)/lib"]
         )
@@ -62,7 +62,7 @@ final class FilePickerFolderListTests: XCTestCase {
     }
 
     func testACapitalisedSegmentStillReachesItsOwnFolder() {
-        let rows = FilePickerFolderList.rows(
+        let rows = FileFolderList.rows(
             for: "~/Lib",
             children: ["\(home)/Library", "\(home)/libexec"]
         )
@@ -75,7 +75,7 @@ final class FilePickerFolderListTests: XCTestCase {
     /// of the whole string would make every path under a home directory
     /// case-sensitive.
     func testTheCapitalInUsersDoesNotMakeTheSegmentSensitive() {
-        let rows = FilePickerFolderList.rows(
+        let rows = FileFolderList.rows(
             for: "\(home)/lib",
             children: ["\(home)/Library"]
         )
@@ -89,7 +89,7 @@ final class FilePickerFolderListTests: XCTestCase {
     /// Repeating the path in every row would push the part that differs off the
     /// right-hand side.
     func testARowDisplaysTheFolderNameAlone() {
-        let rows = FilePickerFolderList.rows(
+        let rows = FileFolderList.rows(
             for: "~/pro", children: ["\(home)/projects"]
         )
 
@@ -100,7 +100,7 @@ final class FilePickerFolderListTests: XCTestCase {
     /// The provenance that routes activation to a re-root instead of an open.
     /// A folder row reaching `onOpen` would hand a directory to the reader.
     func testEveryRowIsAFolder() {
-        let rows = FilePickerFolderList.rows(
+        let rows = FileFolderList.rows(
             for: "~/projects/",
             children: ["\(home)/projects/alpha", "\(home)/projects/beta"]
         )
@@ -115,12 +115,12 @@ final class FilePickerFolderListTests: XCTestCase {
     /// reader scanning the list expects counting, and `apple` beside `Apple`
     /// because two alphabets read as two lists.
     ///
-    /// This test is why `FilePickerFolderList.precedes` spells the comparator
+    /// This test is why `FileFolderList.precedes` spells the comparator
     /// out instead of calling `localizedStandardCompare`: written against the
     /// localized one, it passed in the app and failed here, because the numeric
     /// handling depends on a locale the test bundle does not run under.
     func testTheOrderIsNaturalRatherThanByteOrder() {
-        let rows = FilePickerFolderList.rows(
+        let rows = FileFolderList.rows(
             for: "~/shots/",
             children: [
                 "\(home)/shots/Photo10",
@@ -140,10 +140,10 @@ final class FilePickerFolderListTests: XCTestCase {
     /// The comparator itself, pinned directly — the ordering above is the
     /// consequence, and a failure here says which of the two properties broke.
     func testTheComparatorFoldsCaseAndCountsDigitRuns() {
-        XCTAssertTrue(FilePickerFolderList.precedes("Photo9", "Photo10"))
-        XCTAssertFalse(FilePickerFolderList.precedes("Photo10", "Photo9"))
-        XCTAssertTrue(FilePickerFolderList.precedes("apple", "Banana"))
-        XCTAssertTrue(FilePickerFolderList.precedes("Apple", "banana"))
+        XCTAssertTrue(FileFolderList.precedes("Photo9", "Photo10"))
+        XCTAssertFalse(FileFolderList.precedes("Photo10", "Photo9"))
+        XCTAssertTrue(FileFolderList.precedes("apple", "Banana"))
+        XCTAssertTrue(FileFolderList.precedes("Apple", "banana"))
     }
 
     // MARK: - Bounds
@@ -152,7 +152,7 @@ final class FilePickerFolderListTests: XCTestCase {
         let children = (1...50).map { "\(home)/many/folder\($0)" }
 
         XCTAssertEqual(
-            FilePickerFolderList.rows(
+            FileFolderList.rows(
                 for: "~/many/", children: children, limit: 10
             )
             .count,
@@ -162,7 +162,7 @@ final class FilePickerFolderListTests: XCTestCase {
 
     func testNoChildrenIsNoRows() {
         XCTAssertTrue(
-            FilePickerFolderList.rows(for: "~/pro", children: []).isEmpty
+            FileFolderList.rows(for: "~/pro", children: []).isEmpty
         )
     }
 
@@ -170,7 +170,7 @@ final class FilePickerFolderListTests: XCTestCase {
     /// and answering it here would show folders to someone searching for files.
     func testAFilterProducesNoRows() {
         XCTAssertTrue(
-            FilePickerFolderList.rows(
+            FileFolderList.rows(
                 for: "usermodel", children: ["\(home)/usermodels"]
             )
             .isEmpty
