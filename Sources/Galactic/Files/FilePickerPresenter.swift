@@ -230,6 +230,10 @@ public final class FilePickerPresenter: ObservableObject {
 
     public func present() {
         guard !isPresented else { return }
+        // One card under the tab strip at a time — see
+        // `FileSearchPresenter.present()`, which says the same in the other
+        // direction.
+        FileSearchPresenter.shared.dismiss()
         rows = []
         resetSelection()
         // Dropped on open rather than on a timer: a folder created since the
@@ -240,13 +244,11 @@ public final class FilePickerPresenter: ObservableObject {
         folderCache = nil
         root = rootProvider()
         restoreState()
-        focus.capture()
-        isPresented = true
-        focus.installEscape(
-            standDown: { SheetAlert.isClaimingKeyboard },
+        focus.arm(
             isActive: { [weak self] in self?.isPresented ?? false },
             onEscape: { [weak self] in self?.dismiss() }
         )
+        isPresented = true
         // Offered before the walk starts, and not after it. What an empty query
         // shows — closed files, then recent ones — is the host's own history and
         // owes the corpus nothing, so making a reader watch a tree be indexed
@@ -266,7 +268,7 @@ public final class FilePickerPresenter: ObservableObject {
         isPresented = false
         filterTask?.cancel()
         filterTask = nil
-        focus.removeEscape()
+        focus.disarm()
     }
 
     private func rememberState() {

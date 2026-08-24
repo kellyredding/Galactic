@@ -441,6 +441,74 @@ final class GalacticPublicSurfaceTests: XCTestCase {
         XCTAssertNotNil(FilePickerView())
     }
 
+    /// The searcher's seam: a shared presenter, a view, and a run a host can
+    /// render. Four closures and no protocol, matching the picker.
+    @MainActor
+    func testTheFileSearcherIsReachedThroughItsSharedPresenter() {
+        let presenter = FileSearchPresenter.shared
+        defer {
+            presenter.dismiss()
+            presenter.rootProvider = { nil }
+            presenter.ownerProvider = { "" }
+            presenter.contextLinesProvider = { 2 }
+            presenter.onRun = { _ in }
+        }
+        presenter.rootProvider = { nil }
+        presenter.ownerProvider = { "default" }
+        presenter.contextLinesProvider = { 2 }
+        presenter.onRun = { _ in }
+
+        presenter.toggle()
+
+        XCTAssertTrue(presenter.isPresented)
+        XCTAssertTrue(FileSearchPresenter.isClaimingKeyboard)
+        XCTAssertNotNil(FileSearchView())
+    }
+
+    /// A run is a value a host can build a page from, and the page is a string.
+    /// Nothing here needs a file, a web view, or a host protocol.
+    func testAResultsPageIsBuiltFromValues() throws {
+        let line = FileSearchLine(
+            line: 42,
+            segments: [
+                .init(text: "let ", isMatch: false),
+                .init(text: "needle", isMatch: true),
+            ]
+        )
+        let run = FileSearchRun(
+            query: FileSearchQuery(
+                text: "needle", isCaseSensitive: false, contextLines: 2
+            ),
+            root: "/root",
+            files: [
+                FileSearchFileResult(
+                    path: "/root/a.swift",
+                    relativePath: "a.swift",
+                    matchCount: 1,
+                    blocks: [[line]],
+                    wasTruncated: false
+                )
+            ],
+            filesConsidered: 10,
+            filesScanned: 9,
+            matchCount: 1,
+            truncation: nil,
+            skippedNames: ["log"]
+        )
+
+        let page = FileSearchResultsRenderer.document(run: run, isDark: true)
+        XCTAssertTrue(page.contains("a.swift"))
+        XCTAssertTrue(page.contains("search-hit"))
+
+        // The link a click travels on, both ways.
+        let url = try XCTUnwrap(
+            SearchHitLink.url(path: "/root/a.swift", line: 42)
+        )
+        let parsed = try XCTUnwrap(SearchHitLink.parse(url))
+        XCTAssertEqual(parsed.path, "/root/a.swift")
+        XCTAssertEqual(parsed.line, 42)
+    }
+
     /// What a host mounts a Files surface out of: the keyed collection, the set
     /// it hands back, and the strip that draws it.
     @MainActor

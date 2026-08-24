@@ -64,6 +64,28 @@ public struct ReaderHostView: NSViewRepresentable {
 
     public var onAnnotationMessage: ((AnnotationMessage) -> Void)?
 
+    /// A link activated in the page. See `AnnotationCoordinator`.
+    ///
+    /// A reader whose content holds references — a search result, a citation,
+    /// a `path:42` in a note — makes them ordinary anchors and answers here.
+    /// Unset means the previous behaviour: declined and logged.
+    public var onLinkActivated: ((URL) -> Void)?
+
+    /// The script that puts a freshly built page somewhere other than where the
+    /// reader left it.
+    ///
+    /// Asked once per build, after the composer hand-off. A non-nil answer
+    /// **replaces** the remembered scroll offset rather than running beside it:
+    /// both answer "where does this page land", and a page cannot land twice. A
+    /// host that opened a file *because* of a line reference wants the line;
+    /// the offset it remembers for that file is from an earlier visit and is
+    /// not what was asked for.
+    ///
+    /// Runs in `pendingScrollJS`, so it inherits that slot's ordering — after
+    /// the init script, because that script builds the annotation cards and
+    /// moves the content any measurement was taken against.
+    public var landingJS: (() -> String?)?
+
     public var isInspectable: Bool
 
     /// Whether this reader is the surface in front of the user.
@@ -95,6 +117,8 @@ public struct ReaderHostView: NSViewRepresentable {
         webView: Binding<WKWebView?>,
         isVisibleSurface: Bool,
         onAnnotationMessage: ((AnnotationMessage) -> Void)? = nil,
+        onLinkActivated: ((URL) -> Void)? = nil,
+        landingJS: (() -> String?)? = nil,
         isInspectable: Bool = false
     ) {
         self.isDark = isDark
@@ -106,6 +130,8 @@ public struct ReaderHostView: NSViewRepresentable {
         self._webView = webView
         self.isVisibleSurface = isVisibleSurface
         self.onAnnotationMessage = onAnnotationMessage
+        self.onLinkActivated = onLinkActivated
+        self.landingJS = landingJS
         self.isInspectable = isInspectable
     }
 
@@ -128,7 +154,11 @@ public struct ReaderHostView: NSViewRepresentable {
 
         context.coordinator.lastToken = reloadToken
         context.coordinator.onAnnotationMessage = onAnnotationMessage
+        context.coordinator.onLinkActivated = onLinkActivated
         context.coordinator.pendingInitJS = annotationInitJS(nil)
+        // A first build can be asked to land somewhere too: a host that mounts
+        // its reader in response to the same click that chose the line.
+        context.coordinator.pendingScrollJS = landingJS?()
 
         view.loadHTMLString(document(), baseURL: baseURL)
 
@@ -143,6 +173,7 @@ public struct ReaderHostView: NSViewRepresentable {
         // Always refresh: the closure captures state the host may have
         // replaced since the last pass.
         context.coordinator.onAnnotationMessage = onAnnotationMessage
+        context.coordinator.onLinkActivated = onLinkActivated
 
         // Above the token guard, and that placement is the whole fix. Moving
         // between tabs changes which surface is in front of the user without
@@ -160,6 +191,7 @@ public struct ReaderHostView: NSViewRepresentable {
         let scroll = handOffScroll
         let page = document
         let base = baseURL
+        let landing = landingJS
 
         // Ask the outgoing page for anything worth keeping, then load inside
         // the reply — loading first would destroy the page being asked.
@@ -172,8 +204,12 @@ public struct ReaderHostView: NSViewRepresentable {
             let restoreTo = scroll?((position as? Double) ?? 0) ?? 0
             view.evaluateJavaScript(Self.rescueFormStateJS) { result, _ in
                 context.coordinator.pendingInitJS = build(result as? String)
+                // A landing script wins over a remembered offset: it is what
+                // the reader just asked for, and the offset is where they were
+                // the last time they looked at this file.
                 context.coordinator.pendingScrollJS =
-                    restoreTo > 0 ? Self.restoreScrollJS(restoreTo) : nil
+                    landing?()
+                    ?? (restoreTo > 0 ? Self.restoreScrollJS(restoreTo) : nil)
                 view.loadHTMLString(page(), baseURL: base)
             }
         }
