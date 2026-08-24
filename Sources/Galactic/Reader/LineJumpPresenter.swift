@@ -26,7 +26,11 @@ public final class LineJumpPresenter: ObservableObject {
     /// Where a chosen line goes. Set by the host that owns the reader.
     public var onJump: ((Int) -> Void)?
 
-    private let focus = ModalFocusCapture()
+    /// Internal rather than private, matching its siblings: `ModalFocusCapture`
+    /// keeps its note and its monitor internal so a test can assert that the
+    /// monitor lives exactly as long as the modal, and that claim is otherwise
+    /// unassertable from outside.
+    let focus = ModalFocusCapture()
 
     /// Internal so the package's tests can drive an instance without mutating
     /// the singleton every other test shares. Hosts use `shared`.
@@ -44,18 +48,16 @@ public final class LineJumpPresenter: ObservableObject {
         guard !isPresented else { return }
         query = ""
         self.lineCount = lineCount
-        focus.capture()
-        isPresented = true
-        focus.installEscape(
-            standDown: { SheetAlert.isClaimingKeyboard },
+        focus.arm(
             isActive: { [weak self] in self?.isPresented ?? false },
             onEscape: { [weak self] in self?.dismiss() }
         )
+        isPresented = true
     }
 
     public func dismiss() {
         isPresented = false
-        focus.removeEscape()
+        focus.disarm()
     }
 
     /// Called by the view as it disappears, never by `dismiss` — see

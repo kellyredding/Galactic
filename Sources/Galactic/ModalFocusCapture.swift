@@ -133,4 +133,47 @@ final class ModalFocusCapture {
         if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
         escapeMonitor = nil
     }
+
+    /// Take the keyboard and arm Escape, in the order that is correct.
+    ///
+    /// Called by a presenter **before** it sets its own presented flag, which
+    /// is why the two halves are one call: `capture()` has to run while the
+    /// previous first responder still is one, and a presenter that sets its
+    /// flag first has already mounted an overlay whose field will be recorded
+    /// as the thing to restore to. That was a convention re-established in
+    /// four `present()` bodies; here it is the signature.
+    ///
+    /// Installing the monitor after the flag would also be correct —
+    /// `isActive` is read when a key arrives, not now — so the two are joined
+    /// here rather than split around the flag. One call before the flag is a
+    /// rule a caller can follow; two calls straddling it is a rule a caller
+    /// can half follow.
+    ///
+    /// - Parameters:
+    ///   - standDown: whether something else owns Escape. Defaults to a sheet,
+    ///     which is what every caller but the inbox wants; that one names its
+    ///     own confirmation flag, and is why this stays a parameter. Never
+    ///     `GalacticModals` — see `installEscape`.
+    ///   - isActive: whether the modal is still up.
+    ///   - onEscape: what closing means to the caller.
+    func arm(
+        standDown: @escaping () -> Bool = { SheetAlert.isClaimingKeyboard },
+        isActive: @escaping () -> Bool,
+        onEscape: @escaping () -> Void
+    ) {
+        capture()
+        installEscape(
+            standDown: standDown, isActive: isActive, onEscape: onEscape
+        )
+    }
+
+    /// Release Escape. Deliberately does **not** give the keyboard back.
+    ///
+    /// The asymmetry with `arm` is the point, and it is `restore()`'s rule
+    /// restated where someone writing a `dismiss()` will read it: an overlay is
+    /// still mounted when its presenter dismisses, so handing the keyboard back
+    /// now hands it back too early. The view does that as it goes away.
+    func disarm() {
+        removeEscape()
+    }
 }

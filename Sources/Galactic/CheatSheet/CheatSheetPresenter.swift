@@ -109,20 +109,18 @@ public final class CheatSheetPresenter: ObservableObject {
     public func present() {
         guard !isPresented else { return }
         sections = sectionsProvider()
-        focus.capture()
-        isPresented = true
-        focus.installEscape(
-            standDown: { SheetAlert.isClaimingKeyboard },
+        focus.arm(
             isActive: { [weak self] in self?.isPresented ?? false },
             onEscape: { [weak self] in self?.dismiss() }
         )
+        isPresented = true
     }
 
     /// Close the sheet. The keyboard goes back once the overlay is actually
     /// gone — see `restoreFocus`, which `CheatSheetView` calls on its way out.
     public func dismiss() {
         isPresented = false
-        focus.removeEscape()
+        focus.disarm()
     }
 
     /// Give the keyboard back to whoever had it when the sheet opened.

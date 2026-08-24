@@ -18,15 +18,23 @@ import AppKit
 ///    sense, but it sits over the scrollback holding the keyboard,
 ///    so a drop landing behind it has the same problem: input
 ///    directed somewhere the user isn't looking.
-/// 4. The cheat sheet, an in-window overlay. Also not modal, and
-///    also holding the keyboard: its search field is the only
-///    thing that should see an unmodified key while it is up.
+/// 4. Every Galactic-owned in-window overlay that holds the
+///    keyboard — the cheat sheet, the agent inbox, the file
+///    picker, the go-to-line prompt, the file searcher. Also not
+///    modal, and also holding the keyboard: their own field is the
+///    only thing that should see an unmodified key while one is up.
 ///    Registered here rather than as a host-side flag because at
 ///    least one Escape consumer lives inside this package and an
 ///    app-side flag cannot reach it.
 ///
 /// If a fifth presentation mechanism is added later, extend this
 /// helper rather than the individual drag handlers.
+///
+/// Item 4 used to name the cheat sheet alone. Three more overlays
+/// shipped, each added to `GalacticModals` and none added here, so
+/// a file drop landing behind an open picker was accepted for as
+/// long as both existed. Asking one question in two places is what
+/// allowed that, so it is now asked once.
 public enum ModalState {
     /// True when a modal is currently presenting over `window`.
     /// Pass the drag-target view's own `window` — sheet
@@ -36,7 +44,9 @@ public enum ModalState {
         if NSApp.modalWindow != nil { return true }
         if window?.attachedSheet != nil { return true }
         if FindBarPanelController.shared.isPresenting { return true }
-        if CheatSheetPresenter.shared.isPresented { return true }
+        // The shared predicate rather than a list of its own: an overlay added
+        // to one and forgotten in the other is the bug this closes.
+        if GalacticModals.isClaimingKeyboard { return true }
         return false
     }
 }

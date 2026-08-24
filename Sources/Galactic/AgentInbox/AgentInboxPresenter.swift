@@ -106,18 +106,17 @@ public final class AgentInboxPresenter: ObservableObject {
         guard !isPresented else { return }
         inbox = inboxProvider()
         consumer = consumerProvider()
-        focus.capture()
-        isPresented = true
-        focus.installEscape(
+        focus.arm(
             standDown: { [weak self] in self?.isConfirming ?? false },
             isActive: { [weak self] in self?.isPresented ?? false },
             onEscape: { [weak self] in self?.dismiss() }
         )
+        isPresented = true
     }
 
     public func dismiss() {
         isPresented = false
-        focus.removeEscape()
+        focus.disarm()
     }
 
     /// Give the keyboard back to whoever had it when the modal opened.
