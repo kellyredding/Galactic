@@ -48,21 +48,6 @@ public struct FileSearchView: View {
             focus = nil
             presenter.restoreFocus()
         }
-        // The presenter decides what Escape means and needs to know which
-        // surface is innermost; the view is the only thing that knows where the
-        // caret is, so it reports rather than the presenter guessing.
-        .onChange(of: focus) { _, now in
-            if now == .root {
-                presenter.beginEditingRoot()
-            } else {
-                presenter.endEditingRoot()
-            }
-        }
-        // Committing or reverting the root hands the caret back, and the
-        // presenter says so by dropping out of root-editing.
-        .onChange(of: presenter.isEditingRoot) { _, editing in
-            if !editing, focus == .root { focus = .query }
-        }
     }
 
     /// Clear rather than dimmed, matching the picker: it exists to catch the
@@ -110,18 +95,10 @@ public struct FileSearchView: View {
     /// taller for gaining it.
     private var rootField: some View {
         FileRootFieldView(
-            text: Binding(
-                get: { presenter.rootField.text },
-                set: { presenter.editRootText($0) }
-            ),
+            model: presenter.rootFieldModel,
             focus: $focus,
             focusValue: Field.root,
-            rows: presenter.rootRows,
-            selection: presenter.rootField.selection,
-            onComplete: { presenter.completeRootPath() },
-            onCommit: { presenter.commitRootField() },
-            onMove: { presenter.moveRootSelection(by: $0) },
-            onPick: { presenter.pickRootRow($0) }
+            returnFocusTo: Field.query
         )
     }
 

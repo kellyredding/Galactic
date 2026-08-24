@@ -24,7 +24,10 @@ public final class FileSearchPresenter: ObservableObject {
 
     /// Internal so the package's tests can drive an instance without mutating
     /// the singleton every other test shares. Hosts use `shared`.
-    init() {}
+    init() {
+        rootFieldModel.route = { [weak self] in self?.root }
+        rootFieldModel.onCommit = { [weak self] url in self?.applyRoot(url) }
+    }
 
     // MARK: - What the host answers
 
@@ -62,28 +65,17 @@ public final class FileSearchPresenter: ObservableObject {
     /// themselves — those are a tab.
     @Published public private(set) var lastRun: FileSearchRun?
 
-    // MARK: - The root field
-
-    @Published public private(set) var rootField = FileRootField()
-    @Published public private(set) var rootRows: [FilePickerItem] = []
-
-    /// Whether the caret is in the root field rather than the query.
-    ///
-    /// Held here rather than read off the view because Escape is answered by a
-    /// key monitor the presenter installs, and that monitor has to know which
-    /// surface is innermost before deciding what closing means.
-    @Published public private(set) var isEditingRoot = false
-
-    /// One directory per parent, dropped whenever the panel opens.
-    ///
-    /// Dropped on open rather than on a timer: a folder made since the last
-    /// look should appear, and opening is when a reader asks.
-    private var folderCache: (parent: String, children: [String])?
-    private var loadingParent: String?
-
     private(set) var root: URL?
     let focus = ModalFocusCapture()
     private let engine = FileSearchEngine()
+
+    /// The root field, shared with the picker so the two panels cannot come to
+    /// disagree about what Tab does in one.
+    ///
+    /// Observed by the field's own view rather than forwarded through here: the
+    /// view is the only thing that reads it, so a second hop would invalidate
+    /// the whole card to redraw one row.
+    public let rootFieldModel = FileRootFieldModel()
 
     /// Which owner this panel was opened for.
     ///
@@ -131,10 +123,7 @@ public final class FileSearchPresenter: ObservableObject {
 
         root = rootProvider()
         presentedOwner = ownerProvider()
-        folderCache = nil
-        isEditingRoot = false
-        rootRows = []
-        rootField.reset(to: root)
+        rootFieldModel.reset()
         restoreState()
         focus.arm(
             isActive: { [weak self] in self?.isPresented ?? false },
@@ -143,8 +132,8 @@ public final class FileSearchPresenter: ObservableObject {
                 // Innermost surface first. The root field is a surface inside
                 // the panel, so it answers Escape before the panel does — the
                 // same ladder Escape follows everywhere else in these apps.
-                if self.isEditingRoot {
-                    self.revertRootField()
+                if self.rootFieldModel.isEditing {
+                    self.rootFieldModel.revert()
                 } else {
                     self.dismiss()
                 }
@@ -200,6 +189,23 @@ public final class FileSearchPresenter: ObservableObject {
         lastRun = state.lastRun
     }
 
+    /// A folder the root field settled on.
+    private func applyRoot(_ url: URL) {
+        root = url
+        onChangeRoot(url)
+        // **The query survives, and that is the opposite of what the picker
+        // does.** There the query *was* the path and has been spent; here you
+        // changed folders in order to ask the same question somewhere else, so
+        // clearing it would throw away the thing you came for.
+        //
+        // The last run does not survive: it describes a root that is no longer
+        // the one being asked about.
+        lastRun = nil
+        // Asked for, because `slices` answers nothing for a root nobody has
+        // mapped — even one wholly inside an indexed tree.
+        mapIndex()
+    }
+
     private func mapIndex() {
         guard let root else { return }
         FileCorpusStore.shared.index(root: root)
@@ -209,154 +215,6 @@ public final class FileSearchPresenter: ObservableObject {
 
     public func toggleCaseSensitivity() {
         isCaseSensitive.toggle()
-    }
-
-    // MARK: - Re-rooting
-
-    /// Shift-Tab. Fill the field from the root and take the caret.
-    ///
-    /// Filled every time rather than kept, so the field always opens saying
-    /// where you actually are — a half-typed path abandoned last time is not an
-    /// answer to that question.
-    public func beginEditingRoot() {
-        rootField.reset(to: root)
-        isEditingRoot = true
-        refreshRootRows()
-    }
-
-    /// Focus went back to the query. Nothing is committed by leaving.
-    public func endEditingRoot() {
-        isEditingRoot = false
-        rootRows = []
-    }
-
-    public func editRootText(_ text: String) {
-        guard text != rootField.text else { return }
-        rootField.text = text
-        // Typing invalidates a pick: the row that was chosen may not even be
-        // offered any more, and carrying the index over would commit whichever
-        // folder happened to land at it.
-        rootField.clearSelection()
-        refreshRootRows()
-    }
-
-    /// Tab.
-    public func completeRootPath() {
-        guard let parent = rootField.candidateParent(route: routePath) else {
-            return
-        }
-        let children = cachedChildren(of: parent) ?? readChildren(of: parent)
-        guard
-            let completed = rootField.completion(
-                directories: children, route: routePath
-            )
-        else { return }
-        rootField.text = completed
-        rootField.clearSelection()
-        refreshRootRows()
-    }
-
-    public func moveRootSelection(by delta: Int) {
-        rootField.moveSelection(by: delta, rowCount: rootRows.count)
-    }
-
-    public func pickRootRow(_ index: Int) {
-        guard rootRows.indices.contains(index) else { return }
-        rootField.moveSelection(
-            by: index - (rootField.selection ?? -1), rowCount: rootRows.count
-        )
-    }
-
-    /// Return. Commit, or refuse and stay.
-    ///
-    /// Refusing rather than closing is the point: a path that names nothing is a
-    /// typo, and dropping the caret back into the query field would hide it.
-    public func commitRootField() {
-        guard let url = rootField.resolved(rows: rootRows, route: routePath)
-        else { return }
-        changeRoot(to: url)
-        endEditingRoot()
-    }
-
-    /// Escape. Put back what was there and leave.
-    public func revertRootField() {
-        rootField.reset(to: root)
-        endEditingRoot()
-    }
-
-    private func changeRoot(to url: URL) {
-        root = url
-        onChangeRoot(url)
-        rootField.reset(to: url)
-        // **The query survives, and that is the opposite of what the picker
-        // does.** There the query *was* the path and has been consumed; here you
-        // re-rooted in order to run the same query somewhere else, so clearing
-        // it would throw away the thing you came for.
-        //
-        // The last run does not survive: it describes a root that is no longer
-        // the one being asked about.
-        lastRun = nil
-        folderCache = nil
-        // Asked for, because `slices` answers nothing for a root nobody has
-        // mapped — even one wholly inside an indexed tree.
-        mapIndex()
-    }
-
-    private var routePath: String? { root?.path }
-
-    private func cachedChildren(of parent: String) -> [String]? {
-        folderCache?.parent == parent ? folderCache?.children : nil
-    }
-
-    private func readChildren(of parent: String) -> [String] {
-        let children = FileDirectoryReader.childDirectories(of: parent)
-        folderCache = (parent, children)
-        return children
-    }
-
-    /// Offer the folders for what is typed.
-    ///
-    /// Cached parents answer on the spot; a new one is read off the main actor
-    /// and lands when it lands. The same shape the tree's expansion uses, and
-    /// for the measured reason recorded there: a `readdir` on the draw path cost
-    /// 194 ms for a 2,392-entry directory.
-    private func refreshRootRows() {
-        guard isEditingRoot, let parent = rootField.candidateParent(route: routePath)
-        else {
-            rootRows = []
-            return
-        }
-
-        if let children = cachedChildren(of: parent) {
-            rootRows = rootField.rows(children: children, route: routePath)
-            return
-        }
-
-        // Cleared before the read, not after it. What is showing belongs to the
-        // previous parent, and showing another directory's folders under a path
-        // being typed is worse than showing none — it flashes a wrong answer
-        // long enough to act on.
-        rootRows = []
-        rootField.clearSelection()
-
-        guard loadingParent != parent else { return }
-        loadingParent = parent
-        let route = routePath
-        Task { [weak self] in
-            let children = await Task.detached(priority: .userInitiated) {
-                FileDirectoryReader.childDirectories(of: parent)
-            }.value
-            guard let self, self.isEditingRoot else { return }
-            self.loadingParent = nil
-            self.folderCache = (parent, children)
-            // Re-asked rather than captured: the field has probably moved on.
-            guard self.rootField.candidateParent(route: route) == parent else {
-                return
-            }
-            self.rootRows = self.rootField.rows(
-                children: children, route: route
-            )
-        }
     }
 
     /// Run the search. Return, and nothing else.

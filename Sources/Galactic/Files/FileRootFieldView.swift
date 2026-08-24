@@ -15,18 +15,21 @@ struct FileRootFieldView<Focus: Hashable>: View {
 
     private typealias Metrics = FilePickerView.Metrics
 
-    @Binding var text: String
-    @FocusState.Binding var focus: Focus?
-    let focusValue: Focus
-    let rows: [FilePickerItem]
-    let selection: Int?
+    /// **The model, not a pile of values.**
+    ///
+    /// It arrived here as eight separate arguments, and a panel then had to wire
+    /// the caret to `beginEditing` itself — which the picker was shipped without,
+    /// so its folder list silently never populated: the refresh guards on being
+    /// in edit mode, and nothing had ever said it was. Taking the model means a
+    /// panel cannot forget wiring it does not do.
+    @ObservedObject var model: FileRootFieldModel
 
-    /// Tab.
-    let onComplete: () -> Void
-    /// Return, or a click on a row.
-    let onCommit: () -> Void
-    let onMove: (Int) -> Void
-    let onPick: (Int) -> Void
+    @FocusState.Binding var focus: Focus?
+
+    /// This field's own focus value, and where the caret goes when the field is
+    /// finished with — the panel's query field.
+    let focusValue: Focus
+    let returnFocusTo: Focus
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -34,10 +37,25 @@ struct FileRootFieldView<Focus: Hashable>: View {
             // Only while the field has the caret. The list is guidance for
             // something being typed, and leaving it up after focus moved on
             // would leave the panel claiming to be asking a question it is not.
-            if focus == focusValue, !rows.isEmpty {
+            if focus == focusValue, !model.rows.isEmpty {
                 Divider()
                 list
             }
+        }
+        // The caret arriving is what starts an edit, and the model needs telling
+        // because it cannot see focus.
+        .onChange(of: focus) { _, now in
+            if now == focusValue {
+                model.beginEditing()
+            } else if model.isEditing {
+                model.endEditing()
+            }
+        }
+        // Committing or reverting finishes with the field, and says so by
+        // leaving edit mode. Handing the caret back here rather than in each
+        // panel keeps the two from answering it differently.
+        .onChange(of: model.isEditing) { _, editing in
+            if !editing, focus == focusValue { focus = returnFocusTo }
         }
     }
 
@@ -46,22 +64,28 @@ struct FileRootFieldView<Focus: Hashable>: View {
             Image(systemName: "folder")
                 .font(.system(size: 10))
                 .foregroundStyle(focus == focusValue ? .primary : .tertiary)
-            TextField("Root folder", text: $text)
+            TextField(
+                "Root folder",
+                text: Binding(
+                    get: { model.field.text },
+                    set: { model.edit($0) }
+                )
+            )
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, design: .monospaced))
                 .lineLimit(1)
                 .focused($focus, equals: focusValue)
-                .onSubmit { onCommit() }
+                .onSubmit { model.commit() }
                 .onKeyPress(.tab) {
-                    onComplete()
+                    model.complete()
                     return .handled
                 }
                 .onKeyPress(.downArrow) {
-                    onMove(1)
+                    model.moveSelection(by: 1)
                     return .handled
                 }
                 .onKeyPress(.upArrow) {
-                    onMove(-1)
+                    model.moveSelection(by: -1)
                     return .handled
                 }
         }
@@ -72,13 +96,13 @@ struct FileRootFieldView<Focus: Hashable>: View {
     private var list: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                ForEach(Array(model.rows.enumerated()), id: \.element.id) { index, row in
                     HStack(spacing: 8) {
                         Image(systemName: "folder")
                             .font(.system(size: 11))
                             .frame(width: 14)
                             .foregroundStyle(
-                                index == selection ? .primary : .secondary
+                                index == model.field.selection ? .primary : .secondary
                             )
                         Text(row.relativePath)
                             .font(.system(size: 12, design: .monospaced))
@@ -89,13 +113,13 @@ struct FileRootFieldView<Focus: Hashable>: View {
                     .padding(.horizontal, 12)
                     .frame(height: Metrics.rowHeight)
                     .background(
-                        index == selection
+                        index == model.field.selection
                             ? Color.accentColor.opacity(0.18) : Color.clear
                     )
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        onPick(index)
-                        onCommit()
+                        model.pick(index)
+                        model.commit()
                     }
                 }
             }
@@ -107,6 +131,6 @@ struct FileRootFieldView<Focus: Hashable>: View {
     /// rather than something to scroll — and the card it sits in has a search
     /// field and a result list below it that must stay reachable.
     private var listHeight: CGFloat {
-        CGFloat(min(rows.count, 6)) * Metrics.rowHeight
+        CGFloat(min(model.rows.count, 6)) * Metrics.rowHeight
     }
 }

@@ -371,7 +371,7 @@ final class FileSearchPresenterTests: XCTestCase {
 
         p.present()
 
-        XCTAssertEqual(p.rootField.text, root.path)
+        XCTAssertEqual(p.rootFieldModel.field.text, root.path)
     }
 
     /// Filled every time rather than kept, so the field always says where you
@@ -379,12 +379,12 @@ final class FileSearchPresenterTests: XCTestCase {
     func testBeginningToEditRefillsFromTheRoot() {
         let p = presenter()
         p.present()
-        p.editRootText("/somewhere/else")
+        p.rootFieldModel.edit("/somewhere/else")
 
-        p.beginEditingRoot()
+        p.rootFieldModel.beginEditing()
 
-        XCTAssertEqual(p.rootField.text, root.path)
-        XCTAssertTrue(p.isEditingRoot)
+        XCTAssertEqual(p.rootFieldModel.field.text, root.path)
+        XCTAssertTrue(p.rootFieldModel.isEditing)
     }
 
     func testCommittingAValidPathReportsTheChange() throws {
@@ -393,13 +393,13 @@ final class FileSearchPresenterTests: XCTestCase {
         var reported: [URL] = []
         p.onChangeRoot = { reported.append($0) }
         p.present()
-        p.beginEditingRoot()
-        p.editRootText(inner.path)
+        p.rootFieldModel.beginEditing()
+        p.rootFieldModel.edit(inner.path)
 
-        p.commitRootField()
+        p.rootFieldModel.commit()
 
         XCTAssertEqual(reported.map(\.path), [inner.path])
-        XCTAssertFalse(p.isEditingRoot, "and the caret goes back to the query")
+        XCTAssertFalse(p.rootFieldModel.isEditing, "and the caret goes back to the query")
     }
 
     /// A typo has to stay on screen to be corrected. Closing the field would
@@ -409,13 +409,13 @@ final class FileSearchPresenterTests: XCTestCase {
         var reported = 0
         p.onChangeRoot = { _ in reported += 1 }
         p.present()
-        p.beginEditingRoot()
-        p.editRootText(root.path + "/nope")
+        p.rootFieldModel.beginEditing()
+        p.rootFieldModel.edit(root.path + "/nope")
 
-        p.commitRootField()
+        p.rootFieldModel.commit()
 
         XCTAssertEqual(reported, 0)
-        XCTAssertTrue(p.isEditingRoot)
+        XCTAssertTrue(p.rootFieldModel.isEditing)
     }
 
     func testCommittingAFileRefuses() throws {
@@ -425,10 +425,10 @@ final class FileSearchPresenterTests: XCTestCase {
         var reported = 0
         p.onChangeRoot = { _ in reported += 1 }
         p.present()
-        p.beginEditingRoot()
-        p.editRootText(file.path)
+        p.rootFieldModel.beginEditing()
+        p.rootFieldModel.edit(file.path)
 
-        p.commitRootField()
+        p.rootFieldModel.commit()
 
         XCTAssertEqual(reported, 0)
     }
@@ -441,10 +441,10 @@ final class FileSearchPresenterTests: XCTestCase {
         let p = presenter()
         p.present()
         p.query = "needle"
-        p.beginEditingRoot()
-        p.editRootText(inner.path)
+        p.rootFieldModel.beginEditing()
+        p.rootFieldModel.edit(inner.path)
 
-        p.commitRootField()
+        p.rootFieldModel.commit()
 
         XCTAssertEqual(p.query, "needle")
     }
@@ -458,9 +458,9 @@ final class FileSearchPresenterTests: XCTestCase {
         p.present()
         XCTAssertNotNil(p.lastRun)
 
-        p.beginEditingRoot()
-        p.editRootText(inner.path)
-        p.commitRootField()
+        p.rootFieldModel.beginEditing()
+        p.rootFieldModel.edit(inner.path)
+        p.rootFieldModel.commit()
 
         XCTAssertNil(
             p.lastRun, "it described a root that is no longer being asked about"
@@ -470,13 +470,13 @@ final class FileSearchPresenterTests: XCTestCase {
     func testRevertingPutsTheRootBackAndLeaves() {
         let p = presenter()
         p.present()
-        p.beginEditingRoot()
-        p.editRootText("/somewhere/else")
+        p.rootFieldModel.beginEditing()
+        p.rootFieldModel.edit("/somewhere/else")
 
-        p.revertRootField()
+        p.rootFieldModel.revert()
 
-        XCTAssertEqual(p.rootField.text, root.path)
-        XCTAssertFalse(p.isEditingRoot)
+        XCTAssertEqual(p.rootFieldModel.field.text, root.path)
+        XCTAssertFalse(p.rootFieldModel.isEditing)
     }
 
     func testEditingOffersTheFoldersInside() async throws {
@@ -484,13 +484,13 @@ final class FileSearchPresenterTests: XCTestCase {
         try makeDir("beta")
         let p = presenter()
         p.present()
-        p.beginEditingRoot()
+        p.rootFieldModel.beginEditing()
 
-        p.editRootText(root.path + "/")
+        p.rootFieldModel.edit(root.path + "/")
         try await settleRootRows(p)
 
         XCTAssertEqual(
-            p.rootRows.map(\.relativePath), ["alpha", "beta"]
+            p.rootFieldModel.rows.map(\.relativePath), ["alpha", "beta"]
         )
     }
 
@@ -499,24 +499,24 @@ final class FileSearchPresenterTests: XCTestCase {
         try makeDir("beta")
         let p = presenter()
         p.present()
-        p.beginEditingRoot()
+        p.rootFieldModel.beginEditing()
 
-        p.editRootText(root.path + "/al")
+        p.rootFieldModel.edit(root.path + "/al")
         try await settleRootRows(p)
 
-        XCTAssertEqual(p.rootRows.map(\.relativePath), ["alpha"])
+        XCTAssertEqual(p.rootFieldModel.rows.map(\.relativePath), ["alpha"])
     }
 
     func testTabCompletesAnUnambiguousFolder() throws {
         try makeDir("alpha")
         let p = presenter()
         p.present()
-        p.beginEditingRoot()
-        p.editRootText(root.path + "/al")
+        p.rootFieldModel.beginEditing()
+        p.rootFieldModel.edit(root.path + "/al")
 
-        p.completeRootPath()
+        p.rootFieldModel.complete()
 
-        XCTAssertEqual(p.rootField.text, root.path + "/alpha/")
+        XCTAssertEqual(p.rootFieldModel.field.text, root.path + "/alpha/")
     }
 
     /// Typing after picking must drop the pick: the row that was chosen may not
@@ -526,15 +526,15 @@ final class FileSearchPresenterTests: XCTestCase {
         try makeDir("alpha")
         let p = presenter()
         p.present()
-        p.beginEditingRoot()
-        p.editRootText(root.path + "/")
+        p.rootFieldModel.beginEditing()
+        p.rootFieldModel.edit(root.path + "/")
         try await settleRootRows(p)
-        p.moveRootSelection(by: 1)
-        XCTAssertNotNil(p.rootField.selection)
+        p.rootFieldModel.moveSelection(by: 1)
+        XCTAssertNotNil(p.rootFieldModel.field.selection)
 
-        p.editRootText(root.path + "/a")
+        p.rootFieldModel.edit(root.path + "/a")
 
-        XCTAssertNil(p.rootField.selection)
+        XCTAssertNil(p.rootFieldModel.field.selection)
     }
 
     func testAPickedFolderIsWhatCommits() async throws {
@@ -544,12 +544,12 @@ final class FileSearchPresenterTests: XCTestCase {
         var reported: [URL] = []
         p.onChangeRoot = { reported.append($0) }
         p.present()
-        p.beginEditingRoot()
-        p.editRootText(root.path + "/")
+        p.rootFieldModel.beginEditing()
+        p.rootFieldModel.edit(root.path + "/")
         try await settleRootRows(p)
-        p.moveRootSelection(by: 1)
+        p.rootFieldModel.moveSelection(by: 1)
 
-        p.commitRootField()
+        p.rootFieldModel.commit()
 
         XCTAssertEqual(reported.map(\.path), [alpha.path])
     }
@@ -558,15 +558,15 @@ final class FileSearchPresenterTests: XCTestCase {
         try makeDir("alpha")
         let p = presenter()
         p.present()
-        p.beginEditingRoot()
-        p.editRootText(root.path + "/")
+        p.rootFieldModel.beginEditing()
+        p.rootFieldModel.edit(root.path + "/")
         try await settleRootRows(p)
-        XCTAssertFalse(p.rootRows.isEmpty)
+        XCTAssertFalse(p.rootFieldModel.rows.isEmpty)
 
-        p.endEditingRoot()
+        p.rootFieldModel.endEditing()
 
         XCTAssertTrue(
-            p.rootRows.isEmpty,
+            p.rootFieldModel.rows.isEmpty,
             "a list left up would claim the panel is still asking"
         )
     }
@@ -576,7 +576,7 @@ final class FileSearchPresenterTests: XCTestCase {
     func testThePanelDoesNotOpenEditingTheRoot() {
         let p = presenter()
         p.present()
-        XCTAssertFalse(p.isEditingRoot)
+        XCTAssertFalse(p.rootFieldModel.isEditing)
     }
 
     // MARK: - Helper
@@ -591,10 +591,10 @@ final class FileSearchPresenterTests: XCTestCase {
         _ p: FileSearchPresenter, timeout: TimeInterval = 3
     ) async throws {
         let deadline = Date().addingTimeInterval(timeout)
-        while p.rootRows.isEmpty, Date() < deadline {
+        while p.rootFieldModel.rows.isEmpty, Date() < deadline {
             try await Task.sleep(nanoseconds: 5_000_000)
         }
-        XCTAssertFalse(p.rootRows.isEmpty, "no folders were ever offered")
+        XCTAssertFalse(p.rootFieldModel.rows.isEmpty, "no folders were ever offered")
     }
 
     /// Commit and await the run.
