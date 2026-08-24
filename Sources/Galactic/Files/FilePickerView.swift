@@ -19,7 +19,17 @@ import SwiftUI
 /// is not using. See `FilePickerPresenter` for the mounting snippet.
 public struct FilePickerView: View {
     @ObservedObject private var presenter: FilePickerPresenter
-    @FocusState private var fieldFocused: Bool
+    /// Which of the card's two fields holds the caret.
+    ///
+    /// An enum rather than two booleans: two independent flags can both read
+    /// true, and SwiftUI resolves that by focusing whichever field it laid out
+    /// last — which is not a decision anyone made.
+    private enum Field: Hashable { case root, query }
+
+    @FocusState private var focus: Field?
+
+    /// AppKit's backtab, which is what Shift-Tab is sent as.
+    private static let backTab = KeyEquivalent("\u{19}")
     /// How tall the host's overlay area is, so the card can use all of it.
     @State private var available: CGFloat = 0
 
@@ -47,13 +57,13 @@ public struct FilePickerView: View {
                     }
             }
         }
-        .onAppear { fieldFocused = true }
+        .onAppear { focus = .query }
         .onDisappear {
             // Cleared *before* restoring, which the cheat sheet also has to do
             // and the inbox does not: SwiftUI clears first responder when it
             // tears down a field whose focus binding still reads true, which
             // would undo the restore a pass later.
-            fieldFocused = false
+            focus = nil
             presenter.restoreFocus()
         }
     }
@@ -70,6 +80,8 @@ public struct FilePickerView: View {
     private var card: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            Divider()
+            rootField
             Divider()
             FilePickerModeTabs(selected: presenter.mode) {
                 presenter.selectMode($0)
@@ -106,14 +118,19 @@ public struct FilePickerView: View {
         /// The fewest rows the list is ever given, so a narrow window still
         /// shows something to choose from rather than a sliver.
         static let minimumRows = 4
-        /// Everything above the list: the header, the mode tabs, the field, and
-        /// the three dividers between them.
+        /// Everything above the list: the header, the root field, the mode tabs,
+        /// the query field, and the four dividers between them.
         ///
         /// A constant rather than a measurement, and the error it can carry is
         /// bounded and harmless — a few points out makes the list a few points
         /// shorter, which costs at most one row. Measuring it would mean reading
         /// back a height in order to decide a height.
-        static let chromeHeight: CGFloat = 31 + 27 + 38 + 3
+        ///
+        /// **Grown by the root field's row and one divider.** Left unchanged, the
+        /// list would have been given room that is no longer there and would run
+        /// off the bottom of the card by exactly that much — which is not
+        /// something a constant announces when it goes stale.
+        static let chromeHeight: CGFloat = 31 + 27 + 27 + 38 + 4
         /// As tall as `rows` needs, capped by what the window is offering.
         static func listHeight(rows: Int, available: CGFloat) -> CGFloat {
             let wanted = CGFloat(max(1, rows)) * rowHeight
@@ -134,23 +151,17 @@ public struct FilePickerView: View {
     /// file is missing can see the answer before they go looking for it.
     private var header: some View {
         HStack(spacing: 6) {
-            // A button, because "which tree am I searching" and "how do I search
-            // a different one" are the same question and this was only answering
-            // the first. Pressing it types the current root into the field, which
-            // is where the hint about Return and Tab already lives.
-            Button(action: presenter.beginRootChange) {
-                HStack(spacing: 6) {
-                    Image(systemName: "folder")
-                    Text(rootLabel)
-                        .font(.system(size: 11, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                }
-                .foregroundStyle(.secondary)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Change the folder being searched")
+            // The chip that used to live here typed the root into the query
+            // field, because that was the only way to change it. There is a
+            // field for it now, so this says how to reach that instead of
+            // standing in for it.
+            Text(
+                focus == .root
+                    ? "⇥ complete · ↩ set folder"
+                    : "⇧⇥ change folder"
+            )
+            .font(.system(size: 10))
+            .foregroundStyle(.tertiary)
 
             Spacer()
             if presenter.isIndexing {
@@ -184,19 +195,23 @@ public struct FilePickerView: View {
         .padding(.vertical, 8)
     }
 
-    private var rootLabel: String {
-        guard let root = presenter.root else { return "no folder" }
-        let home = NSHomeDirectory()
-        return root.path.hasPrefix(home)
-            ? "~" + root.path.dropFirst(home.count)
-            : root.path
+
+    /// The root, editable. What a relative path is relative to, and what the
+    /// header used to be able only to name.
+    private var rootField: some View {
+        FileRootFieldView(
+            model: presenter.rootFieldModel,
+            focus: $focus,
+            focusValue: Field.root,
+            returnFocusTo: Field.query
+        )
     }
 
     private var field: some View {
-        TextField("Open a file, or type a path", text: $presenter.query)
+        TextField("Open a file", text: $presenter.query)
             .textFieldStyle(.plain)
             .font(.system(size: 15))
-            .focused($fieldFocused)
+            .focused($focus, equals: .query)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .onSubmit {
@@ -223,11 +238,20 @@ public struct FilePickerView: View {
             // type into — so moving the caret through a path meant reaching for
             // the mouse. Return already opens and closes a folder, which is
             // what makes giving these up cost nothing.
-            // Both modes. Completing a typed path belongs to the field, not to
-            // whichever way the answer is being shown — and Browse is where a
-            // reader is most likely to be typing a path in the first place.
-            .onKeyPress(.tab) {
-                presenter.completePath()
+            // **Shift-Tab reaches the root field. Plain Tab is left alone.**
+            // Tab used to complete a path typed in here, because this field also
+            // did that job; the field above owns paths now, and a query has
+            // nothing to complete against.
+            //
+            // Two spellings, deliberately: AppKit sends Shift-Tab as backtab, a
+            // character of its own, rather than as Tab with a modifier, and
+            // which of the two SwiftUI reports is not contracted anywhere.
+            .onKeyPress(keys: [.tab, Self.backTab]) { press in
+                let isBackward =
+                    press.key == Self.backTab
+                    || press.modifiers.contains(.shift)
+                guard isBackward else { return .ignored }
+                focus = .root
                 return .handled
             }
             // ⌘H / ⌘L, the same pair that steps between file tabs when the
@@ -254,7 +278,7 @@ public struct FilePickerView: View {
     /// being chosen between rather than a tree of a root nobody has arrived at.
     @ViewBuilder
     private func body(for mode: FilePickerMode) -> some View {
-        if mode == .browse, !presenter.queryIsPath {
+        if mode == .browse {
             FileTreeView(presenter: presenter, available: available)
         } else {
             results
@@ -313,7 +337,7 @@ public struct FilePickerView: View {
     /// Return have to follow — Browse showing a folder chooser is a list, and
     /// driving the tree behind it would move a selection nobody can see.
     private var treeIsShowing: Bool {
-        presenter.mode == .browse && !presenter.queryIsPath
+        presenter.mode == .browse
     }
 
     private func move(by delta: Int) {

@@ -129,18 +129,17 @@ public final class FilePickerPresenter: ObservableObject {
         var root: String
     }
 
-    /// Whether the reader moved to the selection, rather than it being the
-    /// highlighted first row of a list they have not touched.
-    ///
-    /// Return needs the difference: a folder chosen with the arrows outranks a
-    /// path typed into the field, and a path typed in full outranks a selection
-    /// nobody asked for. Cleared on every rebuild, because a list that changed
-    /// underneath is not a list anyone has chosen from.
-    private var selectionIsExplicit = false
-
-    /// The root being browsed, shown above the field so a reader can see which
-    /// tree they are searching before they wonder why a file is missing.
+    /// The root being browsed, editable in the field above the query so a reader
+    /// can both see which tree they are searching and change it.
     @Published public private(set) var root: URL?
+
+    /// The root field, shared with the searcher so the two panels cannot come to
+    /// disagree about what Tab does in one.
+    ///
+    /// Observed by the field's own view rather than forwarded through here: the
+    /// view is the only thing that reads it, so a second hop would invalidate
+    /// the whole card to redraw one row.
+    public let rootFieldModel = FileRootFieldModel()
 
     /// What a relative path is relative to: the route shown above the field.
     ///
@@ -213,7 +212,10 @@ public final class FilePickerPresenter: ObservableObject {
 
     /// Internal so this package's tests can exercise an instance without
     /// mutating the singleton every other test shares. Hosts use `shared`.
-    init() {}
+    init() {
+        rootFieldModel.route = { [weak self] in self?.root }
+        rootFieldModel.onCommit = { [weak self] url in self?.changeRoot(to: url) }
+    }
 
     /// Whether the picker is claiming the keyboard.
     ///
@@ -241,8 +243,8 @@ public final class FilePickerPresenter: ObservableObject {
         // Dropped whatever else is restored: this is the completion aid for a
         // path being typed, and a folder created since the last look should
         // appear in it.
-        folderCache = nil
         root = rootProvider()
+        rootFieldModel.reset()
         restoreState()
         focus.arm(
             isActive: { [weak self] in self?.isPresented ?? false },
@@ -325,13 +327,11 @@ public final class FilePickerPresenter: ObservableObject {
     public func moveSelection(by delta: Int) {
         guard !rows.isEmpty else { return }
         selectedIndex = max(0, min(rows.count - 1, selectedIndex + delta))
-        selectionIsExplicit = true
     }
 
-    /// Back to the first row, and to nobody having chosen it.
+    /// Back to the first row.
     private func resetSelection() {
         selectedIndex = 0
-        selectionIsExplicit = false
         claimSearchScroll()
     }
 
@@ -348,40 +348,18 @@ public final class FilePickerPresenter: ObservableObject {
         scrollTarget = ScrollTarget(mode: .search, id: wanted)
     }
 
-    /// Act on the selection, or re-root to what has been typed.
+    /// Act on the selection.
     ///
-    /// Four rules in this order, and the order is the whole of the design.
-    /// Before folders were listed a path query had no rows at all, so "re-root
-    /// to the text" could come first and always win. Now it usually has rows,
-    /// and Return has to tell apart *the folder I picked* from *the folder I
-    /// named*:
-    ///
-    /// 1. A selection the reader moved to wins over everything. They chose it.
-    /// 2. Otherwise a path ending in a separator re-roots to that path — a
-    ///    reader who typed `~/projects/` in full named that folder, and diving
-    ///    into whichever child happened to sort first would be startling.
-    /// 3. Otherwise the selection, which is the highlighted first match: typing
-    ///    `~/pro` and pressing Return goes into `projects`.
-    /// 4. Otherwise the typed path, which is the case where it was typed past
-    ///    every match — nothing is listed and the text is all there is.
+    /// **This was four rules in a fixed order until the root field existed.**
+    /// One field did two jobs, so Return had to tell apart the folder you picked
+    /// from the folder you named, and a path ending in a separator had to beat
+    /// the highlighted first match. None of that was incidental complexity —
+    /// each rule answered a real case — but every one of those cases was a
+    /// consequence of asking one field what it was being used for. The field
+    /// above answers paths now, so this answers rows.
     public func commit() {
-        if selectionIsExplicit, rows.indices.contains(selectedIndex) {
-            activate(rows[selectedIndex])
-            return
-        }
-        if let path = FileRootInput.expandedPath(query, route: route),
-            path.hasSuffix("/")
-        {
-            changeRoot(to: URL(fileURLWithPath: path))
-            return
-        }
-        if rows.indices.contains(selectedIndex) {
-            activate(rows[selectedIndex])
-            return
-        }
-        if let path = FileRootInput.expandedPath(query, route: route) {
-            changeRoot(to: URL(fileURLWithPath: path))
-        }
+        guard rows.indices.contains(selectedIndex) else { return }
+        activate(rows[selectedIndex])
     }
 
     public func open(_ item: FilePickerItem) {
@@ -402,54 +380,7 @@ public final class FilePickerPresenter: ObservableObject {
         onOpen(item.url)
     }
 
-    /// Put the reader on the path-typing route, from the header's folder chip.
-    ///
-    /// Prefills the field with the root's own path rather than opening a folder
-    /// dialog, and that is the point: typing a path *is* how the root changes
-    /// here, and the affordance that changes it should teach the mechanism
-    /// instead of routing around it. The trailing separator lands the reader on
-    /// a listing of the root's own children, so the mechanism demonstrates
-    /// itself rather than being described.
-    public func beginRootChange() {
-        let home = NSHomeDirectory()
-        let path = root?.path ?? home
-        query =
-            (path.hasPrefix(home)
-            ? "~" + path.dropFirst(home.count) : path) + "/"
-    }
-
-    /// Extend a partly-typed path, the way a shell's Tab does.
-    public func completePath() {
-        guard
-            let parent = FileRootInput.candidateParent(
-                of: query, route: route
-            )
-        else { return }
-        // The same children the folder list is showing, from the same cache, so
-        // Tab and the list can never disagree about what is in a directory.
-        // They each read the disk separately before this.
-        let candidates =
-            folderCache?.parent == parent
-            ? folderCache?.children ?? []
-            : FileDirectoryReader.childDirectories(of: parent)
-        guard
-            let completed = FileRootInput.completion(
-                for: query, directories: candidates, route: route
-            )
-        else { return }
-        query = completed
-    }
-
     // MARK: - Browsing
-
-    /// Whether what is typed is a path rather than something to match.
-    ///
-    /// Exposed so the view can decide what Return means without keeping its own
-    /// copy of the rule — two answers to "is this a path" is how the field and
-    /// the list come to disagree about what the reader is doing.
-    public var queryIsPath: Bool {
-        FileRootInput.isRootChange(query, route: route)
-    }
 
     public func selectMode(_ next: FilePickerMode) {
         guard next != mode else { return }
@@ -495,17 +426,6 @@ public final class FilePickerPresenter: ObservableObject {
         }
         let canonical = FilePaths.canonical(root)
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // A path in the field is the field's business, not the mode's: it
-        // completes on Tab and re-roots on Return in both tabs, and while it is
-        // being typed both tabs offer the same folders to choose between. The
-        // tree is what the *root* holds, so it has nothing to say about a root
-        // the reader has not arrived at yet.
-        if FileRootInput.isRootChange(query, route: route) {
-            treeRows = []
-            refreshFolderRows()
-            return
-        }
 
         guard !trimmed.isEmpty else {
             treeRows = outline.rows(root: canonical) { [weak self] path in
@@ -801,14 +721,6 @@ public final class FilePickerPresenter: ObservableObject {
     private func refreshRows() {
         filterTask?.cancel()
 
-        // A path being typed is still not a filter — the corpus is still not
-        // consulted — but the reader now sees the folders they are choosing
-        // between rather than a hint describing them.
-        if FileRootInput.isRootChange(query, route: route) {
-            refreshFolderRows()
-            return
-        }
-
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             rows = FilePickerRanking.emptyQueryList(
@@ -855,67 +767,6 @@ public final class FilePickerPresenter: ObservableObject {
             }.value
             guard !Task.isCancelled, !cancellation.isCancelled else { return }
             rows = matched
-            resetSelection()
-        }
-    }
-
-    // MARK: - The folders a typed path is choosing between
-
-    /// The last directory read, held so that typing inside one costs one
-    /// directory read rather than one per keystroke.
-    ///
-    /// This bound is not an optimisation. A `readdir` plus a `resourceValues`
-    /// per entry, on the main actor, once per keystroke, in the most-typed
-    /// field in the picker, is the shape of the beach ball this index was
-    /// already fixed for once — where `stat` accounted for 213 ms of a 218 ms
-    /// burst. The parent only changes when a separator is typed or completed,
-    /// so a burst of keystrokes inside one directory reads nothing.
-    private var folderCache: (parent: String, children: [String])?
-
-    private func refreshFolderRows() {
-        guard
-            let parent = FileRootInput.candidateParent(
-                of: query, route: route
-            )
-        else {
-            rows = []
-            resetSelection()
-            return
-        }
-
-        if let cached = folderCache, cached.parent == parent {
-            rows = FileFolderList.rows(
-                for: query, children: cached.children, route: route
-            )
-            resetSelection()
-            return
-        }
-
-        // Cleared before the read, not after it. Whatever is showing belongs to
-        // the previous query, and under a half-typed path that is a list of
-        // *files* — the very thing this mode exists not to show. A read takes
-        // long enough to see, so leaving them would flash the wrong answer.
-        rows = []
-        resetSelection()
-
-        filterTask = Task {
-            let children = await Task.detached(priority: .userInitiated) {
-                FileDirectoryReader.childDirectories(of: parent)
-            }.value
-            guard !Task.isCancelled else { return }
-            folderCache = (parent, children)
-
-            // The query is read *after* the await rather than captured before
-            // it, because more may have been typed while the directory was
-            // read — and the rows must answer the field as it stands, not as it
-            // was. Still the same parent, or a later refresh already owns this.
-            guard FileRootInput.isRootChange(query, route: route),
-                FileRootInput.candidateParent(of: query, route: route)
-                    == parent
-            else { return }
-            rows = FileFolderList.rows(
-                for: query, children: children, route: route
-            )
             resetSelection()
         }
     }
