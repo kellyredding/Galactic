@@ -13,8 +13,15 @@ import SwiftUI
 /// rectangle and swapping between them does not move anything.
 public struct FileSearchView: View {
 
+    /// Which of the card's two fields holds the caret.
+    ///
+    /// An enum rather than two booleans: two independent flags can both read
+    /// true, and SwiftUI resolves that by giving focus to whichever field it
+    /// laid out last — which is not a decision anyone made.
+    private enum Field: Hashable { case root, query }
+
     @ObservedObject private var presenter: FileSearchPresenter
-    @FocusState private var fieldFocused: Bool
+    @FocusState private var focus: Field?
 
     /// Reads the singleton the host mounts. Not a default argument: a default
     /// expression is evaluated nonisolated, and `.shared` is main-actor.
@@ -32,14 +39,29 @@ public struct FileSearchView: View {
             card
                 .frame(maxWidth: .infinity, alignment: .center)
         }
-        .onAppear { fieldFocused = true }
+        .onAppear { focus = .query }
         // Clear the claim first, hand the keyboard back second. Reversing these
         // puts the caret back and then loses it again, because SwiftUI clears
         // first responder when it tears down a field still bound to a focus
         // binding that reads true.
         .onDisappear {
-            fieldFocused = false
+            focus = nil
             presenter.restoreFocus()
+        }
+        // The presenter decides what Escape means and needs to know which
+        // surface is innermost; the view is the only thing that knows where the
+        // caret is, so it reports rather than the presenter guessing.
+        .onChange(of: focus) { _, now in
+            if now == .root {
+                presenter.beginEditingRoot()
+            } else {
+                presenter.endEditingRoot()
+            }
+        }
+        // Committing or reverting the root hands the caret back, and the
+        // presenter says so by dropping out of root-editing.
+        .onChange(of: presenter.isEditingRoot) { _, editing in
+            if !editing, focus == .root { focus = .query }
         }
     }
 
@@ -54,6 +76,8 @@ public struct FileSearchView: View {
     private var card: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            Divider()
+            rootField
             Divider()
             field
             Divider()
@@ -73,16 +97,32 @@ public struct FileSearchView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
             Spacer()
-            if let root = presenter.root {
-                Text(FileTabLabel.relativeOrAbbreviated(root, root: nil))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-            }
+            Text(focus == .root ? "⇥ complete · ↩ set" : "⇧⇥ change folder")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    /// The root, now editable. It replaces the static path this header used to
+    /// show — the field is in the same place that text was, so the card is no
+    /// taller for gaining it.
+    private var rootField: some View {
+        FileRootFieldView(
+            text: Binding(
+                get: { presenter.rootField.text },
+                set: { presenter.editRootText($0) }
+            ),
+            focus: $focus,
+            focusValue: Field.root,
+            rows: presenter.rootRows,
+            selection: presenter.rootField.selection,
+            onComplete: { presenter.completeRootPath() },
+            onCommit: { presenter.commitRootField() },
+            onMove: { presenter.moveRootSelection(by: $0) },
+            onPick: { presenter.pickRootRow($0) }
+        )
     }
 
     private var field: some View {
@@ -90,8 +130,25 @@ public struct FileSearchView: View {
             TextField("Find in every file under this folder", text: $presenter.query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 15))
-                .focused($fieldFocused)
+                .focused($focus, equals: .query)
                 .onSubmit { presenter.commit() }
+                // Shift-Tab reaches the field above. Plain Tab is left alone —
+                // there is nothing below to reach, and swallowing it would take
+                // away the only way out of this field for anyone driving the
+                // panel from the keyboard.
+                //
+                // **Two spellings, deliberately.** AppKit sends Shift-Tab as
+                // backtab, a character of its own, rather than as Tab with a
+                // modifier; which of the two SwiftUI reports here is not
+                // contracted anywhere, so both are matched and either answers.
+                .onKeyPress(keys: [.tab, Self.backTab]) { press in
+                    let isBackward =
+                        press.key == Self.backTab
+                        || press.modifiers.contains(.shift)
+                    guard isBackward else { return .ignored }
+                    focus = .root
+                    return .handled
+                }
             caseToggle
         }
         .padding(.horizontal, 12)
@@ -161,6 +218,9 @@ public struct FileSearchView: View {
             ? "1 file" : "\(run.files.count.formatted()) files"
         return "\(matches) in \(files)"
     }
+
+    /// AppKit's backtab, which is what Shift-Tab is sent as.
+    private static let backTab = KeyEquivalent("\u{19}")
 
     enum Metrics {
         /// The picker's width, so the two cards are the same rectangle.

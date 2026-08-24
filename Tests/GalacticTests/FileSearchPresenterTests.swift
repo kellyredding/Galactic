@@ -356,7 +356,246 @@ final class FileSearchPresenterTests: XCTestCase {
         XCTAssertTrue(picker.isPresented)
     }
 
+    // MARK: - Re-rooting
+
+    private func makeDir(_ name: String) throws -> URL {
+        let url = root.appendingPathComponent(name)
+        try FileManager.default.createDirectory(
+            at: url, withIntermediateDirectories: true
+        )
+        return url
+    }
+
+    func testTheRootFieldOpensHoldingTheCurrentRoot() {
+        let p = presenter()
+
+        p.present()
+
+        XCTAssertEqual(p.rootField.text, root.path)
+    }
+
+    /// Filled every time rather than kept, so the field always says where you
+    /// actually are — a path abandoned last time is not an answer to that.
+    func testBeginningToEditRefillsFromTheRoot() {
+        let p = presenter()
+        p.present()
+        p.editRootText("/somewhere/else")
+
+        p.beginEditingRoot()
+
+        XCTAssertEqual(p.rootField.text, root.path)
+        XCTAssertTrue(p.isEditingRoot)
+    }
+
+    func testCommittingAValidPathReportsTheChange() throws {
+        let inner = try makeDir("inner")
+        let p = presenter()
+        var reported: [URL] = []
+        p.onChangeRoot = { reported.append($0) }
+        p.present()
+        p.beginEditingRoot()
+        p.editRootText(inner.path)
+
+        p.commitRootField()
+
+        XCTAssertEqual(reported.map(\.path), [inner.path])
+        XCTAssertFalse(p.isEditingRoot, "and the caret goes back to the query")
+    }
+
+    /// A typo has to stay on screen to be corrected. Closing the field would
+    /// hide it and leave the reader wondering what happened.
+    func testCommittingAPathThatDoesNotExistRefusesAndStays() {
+        let p = presenter()
+        var reported = 0
+        p.onChangeRoot = { _ in reported += 1 }
+        p.present()
+        p.beginEditingRoot()
+        p.editRootText(root.path + "/nope")
+
+        p.commitRootField()
+
+        XCTAssertEqual(reported, 0)
+        XCTAssertTrue(p.isEditingRoot)
+    }
+
+    func testCommittingAFileRefuses() throws {
+        let file = root.appendingPathComponent("a.txt")
+        try Data("x".utf8).write(to: file)
+        let p = presenter()
+        var reported = 0
+        p.onChangeRoot = { _ in reported += 1 }
+        p.present()
+        p.beginEditingRoot()
+        p.editRootText(file.path)
+
+        p.commitRootField()
+
+        XCTAssertEqual(reported, 0)
+    }
+
+    /// The divergence from the picker, asserted because it is the opposite of
+    /// what the neighbouring panel does: you re-root from here in order to run
+    /// the same query somewhere else.
+    func testTheQuerySurvivesAReRoot() throws {
+        let inner = try makeDir("inner")
+        let p = presenter()
+        p.present()
+        p.query = "needle"
+        p.beginEditingRoot()
+        p.editRootText(inner.path)
+
+        p.commitRootField()
+
+        XCTAssertEqual(p.query, "needle")
+    }
+
+    func testTheLastRunDoesNotSurviveAReRoot() async throws {
+        let inner = try makeDir("inner")
+        let p = presenter()
+        p.present()
+        p.query = "needle"
+        _ = await committedRun(p)
+        p.present()
+        XCTAssertNotNil(p.lastRun)
+
+        p.beginEditingRoot()
+        p.editRootText(inner.path)
+        p.commitRootField()
+
+        XCTAssertNil(
+            p.lastRun, "it described a root that is no longer being asked about"
+        )
+    }
+
+    func testRevertingPutsTheRootBackAndLeaves() {
+        let p = presenter()
+        p.present()
+        p.beginEditingRoot()
+        p.editRootText("/somewhere/else")
+
+        p.revertRootField()
+
+        XCTAssertEqual(p.rootField.text, root.path)
+        XCTAssertFalse(p.isEditingRoot)
+    }
+
+    func testEditingOffersTheFoldersInside() async throws {
+        try makeDir("alpha")
+        try makeDir("beta")
+        let p = presenter()
+        p.present()
+        p.beginEditingRoot()
+
+        p.editRootText(root.path + "/")
+        try await settleRootRows(p)
+
+        XCTAssertEqual(
+            p.rootRows.map(\.relativePath), ["alpha", "beta"]
+        )
+    }
+
+    func testTypingNarrowsTheOfferedFolders() async throws {
+        try makeDir("alpha")
+        try makeDir("beta")
+        let p = presenter()
+        p.present()
+        p.beginEditingRoot()
+
+        p.editRootText(root.path + "/al")
+        try await settleRootRows(p)
+
+        XCTAssertEqual(p.rootRows.map(\.relativePath), ["alpha"])
+    }
+
+    func testTabCompletesAnUnambiguousFolder() throws {
+        try makeDir("alpha")
+        let p = presenter()
+        p.present()
+        p.beginEditingRoot()
+        p.editRootText(root.path + "/al")
+
+        p.completeRootPath()
+
+        XCTAssertEqual(p.rootField.text, root.path + "/alpha/")
+    }
+
+    /// Typing after picking must drop the pick: the row that was chosen may not
+    /// even be offered now, and carrying the index would commit whatever
+    /// landed at it.
+    func testTypingClearsAPick() async throws {
+        try makeDir("alpha")
+        let p = presenter()
+        p.present()
+        p.beginEditingRoot()
+        p.editRootText(root.path + "/")
+        try await settleRootRows(p)
+        p.moveRootSelection(by: 1)
+        XCTAssertNotNil(p.rootField.selection)
+
+        p.editRootText(root.path + "/a")
+
+        XCTAssertNil(p.rootField.selection)
+    }
+
+    func testAPickedFolderIsWhatCommits() async throws {
+        let alpha = try makeDir("alpha")
+        try makeDir("beta")
+        let p = presenter()
+        var reported: [URL] = []
+        p.onChangeRoot = { reported.append($0) }
+        p.present()
+        p.beginEditingRoot()
+        p.editRootText(root.path + "/")
+        try await settleRootRows(p)
+        p.moveRootSelection(by: 1)
+
+        p.commitRootField()
+
+        XCTAssertEqual(reported.map(\.path), [alpha.path])
+    }
+
+    func testLeavingTheFieldOffersNothing() async throws {
+        try makeDir("alpha")
+        let p = presenter()
+        p.present()
+        p.beginEditingRoot()
+        p.editRootText(root.path + "/")
+        try await settleRootRows(p)
+        XCTAssertFalse(p.rootRows.isEmpty)
+
+        p.endEditingRoot()
+
+        XCTAssertTrue(
+            p.rootRows.isEmpty,
+            "a list left up would claim the panel is still asking"
+        )
+    }
+
+    /// The panel opens on the query, not on the root: searching is what it is
+    /// for and re-rooting is the rarer errand.
+    func testThePanelDoesNotOpenEditingTheRoot() {
+        let p = presenter()
+        p.present()
+        XCTAssertFalse(p.isEditingRoot)
+    }
+
     // MARK: - Helper
+
+    /// Wait for the offered folders to land.
+    ///
+    /// The directory is read off the main actor, the same way the picker reads
+    /// one — Tab answers synchronously because a keypress needs an answer now,
+    /// but the list is incidental and is allowed to arrive. Awaited rather than
+    /// spun: spinning would block the actor the rows need in order to land.
+    private func settleRootRows(
+        _ p: FileSearchPresenter, timeout: TimeInterval = 3
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while p.rootRows.isEmpty, Date() < deadline {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertFalse(p.rootRows.isEmpty, "no folders were ever offered")
+    }
 
     /// Commit and await the run.
     ///
