@@ -28,6 +28,20 @@ public struct FilePickerView: View {
 
     @FocusState private var focus: Field?
 
+    /// Put the caret in the query field, and again once the pass settles.
+    ///
+    /// Twice, because a host may be moving first responder for its own reasons
+    /// in the same tab-change pass — releasing a terminal pane's claim is the
+    /// one that showed this — and AppKit does not contract which of the two
+    /// lands last. The second fires only if the first was undone, so a card
+    /// that already holds the caret is left alone.
+    private func claimField() {
+        focus = .query
+        DispatchQueue.main.async {
+            if focus == nil { focus = .query }
+        }
+    }
+
     /// AppKit's backtab, which is what Shift-Tab is sent as.
     private static let backTab = KeyEquivalent("\u{19}")
     /// How tall the host's overlay area is, so the card can use all of it.
@@ -57,7 +71,7 @@ public struct FilePickerView: View {
                     }
             }
         }
-        .onAppear { focus = .query }
+        .onAppear { claimField() }
         .onDisappear {
             // Cleared *before* restoring, which the cheat sheet also has to do
             // and the inbox does not: SwiftUI clears first responder when it

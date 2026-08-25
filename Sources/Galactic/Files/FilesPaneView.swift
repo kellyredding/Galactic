@@ -113,8 +113,16 @@ public struct FilesPaneView: View {
                 // root, which is where an editor's go-to-file panel sits: the
                 // field appears where the reader's eye already is, and the list
                 // grows down over the document it is about to replace.
+                // **Gated on visibility, not just on the presenter.** The
+                // presenters are process singletons and a host may mount one of
+                // these panes per session, all of them alive behind an opacity
+                // switch — so an ungated overlay puts N copies of one card on
+                // screen, each with its own `@FocusState`, each focusing its
+                // field on appear. The last to mount takes first responder, and
+                // it is one nobody can see: the visible card renders with an
+                // empty-looking field and the keystroke reads as dead.
                 .overlay(alignment: .top) {
-                    if picker.isPresented {
+                    if isVisibleSurface, picker.isPresented {
                         FilePickerView().transition(.opacity)
                     }
                 }
@@ -126,7 +134,7 @@ public struct FilesPaneView: View {
                 // animation value a two-state expression and the transition
                 // cross-fade one card into the other.
                 .overlay(alignment: .top) {
-                    if lineJump.isPresented {
+                    if isVisibleSurface, lineJump.isPresented {
                         LineJumpView().transition(.opacity)
                     }
                 }
@@ -135,7 +143,7 @@ public struct FilesPaneView: View {
                 )
                 // Third overlay, same reasoning as the second.
                 .overlay(alignment: .top) {
-                    if searcher.isPresented {
+                    if isVisibleSurface, searcher.isPresented {
                         FileSearchView().transition(.opacity)
                     }
                 }

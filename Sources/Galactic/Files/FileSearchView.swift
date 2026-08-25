@@ -23,6 +23,15 @@ public struct FileSearchView: View {
     @ObservedObject private var presenter: FileSearchPresenter
     @FocusState private var focus: Field?
 
+    /// Put the caret in the query field, and again once the pass settles — see
+    /// the picker's copy for why twice.
+    private func claimField() {
+        focus = .query
+        DispatchQueue.main.async {
+            if focus == nil { focus = .query }
+        }
+    }
+
     /// Reads the singleton the host mounts. Not a default argument: a default
     /// expression is evaluated nonisolated, and `.shared` is main-actor.
     @MainActor public init() {
@@ -39,7 +48,7 @@ public struct FileSearchView: View {
             card
                 .frame(maxWidth: .infinity, alignment: .center)
         }
-        .onAppear { focus = .query }
+        .onAppear { claimField() }
         // Clear the claim first, hand the keyboard back second. Reversing these
         // puts the caret back and then loses it again, because SwiftUI clears
         // first responder when it tears down a field still bound to a focus
