@@ -426,6 +426,34 @@ public final class FilesSurface {
 
     public func selectPreviousFile() { step { $0.selectPrevious() } }
     public func selectNextFile() { step { $0.selectNext() } }
+
+    /// ⌘H / ⌘L — the innermost tabbed thing on this surface.
+    ///
+    /// The picker's two modes while its card is up, the file strip otherwise.
+    /// **Innermost surface wins**, which is the rule Escape already follows
+    /// here: the card is anchored over the strip, so while a reader is looking
+    /// at it the tabs they mean are its own. Stepping the strip underneath
+    /// instead moves a selection they cannot see, behind a card they are typing
+    /// into.
+    ///
+    /// Two modes, so previous and next name them rather than cycling — with a
+    /// pair, "the one before" and "the one after" are the same key pressed
+    /// twice, and a reader who wanted Browse should reach it with either.
+    public func selectPreviousInnerTab() {
+        if FilePickerPresenter.shared.isPresented {
+            FilePickerPresenter.shared.selectMode(.search)
+        } else {
+            selectPreviousFile()
+        }
+    }
+
+    public func selectNextInnerTab() {
+        if FilePickerPresenter.shared.isPresented {
+            FilePickerPresenter.shared.selectMode(.browse)
+        } else {
+            selectNextFile()
+        }
+    }
     public func selectPreviousRow() { step { $0.selectPreviousRow() } }
     public func selectNextRow() { step { $0.selectNextRow() } }
 
