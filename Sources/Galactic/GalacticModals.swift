@@ -42,4 +42,33 @@ public enum GalacticModals {
                 || SheetAlert.isClaimingKeyboard
         }
     }
+
+    /// The three cards that hang under the file strip.
+    ///
+    /// They dismiss one another on `present()` — one card, one anchor — so from
+    /// outside they behave as a single surface that changes which panel it is
+    /// showing.
+    public static var filesPanelIsClaimingKeyboard: Bool {
+        MainActor.assumeIsolated {
+            FilePickerPresenter.isClaimingKeyboard
+                || FileSearchPresenter.isClaimingKeyboard
+                || LineJumpPresenter.isClaimingKeyboard
+        }
+    }
+
+    /// A modal **other than** a Files panel holds the keyboard.
+    ///
+    /// The gate for the keystrokes that *open* those panels, and the distinction
+    /// is the whole point. A Files panel is both a modal and a focused text
+    /// field, so the ordinary stand-down gate refuses the very chords that
+    /// switch between them: with the searcher up, ⌘T does nothing, and the
+    /// reader has to press Escape first to reach a panel the keystroke was
+    /// supposed to reach directly. Having one of these up is not a reason to
+    /// refuse another — `present()` already trades them.
+    ///
+    /// A cheat sheet or an inbox still refuses, because those are surfaces the
+    /// keystroke has nothing to do with.
+    public static var nonFilesModalIsClaimingKeyboard: Bool {
+        isClaimingKeyboard && !filesPanelIsClaimingKeyboard
+    }
 }
