@@ -44,6 +44,16 @@ public enum FileTabLabel {
         root: URL?,
         siblings: [URL] = []
     ) -> [String] {
+        // A document this package generated, whose path is storage rather than
+        // meaning. Search results sit under a per-owner directory — a constant
+        // in a single-session application and a session id in one with several
+        // — so spelling the path out labels the same tab differently in each,
+        // and in one of them with a raw identifier a reader cannot act on. The
+        // name is the whole of what such a tab has to say.
+        if url.path.hasPrefix(FileIndexPaths.root.path + "/") {
+            return [url.lastPathComponent]
+        }
+
         let relative = relativeOrAbbreviated(url, root: root)
         let others = siblings.filter { $0.path != url.path }
 

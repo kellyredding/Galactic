@@ -15,6 +15,27 @@ final class FileTabLabelTests: XCTestCase {
         URL(fileURLWithPath: path)
     }
 
+    /// **A generated document is named, not located.**
+    ///
+    /// Search results sit under a per-owner directory — a constant in a
+    /// single-session application and a session id in one with several — so
+    /// spelling the path out labels the same tab differently in each app, and
+    /// in one of them with a raw identifier a reader cannot act on.
+    func testAGeneratedDocumentIsLabelledByNameAlone() {
+        let results = FileIndexPaths.root
+            .appendingPathComponent("search")
+            .appendingPathComponent("79D0F28B-9BC4-45EB-9817-4CAA9D2AF4D0")
+            .appendingPathComponent("Find Results")
+
+        XCTAssertEqual(
+            FileTabLabel.tiers(
+                for: results, root: URL(fileURLWithPath: "/tmp/project")
+            ),
+            ["Find Results"],
+            "one tier, so no width of strip can widen it back into a path"
+        )
+    }
+
     func testTheWidestTierIsRelativeToTheRoot() {
         let tiers = FileTabLabel.tiers(
             for: url("/work/project/src/models/user.rb"), root: root
