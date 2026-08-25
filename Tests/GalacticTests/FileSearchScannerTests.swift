@@ -91,6 +91,89 @@ final class FileSearchScannerTests: XCTestCase {
 
     // MARK: - Finding the needle
 
+    // MARK: - Long lines
+    //
+    // A line is not a bounded thing, and the results page pays for treating it
+    // as one. A minified bundle is a single line of several megabytes, and a
+    // common word matches inside it: a search for "README" over 58,086 files
+    // produced 8.2 MB across 1,063 result lines — past the reader's own size
+    // cap, so the page this app had just written could not be opened by it and
+    // went to the system instead.
+
+    func testAnEnormousLineIsWindowedAroundItsMatch() {
+        let filler = String(repeating: "x", count: 5_000)
+        let result = blocks(filler + "README" + filler, "README", context: 0)
+        let text = result.first?.first?.text ?? ""
+
+        XCTAssertLessThan(
+            text.utf8.count,
+            FileSearchScanner.maxLineBytes + 32,
+            "the window bounds what one line can contribute"
+        )
+        XCTAssertTrue(
+            text.contains("README"), "and keeps the reason the line is here"
+        )
+        XCTAssertTrue(text.hasPrefix("…"), "elision is visible at both ends")
+        XCTAssertTrue(text.hasSuffix("…"))
+    }
+
+    /// **A line can match more than once, and the window keeps only some of
+    /// them.** The window is centred on the first match, so a later one can sit
+    /// entirely outside it. Clipping such a match has to skip it rather than
+    /// build an inverted range — which trapped, and took the app down in the
+    /// middle of a search rather than showing a wrong result.
+    func testAMatchOutsideTheWindowIsDropped() {
+        let filler = String(repeating: "x", count: 5_000)
+        let result = blocks(
+            "README" + filler + "README", "README", context: 0
+        )
+        let text = result.first?.first?.text ?? ""
+
+        XCTAssertTrue(
+            text.hasPrefix("README"), "the match the window was built around"
+        )
+        XCTAssertTrue(text.hasSuffix("…"), "and the rest is elided")
+        XCTAssertLessThan(
+            text.utf8.count, FileSearchScanner.maxLineBytes + 32
+        )
+    }
+
+    /// The same shape with the surviving match at the far end, so the window is
+    /// built around a late first match and an early one would clip backwards.
+    func testMatchesBeforeTheWindowAreDropped() {
+        let filler = String(repeating: "x", count: 5_000)
+        let result = blocks(
+            filler + "README" + filler + "README", "README", context: 0
+        )
+        let text = result.first?.first?.text ?? ""
+
+        XCTAssertTrue(text.hasPrefix("…"))
+        XCTAssertTrue(text.contains("README"))
+        XCTAssertLessThan(
+            text.utf8.count, FileSearchScanner.maxLineBytes + 32
+        )
+    }
+
+    /// A context line has no match to centre on, so it shows its head — which
+    /// is where a reader looks anyway.
+    func testAnEnormousContextLineShowsItsHead() {
+        let long = String(repeating: "y", count: 5_000)
+        let result = blocks("\(long)\nREADME", "README", context: 1)
+        let context = result.first?.first?.text ?? ""
+
+        XCTAssertFalse(context.hasPrefix("…"), "the head is not elided")
+        XCTAssertTrue(context.hasSuffix("…"))
+        XCTAssertLessThan(
+            context.utf8.count, FileSearchScanner.maxLineBytes + 32
+        )
+    }
+
+    /// A line under the cap is untouched — no window, no ellipsis.
+    func testAShortLineIsShownWhole() {
+        let result = blocks("a README here", "README", context: 0)
+        XCTAssertEqual(result.first?.first?.text, "a README here")
+    }
+
     func testFindsASingleOccurrence() {
         XCTAssertEqual(offsets("hello world", "world").offsets, [6])
     }

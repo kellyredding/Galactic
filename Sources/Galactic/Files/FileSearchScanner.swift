@@ -253,11 +253,6 @@ enum FileSearchScanner {
             return String(decoding: slice, as: UTF8.self)
         }
 
-        guard !columns.isEmpty else {
-            let whole = text(0..<end)
-            return whole.isEmpty ? [] : [.init(text: whole, isMatch: false)]
-        }
-
         // Sorted and coalesced: two matches can overlap when a needle occurs
         // inside its own previous occurrence, and emitting both would double
         // the characters they share.
@@ -271,27 +266,69 @@ enum FileSearchScanner {
             }
         }
 
+        // The window this line shows.
+        //
+        // **A line is not a bounded thing**, and treating it as one is what this
+        // fixes. A minified bundle is a single line of several megabytes, and a
+        // common word matches inside it — so a search for "README" over 58,086
+        // files produced 8.2 MB across 1,063 result lines. That is past the
+        // reader's own size cap, so the results page this app had just written
+        // could not be opened by it and was handed to the system instead.
+        //
+        // Centred on the first match rather than taken from the head, because
+        // the head of a minified line is never why the line is in the results.
+        // A context line has no match to centre on and shows its head, which is
+        // where a reader looks anyway.
+        var lo = 0
+        var hi = end
+        if end > maxLineBytes {
+            if let first = merged.first {
+                lo = max(0, first.lowerBound - maxLineBytes / 3)
+                hi = min(end, lo + maxLineBytes)
+                lo = max(0, min(lo, hi - maxLineBytes))
+            } else {
+                hi = maxLineBytes
+            }
+        }
+
         var result: [FileSearchLine.Segment] = []
-        var cursor = 0
+        if lo > 0 { result.append(.init(text: "…", isMatch: false)) }
+
+        var cursor = lo
         for column in merged {
-            if column.lowerBound > cursor {
-                let before = text(cursor..<column.lowerBound)
+            // **Bounds first, then the guard, then the range.** A line can match
+            // more than once and the window is centred on the first, so a later
+            // match can sit entirely outside it — and building the range before
+            // checking it constructs `5006..<480`, which traps where it is
+            // written rather than failing the guard on the next line.
+            let clipLo = max(column.lowerBound, lo)
+            let clipHi = min(column.upperBound, hi)
+            guard clipLo < clipHi else { continue }
+            if clipLo > cursor {
+                let before = text(cursor..<clipLo)
                 if !before.isEmpty {
                     result.append(.init(text: before, isMatch: false))
                 }
             }
-            let hit = text(column)
+            let hit = text(clipLo..<clipHi)
             if !hit.isEmpty { result.append(.init(text: hit, isMatch: true)) }
-            cursor = max(cursor, column.upperBound)
+            cursor = max(cursor, clipHi)
         }
-        if cursor < end {
-            let after = text(cursor..<end)
+        if cursor < hi {
+            let after = text(cursor..<hi)
             if !after.isEmpty {
                 result.append(.init(text: after, isMatch: false))
             }
         }
+        if hi < end { result.append(.init(text: "…", isMatch: false)) }
         return result
     }
+
+    /// How much of one line a result may show, in bytes.
+    ///
+    /// Bytes rather than characters because the window is chosen against the
+    /// raw buffer and the decode happens after it.
+    static let maxLineBytes = 480
 }
 
 // MARK: - Array conveniences
