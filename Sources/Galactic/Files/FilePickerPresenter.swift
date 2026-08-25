@@ -96,6 +96,15 @@ public final class FilePickerPresenter: ObservableObject {
     private var childCache: [String: [FileTreeOutline.Entry]] = [:]
     private var loadingChildren: Set<String> = []
 
+    /// Which owner this panel was opened for.
+    ///
+    /// Captured at `present()` rather than asked again at `dismiss()`, because
+    /// a host is free to switch file sets while the panel is up: asking a second
+    /// time files one set's tree under another set's key, and the wrong tree
+    /// then comes back for both. The searcher beside this one already latches
+    /// its owner for the same reason.
+    private var presentedOwner: String?
+
     /// What the picker was left showing, per file set.
     ///
     /// The picker is one object serving every set, so this is what makes it
@@ -244,6 +253,7 @@ public final class FilePickerPresenter: ObservableObject {
         // path being typed, and a folder created since the last look should
         // appear in it.
         root = rootProvider()
+        presentedOwner = ownerProvider()
         rootFieldModel.reset()
         restoreState()
         focus.arm(
@@ -274,10 +284,10 @@ public final class FilePickerPresenter: ObservableObject {
     }
 
     private func rememberState() {
-        guard let root else { return }
+        guard let root, let owner = presentedOwner else { return }
         let selected = treeRows.indices.contains(treeSelectedIndex)
             ? treeRows[treeSelectedIndex].path : nil
-        saved[ownerProvider()] = SessionState(
+        saved[owner] = SessionState(
             mode: mode,
             query: query,
             expanded: outline.expandedByReader,
@@ -297,7 +307,9 @@ public final class FilePickerPresenter: ObservableObject {
     /// would show a reader folders that are not in the tree they are looking at.
     private func restoreState() {
         let canonical = root.map { FilePaths.canonical($0) }
-        guard let state = saved[ownerProvider()], state.root == canonical else {
+        guard let owner = presentedOwner, let state = saved[owner],
+            state.root == canonical
+        else {
             mode = .search
             query = ""
             resetBrowseState()

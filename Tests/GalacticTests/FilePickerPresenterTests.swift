@@ -649,6 +649,36 @@ final class FilePickerPresenterTests: XCTestCase {
         XCTAssertEqual(p.query, "first")
     }
 
+    /// **State belongs to the set the panel was opened for**, not to whichever
+    /// one is current when it closes.
+    ///
+    /// A host with one owner cannot tell the difference. A host with several can
+    /// switch the active set while the panel is up, and asking a second time at
+    /// dismiss files this set's tree under the next one's key — so the query
+    /// comes back somewhere it was never typed.
+    func testStateIsFiledUnderTheOwnerThePanelWasOpenedFor() {
+        let p = FilePickerPresenter()
+        var owner = "one"
+        p.rootProvider = { self.dir }
+        p.ownerProvider = { owner }
+
+        p.present()
+        p.query = "create"
+        owner = "two"  // the host switches sets while the panel is up
+        p.dismiss()
+
+        owner = "one"
+        p.present()
+        XCTAssertEqual(p.query, "create", "filed under the set it was typed in")
+        p.dismiss()
+
+        owner = "two"
+        p.present()
+        XCTAssertEqual(
+            p.query, "", "and the set that was never typed in stays empty"
+        )
+    }
+
     /// **The root decides whether there is anything to restore.** Every saved
     /// path is under the root it was saved against, so a host that has re-rooted
     /// since is being offered a tree of somewhere else.
