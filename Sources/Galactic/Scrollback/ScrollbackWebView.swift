@@ -159,8 +159,23 @@ public class ScrollbackWebView: NSView {
         case "deleteNote":
             handleDeleteNote(body)
         case "sendToClaude":
-            guard let msg = body["message"] as? String else { return }
-            onSendToClaude?(msg)
+            // Composed here, never in the page — one serialiser for a note
+            // wherever it was written. A scrollback note carries no location,
+            // because terminal output is not a file; that is the only way the
+            // two reviews differ, and it is a nil rather than a second format.
+            guard let raw = body["notes"] as? [[String: Any]] else { return }
+            let composed = AgentReviewComposer.compose(
+                overallComment: body["comment"] as? String ?? "",
+                notes: raw.map {
+                    AgentReviewComposer.ReviewNote(
+                        location: nil,
+                        lineContent: $0["lineContent"] as? String ?? "",
+                        content: $0["content"] as? String ?? ""
+                    )
+                }
+            )
+            guard !composed.isEmpty else { return }
+            onSendToClaude?(composed)
         case "confirmDiscardForm":
             onConfirmDiscardForm?()
         case "confirmDiscardEdit":

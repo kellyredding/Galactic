@@ -113,7 +113,7 @@ public final class FileSet: ObservableObject {
 
     /// Every open file's frozen content, in tab order.
     ///
-    /// What `FileReviewComposer` takes: the order blocks appear in a review is
+    /// What `AgentReviewComposer` takes: the order blocks appear in a review is
     /// the order the tabs sit in, so a reader reading their own review reads it
     /// in the order they arranged. Files whose content is somehow missing are
     /// skipped rather than faulted — a review is worth sending without one file
@@ -407,7 +407,7 @@ public final class FileSet: ObservableObject {
     /// can decline a prompt the agent is not ready to read. Notes surviving a
     /// refused send is the failure worth having.
     public func composeReview() -> String? {
-        let text = FileReviewComposer.compose(
+        let text = AgentReviewComposer.compose(
             overallComment: overallComment,
             files: orderedFiles,
             notes: notes,

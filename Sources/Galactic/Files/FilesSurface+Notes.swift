@@ -180,6 +180,10 @@ extension FilesSurface {
         // object: the page assigns it straight onto its annotation list and then
         // iterates it.
         evaluate("AnnotationManager.refreshAnnotationData([], {})", in: webView)
+        // And the comment with them. The store already dropped it — it
+        // described *that* review — but the field on screen is the page's, and
+        // this page is the one that does not get rebuilt.
+        evaluate("window.GalaxySendBar.clearComment()", in: webView)
 
         // Where the answer will appear. A reader who has just asked a question
         // is looking for the reply, not for the file.

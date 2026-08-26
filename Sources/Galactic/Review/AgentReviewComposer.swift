@@ -1,16 +1,23 @@
 import Foundation
 
-/// Turns a set's notes into the one message an agent receives.
+/// Turns a review's notes into the one message an agent receives.
 ///
-/// The scrollback's format, extended with a location. Composed
-/// in Swift rather than in the page, which is where the scrollback does it,
-/// because these notes live in Swift and a review spans files the page on
-/// screen does not have.
+/// **The one serialiser for a review, whatever surface it came from.** A file
+/// note and a scrollback note arrive by different routes and leave in the same
+/// shape, because the quoting, the numbering, the separator and the leading
+/// comment are decided once — here. Named for its audience rather than its
+/// source for that reason: nothing about it is about files.
 ///
-/// Unlike an artifact review, this is **self-contained**: it quotes what it is
-/// about instead of handing the agent commands to fetch it. There is nothing to
-/// fetch, because nothing was stored.
-public enum FileReviewComposer {
+/// Composed in Swift on both paths. The scrollback used to build its message
+/// inside the page, in a JavaScript copy of these rules carrying a comment that
+/// claimed byte-identity with them and nothing that checked it. It now posts
+/// its notes as data and comes through here.
+///
+/// **Self-contained**, unlike an artifact review: it quotes what it is about
+/// rather than handing the agent commands to fetch it. There is nothing to
+/// fetch, because nothing was stored — which is the difference in kind that
+/// keeps the two from being one composer.
+public enum AgentReviewComposer {
 
     /// Appended to a location when the file no longer matches what was read.
     ///
@@ -34,6 +41,75 @@ public enum FileReviewComposer {
     ///   - root: the browsing root, for deciding which paths shorten.
     ///   - hasDrifted: injected so this is testable without a filesystem, and
     ///     so the stat happens once per file rather than once per note.
+    /// One note as the agent sees it, wherever it was written.
+    ///
+    /// A file note and a scrollback note differ in exactly one thing — whether
+    /// there is a location to name, since terminal output is not a file — so
+    /// they travel as the same value and are serialised by the same code.
+    public struct ReviewNote: Equatable {
+        /// `path:range`, already shortened, or nil when there is nowhere to
+        /// point. Nil emits the position alone.
+        public let location: String?
+        public let lineContent: String
+        public let content: String
+
+        public init(location: String?, lineContent: String, content: String) {
+            self.location = location
+            self.lineContent = lineContent
+            self.content = content
+        }
+    }
+
+    /// **The one serialiser for a review, from any surface.**
+    ///
+    /// Both kinds of note used to be turned into text twice — this file for a
+    /// file review, and a JavaScript copy inside the scrollback renderer for a
+    /// scrollback one, whose comment claimed byte-identity with this and had
+    /// nothing enforcing it. Two implementations of one format stay identical
+    /// exactly as long as someone remembers, which is not a property worth
+    /// relying on for the thing an agent reads.
+    public static func compose(
+        overallComment: String,
+        notes: [ReviewNote]
+    ) -> String {
+        guard !notes.isEmpty else { return "" }
+
+        // Positional across the whole review, 1…N, so a reply saying "on 2" is
+        // unambiguous. A note's own number is per file and never ships.
+        let blocks = notes.enumerated().map { index, note in
+            block(position: index + 1, note: note)
+        }
+
+        return leading(overallComment) + blocks.joined(
+            separator: blockSeparator
+        )
+    }
+
+    /// A summary comment ready to lead a message, or nothing at all.
+    ///
+    /// **Shared with the reviews this type does not compose.** An artifact or a
+    /// snapshot review hands the agent commands rather than a transcript, so its
+    /// body is entirely its own — but the comment above it is the same
+    /// convention, and someone typing one should not get a different shape
+    /// depending on which surface they typed it into. Those two spelled it for
+    /// themselves and had already drifted from this in both directions.
+    ///
+    /// **The gap is the wide one, and that is not arbitrary.** Blocks are
+    /// separated by it because a block is multi-line and its prose may contain
+    /// blank lines of its own. The comment is a larger break than any boundary
+    /// below it, so separating it by less would read as though it belonged to
+    /// the first block rather than to the whole review.
+    ///
+    /// **Whitespace-only is nothing.** A field someone tabbed through is not a
+    /// summary, and shipping one puts an empty line above the review while
+    /// telling the agent a comment was written.
+    public static func leading(_ comment: String) -> String {
+        let trimmed = comment.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        return trimmed.isEmpty ? "" : trimmed + blockSeparator
+    }
+
     public static func compose(
         overallComment: String,
         files: [ReaderFile],
@@ -41,10 +117,7 @@ public enum FileReviewComposer {
         root: URL,
         hasDrifted: (ReaderFile) -> Bool = FileDriftCheck.hasDrifted
     ) -> String {
-        var blocks: [String] = []
-        // Positional across the whole review, 1…N, so a reply saying "on 2" is
-        // unambiguous. A note's own number is per file and never ships.
-        var position = 1
+        var reviewNotes: [ReviewNote] = []
 
         for file in files {
             let path = file.url.path
@@ -57,25 +130,23 @@ public enum FileReviewComposer {
             let shown = displayPath(for: file.url, root: root)
 
             for note in fileNotes {
-                blocks.append(
-                    block(
-                        position: position,
-                        path: shown,
-                        note: note,
-                        drifted: drifted
+                let range =
+                    note.startLine == note.endLine
+                    ? "\(note.startLine)"
+                    : "\(note.startLine)-\(note.endLine)"
+                var location = "\(shown):\(range)"
+                if drifted { location += " \(driftMarker)" }
+                reviewNotes.append(
+                    ReviewNote(
+                        location: location,
+                        lineContent: note.lineContent,
+                        content: note.content
                     )
                 )
-                position += 1
             }
         }
 
-        guard !blocks.isEmpty else { return "" }
-
-        let body = blocks.joined(separator: blockSeparator)
-        let lead = overallComment.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        return lead.isEmpty ? body : lead + blockSeparator + body
+        return compose(overallComment: overallComment, notes: reviewNotes)
     }
 
     /// One note, as the agent sees it.
@@ -84,20 +155,14 @@ public enum FileReviewComposer {
     /// Grouping is ordering, not a header — a block quoted back in isolation,
     /// or read after the agent has scrolled, still has to say where it came
     /// from.
-    private static func block(
-        position: Int,
-        path: String,
-        note: FileNote,
-        drifted: Bool
-    ) -> String {
-        let range =
-            note.startLine == note.endLine
-            ? "\(note.startLine)"
-            : "\(note.startLine)-\(note.endLine)"
-        var location = "[\(position)] \(path):\(range)"
-        if drifted { location += " \(driftMarker)" }
+    private static func block(position: Int, note: ReviewNote) -> String {
+        // The position always ships; the location only when there is one.
+        // Terminal output has nowhere to point, and a scrollback block that
+        // said `[1] :` would be naming an absence.
+        let header =
+            note.location.map { "[\(position)] \($0)" } ?? "[\(position)]"
 
-        return location + "\n"
+        return header + "\n"
             + quoted(note.lineContent) + "\n"
             + note.content
     }

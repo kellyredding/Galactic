@@ -406,7 +406,7 @@ final class GalacticPublicSurfaceTests: XCTestCase {
         XCTAssertFalse(FileCorpusBuilder.build(root: dir).isEmpty)
         XCTAssertFalse(FileTabLabel.tiers(for: url, root: dir).isEmpty)
         XCTAssertFalse(
-            FileReviewComposer.compose(
+            AgentReviewComposer.compose(
                 overallComment: "", files: [file], notes: notes, root: dir
             ).isEmpty
         )

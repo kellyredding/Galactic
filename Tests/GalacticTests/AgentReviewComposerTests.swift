@@ -11,7 +11,7 @@ import XCTest
 ///
 /// So these assert whole strings rather than properties of strings. A test that
 /// checks "the path appears somewhere" would pass on a format nobody meant.
-final class FileReviewComposerTests: XCTestCase {
+final class AgentReviewComposerTests: XCTestCase {
 
     private let stamp = "2026-08-17T14:00:00Z"
     private let root = URL(fileURLWithPath: "/work/project")
@@ -46,7 +46,7 @@ final class FileReviewComposerTests: XCTestCase {
         notes: FileNoteStore,
         drifted: Set<String> = []
     ) -> String {
-        FileReviewComposer.compose(
+        AgentReviewComposer.compose(
             overallComment: overall,
             files: files,
             notes: notes,
@@ -250,7 +250,7 @@ final class FileReviewComposerTests: XCTestCase {
     /// mistaken for being inside it.
     func testAPathSharingAPrefixWithTheRootIsNotShortened() {
         XCTAssertEqual(
-            FileReviewComposer.displayPath(
+            AgentReviewComposer.displayPath(
                 for: URL(fileURLWithPath: "/work/project-other/a.rb"),
                 root: root
             ),
@@ -260,7 +260,7 @@ final class FileReviewComposerTests: XCTestCase {
 
     func testARootWithATrailingSlashShortensTheSame() {
         XCTAssertEqual(
-            FileReviewComposer.displayPath(
+            AgentReviewComposer.displayPath(
                 for: URL(fileURLWithPath: "/work/project/src/a.rb"),
                 root: URL(fileURLWithPath: "/work/project/")
             ),
@@ -282,13 +282,13 @@ final class FileReviewComposerTests: XCTestCase {
         )
 
         XCTAssertTrue(
-            out.contains("[1] a.rb:1 \(FileReviewComposer.driftMarker)")
+            out.contains("[1] a.rb:1 \(AgentReviewComposer.driftMarker)")
         )
         XCTAssertTrue(
-            out.contains("[2] a.rb:2 \(FileReviewComposer.driftMarker)")
+            out.contains("[2] a.rb:2 \(AgentReviewComposer.driftMarker)")
         )
         XCTAssertFalse(
-            out.contains("b.rb:1 \(FileReviewComposer.driftMarker)"),
+            out.contains("b.rb:1 \(AgentReviewComposer.driftMarker)"),
             "the file that did not move is not marked"
         )
     }
@@ -297,7 +297,7 @@ final class FileReviewComposerTests: XCTestCase {
     /// two notes on the same file, and each ask touches the filesystem.
     func testDriftIsAskedOncePerFile() {
         var asked: [String] = []
-        _ = FileReviewComposer.compose(
+        _ = AgentReviewComposer.compose(
             overallComment: "",
             files: [file("/work/project/a.rb")],
             notes: store([
@@ -316,7 +316,7 @@ final class FileReviewComposerTests: XCTestCase {
     /// reaches the message.
     func testDriftIsNotAskedForAFileWithNoNotes() {
         var asked = 0
-        _ = FileReviewComposer.compose(
+        _ = AgentReviewComposer.compose(
             overallComment: "",
             files: [file("/work/project/untouched.rb")],
             notes: FileNoteStore(),
@@ -426,5 +426,124 @@ final class FileReviewComposerTests: XCTestCase {
         )
 
         XCTAssertTrue(out.hasSuffix(body))
+    }
+
+    // MARK: - One serialiser for both kinds of note
+    //
+    // The quoting rule, the numbering and the separator were written twice —
+    // here in Swift, and again as JavaScript inside the scrollback renderer,
+    // with a comment claiming the two were byte-identical and nothing checking
+    // it. The page no longer composes: it posts its notes and they come through
+    // this. These assert the part that made two implementations tempting — that
+    // the two shapes differ in one thing — so the difference stays a nil rather
+    // than becoming a second format again.
+
+    /// A scrollback note has nowhere to point, and says so by saying nothing.
+    func testANoteWithNoLocationShipsThePositionAlone() {
+        let out = AgentReviewComposer.compose(
+            overallComment: "",
+            notes: [
+                .init(location: nil, lineContent: "a\nb", content: "why")
+            ]
+        )
+
+        XCTAssertEqual(out, "[1]\n> a\n> b\nwhy")
+    }
+
+    /// A file note is the same block with a location on the header line.
+    func testALocationOnlyChangesTheHeaderLine() {
+        let bare = AgentReviewComposer.compose(
+            overallComment: "",
+            notes: [
+                .init(location: nil, lineContent: "a\nb", content: "why")
+            ]
+        )
+        let located = AgentReviewComposer.compose(
+            overallComment: "",
+            notes: [
+                .init(
+                    location: "src/a.swift:3-4",
+                    lineContent: "a\nb",
+                    content: "why"
+                )
+            ]
+        )
+
+        // Everything after the first line is identical — the quoting, the
+        // blank-line handling and the note's own prose do not know or care
+        // which surface the note came from.
+        XCTAssertEqual(
+            bare.split(separator: "\n", maxSplits: 1).last,
+            located.split(separator: "\n", maxSplits: 1).last
+        )
+        XCTAssertTrue(located.hasPrefix("[1] src/a.swift:3-4\n"))
+    }
+
+    /// The comment leads both kinds, over the same separator.
+    func testTheCommentLeadsWhicheverKindItIs() {
+        let notes: [AgentReviewComposer.ReviewNote] = [
+            .init(location: nil, lineContent: "x", content: "n1"),
+            .init(location: "a.swift:1", lineContent: "y", content: "n2"),
+        ]
+        let out = AgentReviewComposer.compose(
+            overallComment: "  the summary  ", notes: notes
+        )
+
+        XCTAssertEqual(
+            out,
+            "the summary"
+                + AgentReviewComposer.blockSeparator
+                + "[1]\n> x\nn1"
+                + AgentReviewComposer.blockSeparator
+                + "[2] a.swift:1\n> y\nn2"
+        )
+    }
+
+    // MARK: - The lead, shared with reviews this does not compose
+    //
+    // Artifact and snapshot reviews hand the agent commands rather than a
+    // transcript, so their bodies are their own — but the summary above them is
+    // this convention, and each spelling it for itself is what let all three
+    // drift apart. These pin the two ways they differed.
+
+    /// A summary a reader only tabbed through is not a summary.
+    func testAWhitespaceOnlyCommentLeadsNothing() {
+        XCTAssertEqual(AgentReviewComposer.leading("   \n\t "), "")
+        XCTAssertEqual(AgentReviewComposer.leading(""), "")
+    }
+
+    /// The gap under the comment is the wide one — never narrower than the gaps
+    /// between the blocks beneath it, which would read as though the summary
+    /// belonged to the first block rather than to the whole review.
+    func testTheLeadUsesTheBlockSeparator() {
+        XCTAssertEqual(
+            AgentReviewComposer.leading("  the summary  "),
+            "the summary" + AgentReviewComposer.blockSeparator
+        )
+    }
+
+    /// And what `compose` puts above a body is the same thing, so a review with
+    /// notes and a review that only points at them agree.
+    func testComposeLeadsWithTheSharedRule() {
+        let out = AgentReviewComposer.compose(
+            overallComment: " summary ",
+            notes: [.init(location: nil, lineContent: "x", content: "n")]
+        )
+
+        XCTAssertTrue(out.hasPrefix(AgentReviewComposer.leading(" summary ")))
+    }
+
+    /// Numbering runs across the whole review, not per surface or per file.
+    func testPositionsRunAcrossTheWholeReview() {
+        let out = AgentReviewComposer.compose(
+            overallComment: "",
+            notes: (1...3).map {
+                .init(location: nil, lineContent: "l", content: "n\($0)")
+            }
+        )
+
+        XCTAssertTrue(out.contains("[1]"))
+        XCTAssertTrue(out.contains("[2]"))
+        XCTAssertTrue(out.contains("[3]"))
     }
 }

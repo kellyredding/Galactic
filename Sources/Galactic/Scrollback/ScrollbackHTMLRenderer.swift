@@ -1791,34 +1791,24 @@ public enum ScrollbackHTMLRenderer {
 
             const sorted = [...this.items].sort((a, b) =>
                 a.endLine - b.endLine || a.startLine - b.startLine);
-            // Marked on every line rather than fenced at both ends, and
-            // byte-identical to what the file review composes — see
-            // `FileReviewComposer.quoted`. A fence can be closed by the
-            // thing it is quoting, and terminal output is entirely capable
-            // of containing one; a prefix cannot be. A blank captured line
-            // gets a bare marker so the quote ships no trailing spaces.
-            const quote = (text) => text
-                .replace(/\\n$/, '')
-                .split('\\n')
-                .map((line) => line === '' ? '>' : '> ' + line)
-                .join('\\n');
-            const blocks = sorted.map((note, i) => {
-                const n = i + 1;
-                return '[' + n + ']\\n'
-                    + quote(note.lineContent) + '\\n'
-                    + note.content;
-            }).join('\\n\\n\\n');
 
-            // The overall comment leads, the way it does on a code review:
-            // what the whole thing is about, before the line-by-line.
-            const overall = window.GalaxySendBar.commentText();
-            const message = overall
-                ? overall + '\\n\\n\\n' + blocks
-                : blocks;
-
+            // **This page does not compose the message.** It hands over the
+            // notes and the comment, and `AgentReviewComposer` turns them into
+            // text — the same function a file review goes through.
+            //
+            // The quoting rule, the numbering and the separator used to be
+            // written twice: once in Swift and once here, with a comment
+            // claiming the two were byte-identical and nothing enforcing it.
+            // Two implementations of one format agree exactly as long as
+            // someone remembers, which is not a property to rest the thing an
+            // agent reads on.
             window.webkit.messageHandlers.scrollback.postMessage({
                 action: 'sendToClaude',
-                message: message
+                comment: window.GalaxySendBar.commentText() || '',
+                notes: sorted.map((note) => ({
+                    lineContent: note.lineContent,
+                    content: note.content
+                }))
             });
         },
 
