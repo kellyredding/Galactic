@@ -103,10 +103,10 @@ final class ModalFocusCapture {
     /// - Parameters:
     ///   - standDown: whether something *else* owns Escape right now, in which
     ///     case the key is left alone. Named by each caller directly rather
-    ///     than asked of `GalacticModals`, which counts the caller among its
-    ///     own claimants — consulting it here would stand the monitor down
-    ///     against itself and leave Escape unanswered whenever this modal is
-    ///     the only thing up.
+    ///     than asked of `GalacticModals.isClaimingKeyboard`, which counts the
+    ///     caller among its own claimants — consulting that here would stand
+    ///     the monitor down against itself and leave Escape unanswered whenever
+    ///     this modal is the only thing up.
     ///   - isActive: whether the modal is still up. Supplied rather than
     ///     inferred, because this value does not know what it is capturing
     ///     focus for. A caller passes a weak reference to its presenter here;
@@ -121,12 +121,40 @@ final class ModalFocusCapture {
         escapeMonitor = NSEvent.addLocalMonitorForEvents(
             matching: .keyDown
         ) { event in
-            guard isActive(), !standDown(),
-                event.keyCode == Keystroke.Key.esc
-            else { return event }
+            // The key first, so every other keystroke in the application costs
+            // one comparison instead of three predicate reads.
+            guard event.keyCode == Keystroke.Key.esc else { return event }
+            guard Self.answersEscape(
+                isActive: isActive(), standDown: standDown()
+            ) else { return event }
             onEscape()
             return nil  // consumed: it must not also reach the terminal
         }
+    }
+
+    /// Whether Escape belongs to this modal, given who else wants it.
+    ///
+    /// Factored out of the monitor because a monitor closure cannot be handed an
+    /// event: the gate is the part worth asserting and inline it was
+    /// unassertable, which is how an app-modal window came to be missing from
+    /// five modals at once with a green suite. Values rather than closures, so a
+    /// test states the situation it means to describe.
+    ///
+    /// - Parameter appModalWindowIsUp: an app-modal window — the host's
+    ///   Settings, usually — holds the keyboard. Checked here rather than left
+    ///   to `standDown` because it is a fact about every modal in this package
+    ///   rather than a judgement a caller could reasonably make differently,
+    ///   and defaulted so the monitor need not name it and a test can. Asking
+    ///   `GalacticModals` is safe for this one alone: it names nothing this
+    ///   package owns, so it cannot stand a modal down against itself the way
+    ///   `isClaimingKeyboard` would.
+    nonisolated static func answersEscape(
+        isActive: Bool,
+        standDown: Bool,
+        appModalWindowIsUp: Bool =
+            GalacticModals.appModalWindowIsClaimingKeyboard
+    ) -> Bool {
+        isActive && !standDown && !appModalWindowIsUp
     }
 
     func removeEscape() {
@@ -153,7 +181,9 @@ final class ModalFocusCapture {
     ///   - standDown: whether something else owns Escape. Defaults to a sheet,
     ///     which is what every caller but the inbox wants; that one names its
     ///     own confirmation flag, and is why this stays a parameter. Never
-    ///     `GalacticModals` — see `installEscape`.
+    ///     `GalacticModals.isClaimingKeyboard` — see `installEscape`. An
+    ///     app-modal window is already gated for every caller and needs naming
+    ///     by none of them; see `answersEscape`.
     ///   - isActive: whether the modal is still up.
     ///   - onEscape: what closing means to the caller.
     func arm(

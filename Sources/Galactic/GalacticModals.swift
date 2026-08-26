@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Whether any Galactic-owned modal currently holds the keyboard.
@@ -54,6 +55,33 @@ public enum GalacticModals {
                 || FileSearchPresenter.isClaimingKeyboard
                 || LineJumpPresenter.isClaimingKeyboard
         }
+    }
+
+    /// A window the host is running an app-modal session for holds the keyboard
+    /// — Settings, and anything else put up with `NSApp.runModal(for:)`.
+    ///
+    /// The one claimant here that this package does not own, and it is here
+    /// rather than in each host because the monitors that have to stand down for
+    /// it are this package's. An overlay is mounted in the host's own window, so
+    /// the modal window taking key changes nothing about the overlay's own state
+    /// and nothing about the gates above: every one of them keeps answering
+    /// perfectly happily behind a window the reader is looking straight at. The
+    /// symptom is Escape closing the file picker two layers down instead of the
+    /// Settings window in front of it.
+    ///
+    /// Distinct from `isClaimingKeyboard` in the way that matters to a modal's
+    /// own Escape monitor: that predicate counts every overlay in this package,
+    /// so a modal consulting it stands down against itself. This names nothing
+    /// this package owns, which is what makes it safe to ask from inside one.
+    ///
+    /// A sheet is deliberately not this question — `beginSheet` runs no modal
+    /// session, so `SheetAlert.isClaimingKeyboard` stays the gate for those.
+    ///
+    /// Nonisolated for the same reason as `isClaimingKeyboard`: every caller is
+    /// an event monitor asking inside a `guard`, and AppKit runs those on the
+    /// main thread.
+    public static var appModalWindowIsClaimingKeyboard: Bool {
+        MainActor.assumeIsolated { NSApp.modalWindow != nil }
     }
 
     /// A modal **other than** a Files panel holds the keyboard.

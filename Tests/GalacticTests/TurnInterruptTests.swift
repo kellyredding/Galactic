@@ -62,6 +62,34 @@ final class TurnInterruptTests: XCTestCase {
             "that Escape closed the modal — it did not stop a turn")
     }
 
+    /// The host's Settings window is the same regression by the other
+    /// mechanism, and the gate above does not catch it.
+    ///
+    /// First responder is per-window, so a window running its own modal session
+    /// takes key and leaves the terminal pane holding first responder in the
+    /// window underneath: the host's monitor sees its own pane focused, the
+    /// overlay predicate names no overlay because none is up, and Escape closing
+    /// Settings was filed as the user stopping a turn that was still running.
+    @MainActor
+    func testEscapeIsNotRecordedWhileAnAppModalWindowIsUp() throws {
+        var recorded = 0
+        let interrupt: TurnInterrupt? = TurnInterrupt(
+            isInTurn: { true }, record: { recorded += 1 }
+        )
+        let window = NSWindow()
+        let session = NSApp.beginModalSession(for: window)
+        defer {
+            NSApp.endModalSession(session)
+            window.orderOut(nil)
+        }
+
+        interrupt.recordIfInterrupting(try keyDown())
+
+        XCTAssertEqual(
+            recorded, 0,
+            "that Escape closed Settings — the turn is still running")
+    }
+
     /// And the gate lifts again once the modal has gone, or every later
     /// interrupt would be swallowed by a flag nobody reset.
     @MainActor

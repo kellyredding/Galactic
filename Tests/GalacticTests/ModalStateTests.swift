@@ -20,6 +20,20 @@ final class ModalStateTests: XCTestCase {
         XCTAssertFalse(ModalState.isPresenting(over: nil))
     }
 
+    /// Mechanism 1, which had no test until the predicate behind it moved to
+    /// `GalacticModals` — and a refactor of the one line nothing asserts is
+    /// exactly how a drag gate quietly stops gating.
+    func testAnAppModalWindowRefusesADrop() {
+        let window = NSWindow()
+        let session = NSApp.beginModalSession(for: window)
+        defer {
+            NSApp.endModalSession(session)
+            window.orderOut(nil)
+        }
+
+        XCTAssertTrue(ModalState.isPresenting(over: nil))
+    }
+
     func testAnOpenPickerRefusesADrop() {
         let picker = FilePickerPresenter.shared
         defer {

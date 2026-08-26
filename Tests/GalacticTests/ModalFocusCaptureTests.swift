@@ -86,18 +86,76 @@ final class ModalFocusCaptureTests: XCTestCase {
         XCTAssertNil(focus.priorResponder)
     }
 
+    /// The monitor is installed regardless of `isActive`; the handler is what
+    /// gates. Worth pinning separately from the gate itself, because "no Escape
+    /// arrived" and "Escape arrived and was declined" look identical from
+    /// outside and only one of them is what `arm` promises.
+    func testArmingAnInactiveModalStillInstallsTheMonitor() {
+        let focus = ModalFocusCapture()
+
+        focus.arm(isActive: { false }, onEscape: {})
+        defer { focus.disarm() }
+
+        XCTAssertNotNil(focus.escapeMonitor)
+    }
+
     /// A gone presenter answers false and the key passes through, which is what
     /// keeps a leaked monitor from swallowing Escape for the whole app.
     func testAnInactiveModalDoesNotAnswerEscape() {
-        let focus = ModalFocusCapture()
-        var escapes = 0
-        focus.arm(isActive: { false }, onEscape: { escapes += 1 })
-        defer { focus.disarm() }
+        XCTAssertFalse(
+            ModalFocusCapture.answersEscape(
+                isActive: false, standDown: false, appModalWindowIsUp: false
+            )
+        )
+    }
 
-        XCTAssertEqual(escapes, 0)
-        XCTAssertNotNil(
-            focus.escapeMonitor,
-            "the monitor is installed regardless; isActive gates the handler"
+    func testAnActiveModalAnswersEscape() {
+        XCTAssertTrue(
+            ModalFocusCapture.answersEscape(
+                isActive: true, standDown: false, appModalWindowIsUp: false
+            )
+        )
+    }
+
+    func testAModalStandsDownForWhateverElseOwnsEscape() {
+        XCTAssertFalse(
+            ModalFocusCapture.answersEscape(
+                isActive: true, standDown: true, appModalWindowIsUp: false
+            )
+        )
+    }
+
+    /// Escape belongs to the window in front, and every modal in this package
+    /// used to take it anyway: with the file picker up and Settings raised over
+    /// it, Escape closed the picker two layers down and left Settings standing.
+    func testAModalBehindAnAppModalWindowDoesNotAnswerEscape() {
+        XCTAssertFalse(
+            ModalFocusCapture.answersEscape(
+                isActive: true, standDown: false, appModalWindowIsUp: true
+            )
+        )
+    }
+
+    /// The gate reads `GalacticModals` when nobody names it, which is what makes
+    /// the default the whole of the fix — the five presenters pass two arguments
+    /// and inherit the third.
+    func testTheAppModalGateDefaultsToAskingGalacticModals() {
+        XCTAssertFalse(GalacticModals.appModalWindowIsClaimingKeyboard)
+        XCTAssertTrue(
+            ModalFocusCapture.answersEscape(isActive: true, standDown: false),
+            "no modal session is running, so an active modal owns Escape"
+        )
+
+        let window = NSWindow()
+        let session = NSApp.beginModalSession(for: window)
+        defer {
+            NSApp.endModalSession(session)
+            window.orderOut(nil)
+        }
+
+        XCTAssertTrue(GalacticModals.appModalWindowIsClaimingKeyboard)
+        XCTAssertFalse(
+            ModalFocusCapture.answersEscape(isActive: true, standDown: false)
         )
     }
 }

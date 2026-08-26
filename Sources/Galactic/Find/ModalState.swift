@@ -41,7 +41,9 @@ public enum ModalState {
     /// attachment is per-window, so the helper needs the context.
     @MainActor
     public static func isPresenting(over window: NSWindow?) -> Bool {
-        if NSApp.modalWindow != nil { return true }
+        // The shared predicate, for the same reason item 4 is one: this
+        // question is also a keyboard gate, and two spellings of it drift.
+        if GalacticModals.appModalWindowIsClaimingKeyboard { return true }
         if window?.attachedSheet != nil { return true }
         if FindBarPanelController.shared.isPresenting { return true }
         // The shared predicate rather than a list of its own: an overlay added

@@ -295,10 +295,13 @@ public class ScrollbackOverlayView: NSView {
             // A confirmation sheet owns Escape while it is up, where it already
             // means Cancel. Without this the first Escape closes the find bar
             // behind the sheet and never reaches it, which is what made
-            // cancelling a sheet raised over a visible find bar take two.
+            // cancelling a sheet raised over a visible find bar take two. An
+            // app-modal window is the same story by a different mechanism, and
+            // needs saying separately because a sheet runs no modal session.
             guard let self = self,
                   event.keyCode == Keystroke.Key.esc,
                   !SheetAlert.isClaimingKeyboard,
+                  !GalacticModals.appModalWindowIsClaimingKeyboard,
                   self.findController.isVisible,
                   self.isActiveSurface()
             else { return event }

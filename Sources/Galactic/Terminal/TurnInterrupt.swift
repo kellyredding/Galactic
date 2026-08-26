@@ -79,7 +79,14 @@ public extension Optional where Wrapped == TurnInterrupt {
         //
         // Asking about the modal rather than about focus means the next modal
         // is covered whether or not it happens to want a text field.
-        guard !GalacticModals.isClaimingKeyboard else { return }
+        //
+        // The host's own Settings is the sharpest case of that, and it needs
+        // asking separately: first responder is per-window, so a modal window
+        // taking key leaves the pane holding it in the window underneath and
+        // every focus-shaped gate reads clear.
+        guard !GalacticModals.isClaimingKeyboard,
+            !GalacticModals.appModalWindowIsClaimingKeyboard
+        else { return }
 
         guard self.isInTurn() else { return }
         self.record()

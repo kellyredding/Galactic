@@ -297,15 +297,19 @@ public struct FilesPaneView: View {
     /// page's textarea swallows Escape outright and a SwiftUI handler never sees
     /// it — the same reason every other Escape in these apps is a monitor.
     ///
-    /// Three gates, and the first is not optional: a Galactic modal on screen
-    /// owns the keyboard. This monitor deliberately does not stand down for a
-    /// focused text view the way others do, because the composer it exists to
+    /// Four gates, and the first two are not optional: a Galactic modal on
+    /// screen owns the keyboard, and so does a window the host is running an
+    /// app-modal session for. This monitor deliberately does not stand down for
+    /// a focused text view the way others do, because the composer it exists to
     /// serve *is* one, and nothing else here would stop it.
     private func installEscapeMonitor() {
         guard escapeMonitor == nil else { return }
         escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
             event in
             if GalacticModals.isClaimingKeyboard { return event }
+            // The reader is behind Settings, not in front of it, so Escape is
+            // that window's to answer.
+            if GalacticModals.appModalWindowIsClaimingKeyboard { return event }
             guard event.keyCode == 53 else { return event }
             // Read through the gate, never off this struct — see its doc.
             guard gate.isVisibleSurface, !isObscuredByHost() else {
