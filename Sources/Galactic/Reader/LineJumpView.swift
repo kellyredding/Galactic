@@ -15,6 +15,16 @@ public struct LineJumpView: View {
     @ObservedObject private var presenter: LineJumpPresenter
     @FocusState private var fieldFocused: Bool
 
+    /// Claim the field, and again once the pass settles — see the picker's copy
+    /// for why twice. A host may be moving first responder for its own reasons
+    /// in the same tab-change pass, and nothing contracts which lands last.
+    private func claimField() {
+        fieldFocused = true
+        DispatchQueue.main.async {
+            if !fieldFocused { fieldFocused = true }
+        }
+    }
+
     /// A default argument expression is read in a nonisolated context whatever
     /// the initialiser's isolation, so `= .shared` cannot name main-actor state
     /// and reading it in the body can — the same two-initialiser shape the
@@ -28,7 +38,7 @@ public struct LineJumpView: View {
             scrim
             card
         }
-        .onAppear { fieldFocused = true }
+        .onAppear { claimField() }
         .onDisappear {
             // Cleared *before* restoring: SwiftUI clears first responder when
             // it tears down a field whose focus binding still reads true, which

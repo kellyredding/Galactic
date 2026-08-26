@@ -155,6 +155,7 @@ public struct FilesPaneView: View {
         .onAppear {
             gate.isVisibleSurface = isVisibleSurface
             installEscapeMonitor()
+            claimReaderFocus()
         }
         .onDisappear {
             removeEscapeMonitor()
@@ -163,7 +164,10 @@ public struct FilesPaneView: View {
         .onReceive(findActivations) { _ in activateFind() }
         .onReceive(lineJumpActivations) { _ in activateLineJump() }
         .onReceive(searchActivations) { _ in surface.presentSearcher() }
-        .onChange(of: webViewRef) { _, view in findController.bind(to: view) }
+        .onChange(of: webViewRef) { _, view in
+            findController.bind(to: view)
+            claimReaderFocus()
+        }
         // A query belongs to the file it was typed against, so switching files
         // takes the bar down rather than carrying a search into a document that
         // was never asked about it.
@@ -174,7 +178,36 @@ public struct FilesPaneView: View {
         .onChange(of: findController.isVisible) { _, _ in syncFindBarPanel() }
         .onChange(of: isVisibleSurface) { _, visible in
             gate.isVisibleSurface = visible
+            claimReaderFocus()
             syncFindBarPanel()
+        }
+    }
+
+    /// Put first responder in the reader while this is the surface in front.
+    ///
+    /// **Nothing else will.** A host that releases another pane's claim on a tab
+    /// change leaves the window with no first responder at all, and the page
+    /// needs one before Return can reach the annotation layer — which is what
+    /// turns a selection into a note. Without this a reader who arrived from a
+    /// terminal tab selected lines, pressed Return, and found the newlines had
+    /// gone to a terminal they were no longer looking at.
+    ///
+    /// It also fixes what the panels capture. The line jump records the
+    /// responder at `present()` and hands the keyboard back to it at dismiss, so
+    /// a stale one from another tab is what a jump would restore to — which is
+    /// the same fault seen from the other end.
+    ///
+    /// Stands aside for a panel: its field is the innermost surface and has
+    /// already claimed the caret. Deferred a turn for the reason `claimField`
+    /// is, and re-reads the gate rather than the captured value, because a view
+    /// struct is a snapshot and the tab may have moved on.
+    private func claimReaderFocus() {
+        guard !GalacticModals.filesPanelIsClaimingKeyboard else { return }
+        DispatchQueue.main.async {
+            guard gate.isVisibleSurface, let webView = webViewRef else {
+                return
+            }
+            webView.window?.makeFirstResponder(webView)
         }
     }
 
