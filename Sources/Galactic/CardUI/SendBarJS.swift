@@ -114,6 +114,27 @@ public let sendBarJS: String = """
             return ta ? ta.value.trim() : '';
         },
 
+        // Emptied by the host, once the review has actually gone.
+        //
+        // `submit` cannot do it, for the reason stated there: a host may bounce
+        // the send through a confirmation sheet and re-enter, and has to still
+        // find what was typed. So clearing belongs to whoever knows the send
+        // succeeded.
+        //
+        // A host that rebuilds this page on the way back got it for free and
+        // never had to call this, which is why nothing missed it until one
+        // arrived whose panes stay mounted behind an opacity switch. There, the
+        // sent comment stayed in the field and led the *next* review — a
+        // summary of work already sent, sitting above unrelated notes.
+        clearComment: function() {
+            var ta = document.getElementById('send-bar-comment-input');
+            if (ta) {
+                ta.value = '';
+                this.fitComment();
+            }
+            this.collapse();
+        },
+
         expand: function() {
             var box = document.getElementById('send-bar-comment');
             if (!box) return;
