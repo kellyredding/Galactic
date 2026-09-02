@@ -28,12 +28,12 @@ final class FileCorpusStoreOverlayCeilingTests: XCTestCase {
         try FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true
         )
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         FileIndexPaths.prepare()
     }
 
     override func tearDown() async throws {
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         FileIndexRefreshSweep.shared.stop()
         FileCorpusStore.overlayRebuildCeiling = 2_000
         unsetenv("GALACTIC_HOME")
@@ -57,7 +57,7 @@ final class FileCorpusStoreOverlayCeilingTests: XCTestCase {
     private func indexRoot() async {
         await withCheckedContinuation { continuation in
             var resumed = false
-            FileCorpusStore.shared.startIndexing(
+            FileCorpusStore.shared.index(
                 root: root, skipping: [],
                 onFinished: {
                     guard !resumed else { return }
@@ -69,20 +69,9 @@ final class FileCorpusStoreOverlayCeilingTests: XCTestCase {
     }
 
     private func found(_ query: String) -> [String] {
-        let slices = FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical)
+        let slices = FileCorpusStore.shared.slices(forCanonicalRoot: canonical)
         return FileMatcher.matches(in: slices, query: query, limit: 50)
             .map { slices[$0.slice].corpus.relativePath(at: $0.index) }
-    }
-
-    /// Wait for a coalesced rebuild to land.
-    ///
-    /// Yielding is not enough and never was: the deferred rebuild is queued on
-    /// the store's own executor, so giving up this one proves nothing about
-    /// whether that one has run.
-    private func settle(untilFound query: String, reaches count: Int) async {
-        for _ in 0..<60 where found(query).count != count {
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
     }
 
     // MARK: - Below the ceiling
@@ -93,7 +82,7 @@ final class FileCorpusStoreOverlayCeilingTests: XCTestCase {
         await indexRoot()
         let created = try touch("src/below_ceiling.swift")
 
-        await FileCorpusStore.shared.noteCreated(
+        FileCorpusStore.shared.noteCreated(
             [created.path], canonicalRoot: canonical
         )
 
@@ -113,10 +102,10 @@ final class FileCorpusStoreOverlayCeilingTests: XCTestCase {
         for index in 0..<3 {
             paths.append(try touch("src/over_ceiling_\(index).swift").path)
         }
-        await FileCorpusStore.shared.noteCreated(paths, canonicalRoot: canonical)
+        FileCorpusStore.shared.noteCreated(paths, canonicalRoot: canonical)
 
         XCTAssertEqual(
-            FileIndexSnapshot.shared.pendingOverlayCount(
+            FileCorpusStore.shared.pendingOverlayCount(
                 forCanonicalRoot: canonical
             ),
             3,
@@ -138,9 +127,9 @@ final class FileCorpusStoreOverlayCeilingTests: XCTestCase {
         for index in 0..<3 {
             paths.append(try touch("src/converged_\(index).swift").path)
         }
-        await FileCorpusStore.shared.noteCreated(paths, canonicalRoot: canonical)
+        FileCorpusStore.shared.noteCreated(paths, canonicalRoot: canonical)
 
-        await settle(untilFound: "converged", reaches: 3)
+        await Task.yield()
 
         XCTAssertEqual(
             found("converged").sorted(),
@@ -161,10 +150,10 @@ final class FileCorpusStoreOverlayCeilingTests: XCTestCase {
 
         for index in 0..<5 {
             let path = try touch("src/batched_\(index).swift").path
-            await FileCorpusStore.shared.noteCreated([path], canonicalRoot: canonical)
+            FileCorpusStore.shared.noteCreated([path], canonicalRoot: canonical)
         }
 
-        await settle(untilFound: "batched", reaches: 5)
+        await Task.yield()
 
         XCTAssertEqual(
             found("batched").count, 5,

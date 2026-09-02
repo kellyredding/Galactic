@@ -26,12 +26,12 @@ final class FileSearchEngineTests: XCTestCase {
         try FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true
         )
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         FileIndexPaths.prepare()
     }
 
     override func tearDown() async throws {
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         FileIndexRefreshSweep.shared.stop()
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)
@@ -67,7 +67,7 @@ final class FileSearchEngineTests: XCTestCase {
     private func indexRoot(skipping skipList: Set<String> = []) async {
         await withCheckedContinuation { continuation in
             var resumed = false
-            FileCorpusStore.shared.startIndexing(
+            FileCorpusStore.shared.index(
                 root: root, skipping: skipList,
                 onFinished: {
                     guard !resumed else { return }

@@ -25,12 +25,12 @@ final class FileIndexRevalidateTests: XCTestCase {
         try FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true
         )
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         FileIndexPaths.prepare()
     }
 
     override func tearDown() async throws {
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         FileIndexRefreshSweep.shared.stop()
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)
@@ -53,7 +53,7 @@ final class FileIndexRevalidateTests: XCTestCase {
     private func indexRoot() async {
         await withCheckedContinuation { continuation in
             var resumed = false
-            FileCorpusStore.shared.startIndexing(
+            FileCorpusStore.shared.index(
                 root: root,
                 onFinished: {
                     guard !resumed else { return }
@@ -65,7 +65,7 @@ final class FileIndexRevalidateTests: XCTestCase {
     }
 
     private func found(_ query: String) -> [String] {
-        let slices = FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical)
+        let slices = FileCorpusStore.shared.slices(forCanonicalRoot: canonical)
         return FileMatcher.matches(in: slices, query: query, limit: 50)
             .map { slices[$0.slice].corpus.relativePath(at: $0.index) }
     }
@@ -109,9 +109,10 @@ final class FileIndexRevalidateTests: XCTestCase {
             "the fixture published nothing, so the test proves nothing"
         )
 
-        let remapped = await FileCorpusStore.shared
-            .revalidate(canonicalRoot: canonical)
-        XCTAssertEqual(remapped, ["subtree"])
+        XCTAssertEqual(
+            FileCorpusStore.shared.revalidate(canonicalRoot: canonical),
+            ["subtree"]
+        )
         XCTAssertEqual(
             found("secondfile"), ["subtree/second_file.swift"],
             "a newer generation was on disk and this process kept serving the old one"
@@ -144,10 +145,8 @@ final class FileIndexRevalidateTests: XCTestCase {
             shard: "subtree", canonicalRoot: canonical
         )
 
-        let remapped = await FileCorpusStore.shared
-            .revalidate(canonicalRoot: canonical)
         XCTAssertTrue(
-            remapped.isEmpty,
+            FileCorpusStore.shared.revalidate(canonicalRoot: canonical).isEmpty,
             "the store remapped a generation it had just written itself"
         )
     }
@@ -163,9 +162,9 @@ final class FileIndexRevalidateTests: XCTestCase {
         let catalog = try XCTUnwrap(FileIndexCatalog())
         catalog.remove(root: canonical, name: "doomed")
 
-        let remappedAfterLoss = await FileCorpusStore.shared
-            .revalidate(canonicalRoot: canonical)
-        XCTAssertEqual(remappedAfterLoss, ["doomed"])
+        XCTAssertEqual(
+            FileCorpusStore.shared.revalidate(canonicalRoot: canonical), ["doomed"]
+        )
         XCTAssertTrue(
             found("insideit").isEmpty,
             "a shard removed from the index is still being searched"
@@ -189,10 +188,10 @@ final class FileIndexRevalidateTests: XCTestCase {
 
         // This process then observes the deletion.
         try FileManager.default.removeItem(at: doomed)
-        await FileCorpusStore.shared.noteRemoved([doomed.path], canonicalRoot: canonical)
+        FileCorpusStore.shared.noteRemoved([doomed.path], canonicalRoot: canonical)
         XCTAssertTrue(found("vanishingfile").isEmpty)
 
-        await FileCorpusStore.shared.revalidate(canonicalRoot: canonical)
+        FileCorpusStore.shared.revalidate(canonicalRoot: canonical)
 
         XCTAssertEqual(
             found("vanishingfile"), ["subtree/vanishing_file.swift"],

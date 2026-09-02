@@ -24,12 +24,12 @@ final class FileIndexPruneTests: XCTestCase {
         try FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true
         )
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         FileIndexPaths.prepare()
     }
 
     override func tearDown() async throws {
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         FileIndexRefreshSweep.shared.stop()
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)
@@ -52,7 +52,7 @@ final class FileIndexPruneTests: XCTestCase {
     private func indexRoot(skipping list: Set<String>? = nil) async {
         await withCheckedContinuation { continuation in
             var resumed = false
-            FileCorpusStore.shared.startIndexing(
+            FileCorpusStore.shared.index(
                 root: root, skipping: list,
                 onFinished: {
                     guard !resumed else { return }
@@ -64,7 +64,7 @@ final class FileIndexPruneTests: XCTestCase {
     }
 
     private func found(_ query: String) -> [String] {
-        let slices = FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical)
+        let slices = FileCorpusStore.shared.slices(forCanonicalRoot: canonical)
         return FileMatcher.matches(in: slices, query: query, limit: 50)
             .map { slices[$0.slice].corpus.relativePath(at: $0.index) }
     }
@@ -87,10 +87,7 @@ final class FileIndexPruneTests: XCTestCase {
             "fixture never produced a shard file"
         )
 
-        let pruned = await FileCorpusStore.shared.prune(
-            shard: "unwanted", canonicalRoot: canonical
-        )
-        XCTAssertTrue(pruned)
+        XCTAssertTrue(FileCorpusStore.shared.prune(shard: "unwanted", canonicalRoot: canonical))
 
         let catalog = try XCTUnwrap(FileIndexCatalog())
         XCTAssertNil(
@@ -118,10 +115,10 @@ final class FileIndexPruneTests: XCTestCase {
 
         let catalog = try XCTUnwrap(FileIndexCatalog())
         catalog.setSkipListEntry(name: "unwanted", skipped: true)
-        await FileCorpusStore.shared.prune(shard: "unwanted", canonicalRoot: canonical)
+        FileCorpusStore.shared.prune(shard: "unwanted", canonicalRoot: canonical)
 
         // A fresh process against the same index and the same stored list.
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         await indexRoot()
 
         XCTAssertNil(
@@ -153,7 +150,7 @@ final class FileIndexPruneTests: XCTestCase {
             "fixture assumes the row is still there"
         )
 
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         await indexRoot()
 
         XCTAssertNil(
@@ -175,7 +172,7 @@ final class FileIndexPruneTests: XCTestCase {
             to: directory.appendingPathComponent("\(identifier)-9.gfsi.tmp")
         )
 
-        await FileCorpusStore.shared.prune(shard: "unwanted", canonicalRoot: canonical)
+        FileCorpusStore.shared.prune(shard: "unwanted", canonicalRoot: canonical)
 
         XCTAssertTrue(
             shardFiles.filter { $0.hasPrefix("\(identifier)-") }.isEmpty,
@@ -186,11 +183,8 @@ final class FileIndexPruneTests: XCTestCase {
     func testPruningTheRootShardIsRefused() async throws {
         try touch("a_file.swift")
         await indexRoot()
-        let prunedRoot = await FileCorpusStore.shared.prune(
-            shard: "", canonicalRoot: canonical
-        )
         XCTAssertFalse(
-            prunedRoot,
+            FileCorpusStore.shared.prune(shard: "", canonicalRoot: canonical),
             "the root's own shard is what names all the others"
         )
         XCTAssertEqual(found("afile"), ["a_file.swift"])

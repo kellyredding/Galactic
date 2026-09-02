@@ -294,17 +294,9 @@ final class FilePickerPresenterTests: XCTestCase {
     /// Poll rather than sleep a fixed time: the walk is a detached task and its
     /// duration is the filesystem's business, not this test's.
     @MainActor
-    /// Wait for the walk to have *finished*, not merely to have reported a
-    /// count.
-    ///
-    /// A progress report satisfies "some entries are held" while the walk is
-    /// still running, so waiting on the count alone can return with the
-    /// presenter still correctly saying it is indexing — a race that was
-    /// always present and only became reliable once the store stopped sharing
-    /// the main actor.
     private func waitForIndex(_ presenter: FilePickerPresenter) async throws {
         for _ in 0..<400 {
-            if presenter.indexedCount > 0, !presenter.isIndexing { return }
+            if presenter.indexedCount > 0 { return }
             try await Task.sleep(nanoseconds: 5_000_000)
         }
         XCTFail("the index never landed")

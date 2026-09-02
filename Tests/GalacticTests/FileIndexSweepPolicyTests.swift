@@ -20,12 +20,12 @@ final class FileIndexSweepPolicyTests: XCTestCase {
             .appendingPathComponent("galactic-policy-home-\(UUID().uuidString)")
         root = URL(fileURLWithPath: NSHomeDirectory())
         setenv("GALACTIC_HOME", home.path, 1)
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         FileIndexPaths.prepare()
     }
 
     override func tearDown() async throws {
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         FileIndexRefreshSweep.shared.stop()
         FileIndexRefreshSweep.targetAge = 3_600
         FileIndexRefreshSweep.refusalBackoff = 86_400

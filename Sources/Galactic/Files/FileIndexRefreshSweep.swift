@@ -189,11 +189,6 @@ public final class FileIndexRefreshSweep {
         backlogDrainScheduled = true
         Task { @MainActor in
             self.backlogDrainScheduled = false
-            // Not past a stop. This only exists to skip the wait between
-            // ticks, so it has no business running when there are no ticks —
-            // and a drain queued just before a stop would otherwise walk
-            // under whatever root was registered next.
-            guard self.timer != nil else { return }
             await self.tick()
         }
     }

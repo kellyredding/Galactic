@@ -23,12 +23,12 @@ final class FileIndexReclaimTests: XCTestCase {
         try FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true
         )
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         FileIndexPaths.prepare()
     }
 
     override func tearDown() async throws {
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         FileIndexRefreshSweep.shared.stop()
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)
@@ -41,7 +41,7 @@ final class FileIndexReclaimTests: XCTestCase {
     private func indexRoot() async {
         await withCheckedContinuation { continuation in
             var resumed = false
-            FileCorpusStore.shared.startIndexing(
+            FileCorpusStore.shared.index(
                 root: root,
                 onFinished: {
                     guard !resumed else { return }
@@ -66,9 +66,7 @@ final class FileIndexReclaimTests: XCTestCase {
             to: orphan.appendingPathComponent("abc-1.gfsi")
         )
 
-        let reclaimed = await FileCorpusStore.shared
-            .reclaimOrphanedShardDirectories()
-        XCTAssertEqual(reclaimed, 1)
+        XCTAssertEqual(FileCorpusStore.shared.reclaimOrphanedShardDirectories(), 1)
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: orphan.path),
             "an unreachable directory was left on disk"
@@ -83,13 +81,13 @@ final class FileIndexReclaimTests: XCTestCase {
         let live = FileIndexPaths.shardDirectory(forCanonicalRoot: canonical)
         XCTAssertTrue(FileManager.default.fileExists(atPath: live.path))
 
-        await FileCorpusStore.shared.reclaimOrphanedShardDirectories()
+        FileCorpusStore.shared.reclaimOrphanedShardDirectories()
 
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: live.path),
             "the reclaim deleted the index it was protecting"
         )
-        let slices = FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical)
+        let slices = FileCorpusStore.shared.slices(forCanonicalRoot: canonical)
         XCTAssertFalse(slices.isEmpty, "the live corpus went with it")
     }
 
@@ -106,7 +104,7 @@ final class FileIndexReclaimTests: XCTestCase {
         XCTAssertTrue(catalog.roots().contains(canonical), "fixture not indexed")
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path))
 
-        await FileCorpusStore.shared.stopIndexing(canonicalRoot: canonical)
+        FileCorpusStore.shared.stopIndexing(canonicalRoot: canonical)
 
         XCTAssertFalse(
             catalog.roots().contains(canonical),
@@ -130,14 +128,14 @@ final class FileIndexReclaimTests: XCTestCase {
         )
         await indexRoot()
         XCTAssertFalse(
-            FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical).isEmpty,
+            FileCorpusStore.shared.slices(forCanonicalRoot: canonical).isEmpty,
             "fixture was not mapped"
         )
 
-        await FileCorpusStore.shared.stopIndexing(canonicalRoot: canonical)
+        FileCorpusStore.shared.stopIndexing(canonicalRoot: canonical)
 
         XCTAssertTrue(
-            FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical).isEmpty,
+            FileCorpusStore.shared.slices(forCanonicalRoot: canonical).isEmpty,
             "the corpus is still being served after the root was dropped"
         )
     }
@@ -147,7 +145,7 @@ final class FileIndexReclaimTests: XCTestCase {
     func testTheCatalogAndLockAreNotMistakenForOrphans() async throws {
         try Data("x".utf8).write(to: root.appendingPathComponent("a_file.swift"))
         await indexRoot()
-        await FileCorpusStore.shared.reclaimOrphanedShardDirectories()
+        FileCorpusStore.shared.reclaimOrphanedShardDirectories()
 
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: FileIndexPaths.catalogFile.path),

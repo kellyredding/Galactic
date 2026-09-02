@@ -277,8 +277,8 @@ public final class FileIndexWatcher: @unchecked Sendable {
         guard !touched.isEmpty || !rescan.isEmpty else { return }
         let root = canonicalRoot
         let classified = FileCorpusStore.classify(touched)
-        Task {
-            await FileCorpusStore.shared.apply(
+        Task { @MainActor in
+            FileCorpusStore.shared.apply(
                 created: classified.created, removed: classified.removed,
                 rescan: rescan, canonicalRoot: root
             )
@@ -350,8 +350,8 @@ public final class FileIndexWatcher: @unchecked Sendable {
         let horizon = replayHorizon
         if cheap {
             let all = Array(subtrees) + rescan
-            Task {
-                await Self.hand(
+            Task { @MainActor in
+                Self.hand(
                     created: [], removed: [], rescan: all, root: root,
                     horizon: advancing ? horizon : nil
                 )
@@ -359,8 +359,8 @@ public final class FileIndexWatcher: @unchecked Sendable {
             return
         }
         let classified = FileCorpusStore.classify(touched)
-        Task {
-            await Self.hand(
+        Task { @MainActor in
+            Self.hand(
                 created: classified.created, removed: classified.removed,
                 rescan: rescan, root: root,
                 horizon: advancing ? horizon : nil
@@ -368,20 +368,19 @@ public final class FileIndexWatcher: @unchecked Sendable {
         }
     }
 
-    /// No longer main-actor isolated: this existed to make the hop, and the
-    /// store it hands to owns its own isolation now.
+    @MainActor
     private static func hand(
         created: [FileCorpusStore.Appearance], removed: [String],
         rescan: [String], root: String, horizon: UInt64?
-    ) async {
+    ) {
         guard let horizon else {
-            await FileCorpusStore.shared.apply(
+            FileCorpusStore.shared.apply(
                 created: created, removed: removed, rescan: rescan,
                 canonicalRoot: root
             )
             return
         }
-        await FileCorpusStore.shared.applyReplay(
+        FileCorpusStore.shared.applyReplay(
             created: created, removed: removed, rescan: rescan,
             canonicalRoot: root, horizon: horizon
         )

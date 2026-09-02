@@ -24,12 +24,12 @@ final class FileIndexPositionTests: XCTestCase {
         try FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true
         )
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         FileIndexPaths.prepare()
     }
 
     override func tearDown() async throws {
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         FileIndexRefreshSweep.shared.stop()
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)
@@ -50,7 +50,7 @@ final class FileIndexPositionTests: XCTestCase {
     private func indexRoot() async {
         await withCheckedContinuation { continuation in
             var resumed = false
-            FileCorpusStore.shared.startIndexing(
+            FileCorpusStore.shared.index(
                 root: root, skipping: [],
                 onFinished: {
                     guard !resumed else { return }
@@ -139,7 +139,7 @@ final class FileIndexPositionTests: XCTestCase {
         )
         XCTAssertEqual(position(of: "stale", in: catalog), 1)
 
-        await FileCorpusStore.shared.advanceUntouchedShards(
+        FileCorpusStore.shared.advanceUntouchedShards(
             canonicalRoot: canonical, to: 9_000
         )
 
@@ -164,7 +164,7 @@ final class FileIndexPositionTests: XCTestCase {
         )
         catalog.markDirty(root: canonical, name: "dirty")
 
-        await FileCorpusStore.shared.advanceUntouchedShards(
+        FileCorpusStore.shared.advanceUntouchedShards(
             canonicalRoot: canonical, to: 9_000
         )
 
@@ -200,11 +200,11 @@ final class FileIndexPositionTests: XCTestCase {
 
         // Drop everything held in memory and come back to it, which is what a
         // launch does.
-        await FileCorpusStore.shared.forgetAll()
+        FileCorpusStore.shared.forgetAll()
         await indexRoot()
 
         let rows = FilePickerRanking.matches(
-            FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical),
+            FileCorpusStore.shared.slices(forCanonicalRoot: canonical),
             query: "findablething",
             relativeTo: canonical
         )
@@ -228,7 +228,7 @@ final class FileIndexPositionTests: XCTestCase {
         await indexRoot()
 
         let catalog = try XCTUnwrap(FileIndexCatalog())
-        await FileCorpusStore.shared.markSubtreeDirty(
+        FileCorpusStore.shared.markSubtreeDirty(
             root.appendingPathComponent("a.swift").path,
             canonicalRoot: canonical, reason: "test"
         )
@@ -249,7 +249,7 @@ final class FileIndexPositionTests: XCTestCase {
         await indexRoot()
 
         let catalog = try XCTUnwrap(FileIndexCatalog())
-        await FileCorpusStore.shared.markSubtreeDirty(
+        FileCorpusStore.shared.markSubtreeDirty(
             root.appendingPathComponent("sub/b.swift").path,
             canonicalRoot: canonical, reason: "test"
         )
@@ -284,7 +284,7 @@ final class FileIndexPositionTests: XCTestCase {
             .compactMap(\.eventsID).min()
         XCTAssertEqual(before, 5)
 
-        await FileCorpusStore.shared.advanceUntouchedShards(
+        FileCorpusStore.shared.advanceUntouchedShards(
             canonicalRoot: canonical, to: 9_000
         )
 
