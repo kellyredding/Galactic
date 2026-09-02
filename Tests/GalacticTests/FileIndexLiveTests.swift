@@ -21,12 +21,12 @@ final class FileIndexLiveTests: XCTestCase {
         try FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true
         )
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         FileIndexPaths.prepare()
     }
 
     override func tearDown() async throws {
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         FileIndexRefreshSweep.shared.stop()
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)
@@ -49,7 +49,7 @@ final class FileIndexLiveTests: XCTestCase {
     private func indexRoot(skipping skipList: Set<String> = []) async {
         await withCheckedContinuation { continuation in
             var resumed = false
-            FileCorpusStore.shared.index(
+            FileCorpusStore.shared.startIndexing(
                 root: root, skipping: skipList,
                 onFinished: {
                     guard !resumed else { return }
@@ -61,7 +61,7 @@ final class FileIndexLiveTests: XCTestCase {
     }
 
     private func found(_ query: String) -> [String] {
-        let slices = FileCorpusStore.shared.slices(forCanonicalRoot: canonical)
+        let slices = FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical)
         return FileMatcher.matches(in: slices, query: query, limit: 50)
             .map { slices[$0.slice].corpus.relativePath(at: $0.index) }
     }
@@ -83,17 +83,17 @@ final class FileIndexLiveTests: XCTestCase {
         try touch("src/one.swift")
         try touch("src/two.swift")
         await indexRoot()
-        let before = FileCorpusStore.shared.indexedCount(forCanonicalRoot: canonical)
+        let before = FileIndexSnapshot.shared.indexedCount(forCanonicalRoot: canonical)
 
         let catalog = try XCTUnwrap(FileIndexCatalog())
         let generations = catalog.shards(forRoot: canonical)
             .map { "\($0.name):\($0.generation)" }.sorted()
 
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         await indexRoot()
 
         XCTAssertEqual(
-            FileCorpusStore.shared.indexedCount(forCanonicalRoot: canonical), before
+            FileIndexSnapshot.shared.indexedCount(forCanonicalRoot: canonical), before
         )
         XCTAssertEqual(
             catalog.shards(forRoot: canonical)
@@ -111,7 +111,7 @@ final class FileIndexLiveTests: XCTestCase {
         XCTAssertTrue(found("brandnew").isEmpty)
 
         let created = try touch("src/brand_new_file.swift")
-        FileCorpusStore.shared.noteCreated([created.path], canonicalRoot: canonical)
+        await FileCorpusStore.shared.noteCreated([created.path], canonicalRoot: canonical)
 
         XCTAssertEqual(found("brandnew"), ["src/brand_new_file.swift"])
     }
@@ -123,7 +123,7 @@ final class FileIndexLiveTests: XCTestCase {
         XCTAssertEqual(found("doomed"), ["src/doomed.swift"])
 
         try FileManager.default.removeItem(at: doomed)
-        FileCorpusStore.shared.noteRemoved([doomed.path], canonicalRoot: canonical)
+        await FileCorpusStore.shared.noteRemoved([doomed.path], canonicalRoot: canonical)
 
         XCTAssertTrue(found("doomed").isEmpty, "a deleted file is still offered")
         XCTAssertEqual(found("keeper"), ["src/keeper.swift"], "its neighbour went too")
@@ -138,7 +138,7 @@ final class FileIndexLiveTests: XCTestCase {
 
         let after = root.appendingPathComponent("src/after_name.swift")
         try FileManager.default.moveItem(at: before, to: after)
-        FileCorpusStore.shared.apply(
+        await FileCorpusStore.shared.apply(
             touched: [before.path, after.path], rescan: [],
             canonicalRoot: canonical
         )
@@ -152,13 +152,13 @@ final class FileIndexLiveTests: XCTestCase {
         await indexRoot()
 
         try FileManager.default.removeItem(at: path)
-        FileCorpusStore.shared.apply(
+        await FileCorpusStore.shared.apply(
             touched: [path.path], rescan: [], canonicalRoot: canonical
         )
         XCTAssertTrue(found("flapping").isEmpty)
 
         try Data("x".utf8).write(to: path)
-        FileCorpusStore.shared.apply(
+        await FileCorpusStore.shared.apply(
             touched: [path.path], rescan: [], canonicalRoot: canonical
         )
         XCTAssertEqual(found("flapping"), ["src/flapping.swift"])
@@ -204,7 +204,7 @@ final class FileIndexLiveTests: XCTestCase {
         await indexRoot()
 
         let created = try touch("src/second.swift")
-        FileCorpusStore.shared.noteCreated([created.path], canonicalRoot: canonical)
+        await FileCorpusStore.shared.noteCreated([created.path], canonicalRoot: canonical)
         XCTAssertEqual(found("second"), ["src/second.swift"])
 
         FileIndexRefreshSweep.targetAge = 0
@@ -301,7 +301,7 @@ extension FileIndexLiveTests {
         )
         try Data("x".utf8).write(to: noise)
 
-        FileCorpusStore.shared.noteCreated([noise.path], canonicalRoot: canonical)
+        await FileCorpusStore.shared.noteCreated([noise.path], canonicalRoot: canonical)
         XCTAssertTrue(
             found("object").isEmpty, "a build artefact reached the index"
         )
@@ -340,7 +340,7 @@ extension FileIndexLiveTests {
         let subCanonical = FilePaths.canonical(subroot)
         await withCheckedContinuation { continuation in
             var done = false
-            FileCorpusStore.shared.index(
+            FileCorpusStore.shared.startIndexing(
                 root: subroot, skipping: [],
                 onFinished: { if !done { done = true; continuation.resume() } }
             )
@@ -369,13 +369,13 @@ extension FileIndexLiveTests {
         let subCanonical = FilePaths.canonical(subroot)
         await withCheckedContinuation { continuation in
             var done = false
-            FileCorpusStore.shared.index(
+            FileCorpusStore.shared.startIndexing(
                 root: subroot, skipping: [],
                 onFinished: { if !done { done = true; continuation.resume() } }
             )
         }
 
-        let slices = FileCorpusStore.shared.slices(forCanonicalRoot: subCanonical)
+        let slices = FileIndexSnapshot.shared.slices(forCanonicalRoot: subCanonical)
         let rows = FilePickerRanking.matches(
             slices, query: "targetfile", relativeTo: subCanonical
         )
@@ -531,7 +531,7 @@ extension FileIndexLiveTests {
             .map { "\($0.name):\($0.generation)" }.sorted()
 
         // A new process: the index is on disk, nothing is mapped.
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
 
         let subroot = root.appendingPathComponent("projects")
         let subCanonical = FilePaths.canonical(subroot)
@@ -548,7 +548,7 @@ extension FileIndexLiveTests {
             "something was rewalked"
         )
         let rows = FilePickerRanking.matches(
-            FileCorpusStore.shared.slices(forCanonicalRoot: subCanonical),
+            FileIndexSnapshot.shared.slices(forCanonicalRoot: subCanonical),
             query: "targetfile", relativeTo: subCanonical
         )
         XCTAssertEqual(
@@ -575,7 +575,7 @@ extension FileIndexLiveTests {
         )
         await indexRoot()
 
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         await indexSubtree(subroot)
 
         XCTAssertTrue(
@@ -600,7 +600,7 @@ extension FileIndexLiveTests {
         await indexSubtree(subroot)
         await indexRoot(skipping: ["projects"])
 
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         await indexSubtree(subroot)
 
         let catalog = try XCTUnwrap(FileIndexCatalog())
@@ -609,7 +609,7 @@ extension FileIndexLiveTests {
             "the only index holding the subtree was discarded"
         )
         let rows = FilePickerRanking.matches(
-            FileCorpusStore.shared.slices(forCanonicalRoot: subCanonical),
+            FileIndexSnapshot.shared.slices(forCanonicalRoot: subCanonical),
             query: "targetfile", relativeTo: subCanonical
         )
         XCTAssertEqual(
@@ -638,7 +638,7 @@ extension FileIndexLiveTests {
 
         // A new process that maps the wider root before the subtree is asked
         // for — the ordering the disk lookup never sees.
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         await indexRoot()
         await indexSubtree(subroot)
 
@@ -655,7 +655,7 @@ extension FileIndexLiveTests {
     private func indexSubtree(_ subroot: URL) async {
         await withCheckedContinuation { continuation in
             var resumed = false
-            FileCorpusStore.shared.index(
+            FileCorpusStore.shared.startIndexing(
                 root: subroot, skipping: [],
                 onFinished: {
                     guard !resumed else { return }
@@ -685,7 +685,7 @@ extension FileIndexLiveTests {
         let directory = root.appendingPathComponent("doomed_dir")
         try FileManager.default.removeItem(at: directory)
         // Only the directory is reported, which is what the file system does.
-        FileCorpusStore.shared.noteRemoved([directory.path], canonicalRoot: canonical)
+        await FileCorpusStore.shared.noteRemoved([directory.path], canonicalRoot: canonical)
 
         FileIndexRefreshSweep.targetAge = 0
         defer { FileIndexRefreshSweep.targetAge = 3_600 }
@@ -725,7 +725,7 @@ extension FileIndexLiveTests {
             try Data("x".utf8).write(to: url)
             created.append(url.path)
         }
-        FileCorpusStore.shared.noteCreated(created, canonicalRoot: canonical)
+        await FileCorpusStore.shared.noteCreated(created, canonicalRoot: canonical)
 
         XCTAssertTrue(
             catalog.shards(forRoot: canonical).first { $0.name == "busy" }?.dirty
@@ -750,9 +750,9 @@ extension FileIndexLiveTests {
         let single = root.appendingPathComponent("beta/new.swift")
         try Data("x".utf8).write(to: single)
         created.append(single.path)
-        FileCorpusStore.shared.noteCreated(created, canonicalRoot: canonical)
+        await FileCorpusStore.shared.noteCreated(created, canonicalRoot: canonical)
 
-        let breakdown = FileCorpusStore.shared.overlayByShard(
+        let breakdown = await FileCorpusStore.shared.overlayByShard(
             forCanonicalRoot: canonical
         )
         XCTAssertEqual(breakdown["alpha"], 5)
@@ -772,7 +772,7 @@ extension FileIndexLiveTests {
 
         let target = root.appendingPathComponent("churn/whatever").path
         for _ in 0..<50 {
-            FileCorpusStore.shared.markSubtreeDirty(
+            await FileCorpusStore.shared.markSubtreeDirty(
                 target, canonicalRoot: canonical, reason: "test"
             )
         }
@@ -794,7 +794,7 @@ extension FileIndexLiveTests {
         await indexRoot()
 
         let target = root.appendingPathComponent("churn/whatever").path
-        FileCorpusStore.shared.markSubtreeDirty(
+        await FileCorpusStore.shared.markSubtreeDirty(
             target, canonicalRoot: canonical, reason: "first"
         )
 
@@ -803,7 +803,7 @@ extension FileIndexLiveTests {
         FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
         for _ in 0..<10 { _ = await FileIndexRefreshSweep.shared.tick() }
 
-        FileCorpusStore.shared.markSubtreeDirty(
+        await FileCorpusStore.shared.markSubtreeDirty(
             target, canonicalRoot: canonical, reason: "second"
         )
         FileIndexLog.shared.drain()
@@ -829,7 +829,7 @@ extension FileIndexLiveTests {
         await indexRoot()
 
         let imaginary = root.appendingPathComponent("src/never_written.swift")
-        FileCorpusStore.shared.noteCreated(
+        await FileCorpusStore.shared.noteCreated(
             [
                 FileCorpusStore.Appearance(
                     path: imaginary.path, modified: Date(), isDirectory: false

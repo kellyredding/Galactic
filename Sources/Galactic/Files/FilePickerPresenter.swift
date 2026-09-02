@@ -447,7 +447,7 @@ public final class FilePickerPresenter: ObservableObject {
             return
         }
 
-        let slices = FileCorpusStore.shared.slices(forCanonicalRoot: canonical)
+        let slices = FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical)
         guard !slices.isEmpty else {
             treeRows = []
             return
@@ -670,15 +670,15 @@ public final class FilePickerPresenter: ObservableObject {
         }
 
         let canonical = FilePaths.canonical(root)
-        let store = FileCorpusStore.shared
-        let held = store.hasCorpus(forCanonicalRoot: canonical) ? true : false
+        let snapshot = FileIndexSnapshot.shared
+        let held = snapshot.hasCorpus(forCanonicalRoot: canonical) ? true : false
 
         // The rows are deliberately left alone when there is nothing held. What
         // is showing at this moment is the closed-and-recent list `present()`
         // offered before the walk started — the host's own history, which owes
         // the corpus nothing — and clearing it made a reader watch a tree be
         // indexed before they could reopen the file they just closed.
-        indexedCount = store.indexedCount(forCanonicalRoot: canonical)
+        indexedCount = snapshot.indexedCount(forCanonicalRoot: canonical)
         corpusWasTruncated = false
 
         // Said while there is nothing at all to rank against. Opening never
@@ -689,31 +689,37 @@ public final class FilePickerPresenter: ObservableObject {
         // with.
         isIndexing = !held
 
-        store.index(
-            root: root,
-            onProgress: { [weak self] count in
-                // A count, and only a count.
-                //
-                // The index this replaced handed back *batches of files*, and
-                // every batch drove a full re-rank: sixty-three overlapping
-                // ranking passes for one walk, none of them stoppable, fifteen
-                // cores busy. Progress moves a number. Rows move when the walk
-                // finishes, or when the reader types.
-                guard let self, let current = self.root,
-                    FilePaths.canonical(current) == canonical
-                else { return }
-                self.indexedCount = count
-            },
-            onFinished: { [weak self] in
-                guard let self, let current = self.root,
-                    FilePaths.canonical(current) == canonical
-                else { return }
-                self.indexedCount = FileCorpusStore.shared
-                    .indexedCount(forCanonicalRoot: canonical)
-                self.isIndexing = false
-                self.refreshApplicableRows()
-            }
-        )
+        // Started rather than awaited: the walk is the store's business now,
+        // and this function's job is to have said "indexing…" before it
+        // returns.
+        Task {
+            await FileCorpusStore.shared.index(
+                root: root,
+                onProgress: { [weak self] count in
+                    // A count, and only a count.
+                    //
+                    // The index this replaced handed back *batches of files*,
+                    // and every batch drove a full re-rank: sixty-three
+                    // overlapping ranking passes for one walk, none of them
+                    // stoppable, fifteen cores busy. Progress moves a number.
+                    // Rows move when the walk finishes, or when the reader
+                    // types.
+                    guard let self, let current = self.root,
+                        FilePaths.canonical(current) == canonical
+                    else { return }
+                    self.indexedCount = count
+                },
+                onFinished: { [weak self] in
+                    guard let self, let current = self.root,
+                        FilePaths.canonical(current) == canonical
+                    else { return }
+                    self.indexedCount = FileIndexSnapshot.shared
+                        .indexedCount(forCanonicalRoot: canonical)
+                    self.isIndexing = false
+                    self.refreshApplicableRows()
+                }
+            )
+        }
 
         refreshApplicableRows()
     }
@@ -745,7 +751,7 @@ public final class FilePickerPresenter: ObservableObject {
         }
 
         guard let root,
-            case let slices = FileCorpusStore.shared.slices(
+            case let slices = FileIndexSnapshot.shared.slices(
                 forCanonicalRoot: FilePaths.canonical(root)
             ),
             !slices.isEmpty

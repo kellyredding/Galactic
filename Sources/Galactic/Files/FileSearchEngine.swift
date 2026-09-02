@@ -74,10 +74,12 @@ public final class FileSearchEngine {
         let canonical = FilePaths.canonical(root)
         // Both cheap, both main-actor, and both snapshots: a published
         // generation is immutable, so the scan cannot see the store change
-        // under it.
-        let slices = FileCorpusStore.shared.slices(forCanonicalRoot: canonical)
-        let skipped = FileCorpusStore.shared
-            .effectiveSkipList(forCanonicalRoot: canonical)
+        // under it. Read from the snapshot rather than the store precisely to
+        // keep that true — awaiting the store here would put a suspension
+        // point between choosing the root and reading it.
+        let slices = FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical)
+        let skipped = FileIndexSnapshot.shared
+            .skipList(forCanonicalRoot: canonical)
 
         // Swapped rather than set. Cancelling the task alone stops the *await*
         // and not the loop, which is how one walk once became sixty-three

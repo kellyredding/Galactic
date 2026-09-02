@@ -23,8 +23,16 @@ import Foundation
 ///
 /// The shards are rewritten on a slow sweep, which folds the other two back
 /// in and is also the backstop for events the file system dropped.
-@MainActor
-public final class FileCorpusStore {
+/// An actor rather than a main-actor type, and the reads live in
+/// `FileIndexSnapshot` because of it.
+///
+/// Everything here either mutates or costs real time: walking a subtree,
+/// re-encoding the overlay, writing the catalog. On the main actor a burst of
+/// file-system events could hold all of it — two measured incidents pinned the
+/// main actor for minutes, one on a stale-cursor replay and one on a
+/// dependency cache — and the work has no need of that isolation. Only the
+/// answers do, and those are published as immutable snapshots.
+public actor FileCorpusStore {
 
     public static let shared = FileCorpusStore()
 
@@ -89,23 +97,6 @@ public final class FileCorpusStore {
         var unmarkableShards: Set<String> = []
     }
 
-    /// What a reader needs, and nothing that mutates.
-    ///
-    /// Every field is a value or a reference to something immutable: a corpus
-    /// is fixed once built, a removal bitset is an array, and the overlay is
-    /// present only as a count. So this can be handed to a synchronous caller
-    /// on any isolation without the caller being able to see it change, which
-    /// is the property the scan already relies on and the seam along which the
-    /// mutating half moves off the main actor.
-    struct RootReadState {
-        var shards: [String: FileCorpus] = [:]
-        var removed: [String: [UInt64]] = [:]
-        var delta: FileCorpus?
-        var walkingShards: Set<String> = []
-        var addedCount = 0
-        var progress = 0
-    }
-
     /// The authoritative, mutable state.
     ///
     /// Reached through a computed property so that publishing a fresh read
@@ -123,20 +114,33 @@ public final class FileCorpusStore {
         set { storedRoots = newValue }
     }
 
-    /// The snapshot every synchronous read is served from.
-    private var readStates: [String: RootReadState] = [:]
+    /// This actor's own copy of what it publishes, for the questions it has to
+    /// answer about itself — a walk logs an entry count, and deciding whether
+    /// one root covers another asks whether it holds anything under it.
+    private var readStates: [String: FileIndexSnapshot.RootReadState] = [:]
 
     private func republishReadStates() {
         readStates = storedRoots.mapValues { state in
-            RootReadState(
-                shards: state.shards,
-                removed: state.removed,
-                delta: state.delta,
-                walkingShards: state.walkingShards,
-                addedCount: state.added.count,
-                progress: state.progress
-            )
+            var read = FileIndexSnapshot.RootReadState()
+            read.shards = state.shards
+            read.removed = state.removed
+            read.delta = state.delta
+            read.walkingShards = state.walkingShards
+            read.addedCount = state.added.count
+            read.progress = state.progress
+            return read
         }
+        // Published here and now, not handed to a task. The snapshot is guarded
+        // by a lock rather than by an isolation domain precisely so that this
+        // costs no suspension point: a suspension inside every mutation would
+        // sit exactly where this type holds invariants across reads of `roots`,
+        // and it would make a file that has just been reported unsearchable
+        // until some later turn.
+        FileIndexSnapshot.shared.publish(
+            readStates: readStates,
+            servedBy: servedBy,
+            skipLists: storedRoots.compactMapValues(\.resolvedSkipList)
+        )
     }
 
     /// A root being browsed → the indexed root that already contains it.
@@ -145,7 +149,13 @@ public final class FileCorpusStore {
     /// supposed to make nesting free. Without this the store keyed everything
     /// by exact path and re-walked `~/projects` in full while an index of `~`
     /// containing every one of those entries sat beside it.
-    private var servedBy: [String: String] = [:]
+    /// Hooked for the same reason `storedRoots` is: a reader resolving a
+    /// subtree needs this mapping, and a change to it that never reached the
+    /// published copy left the subtree answering nothing while looking exactly
+    /// like a subtree that was genuinely empty.
+    private var servedBy: [String: String] = [:] {
+        didSet { republishReadStates() }
+    }
     /// Held, but re-opened when the index location changes.
     ///
     /// This was a computed property returning a fresh connection on every
@@ -177,46 +187,13 @@ public final class FileCorpusStore {
 
     // MARK: - Reading
 
-    /// Everything the matcher should scan for a root: each shard with its
-    /// removals, plus the delta of files created since.
+    /// Everything the matcher should scan for a root. The same answer
+    /// `FileIndexSnapshot` gives a reader, computed from this actor's own copy
+    /// so that deciding what a root covers does not have to hop.
     public func slices(forCanonicalRoot root: String) -> [FileMatcher.Slice] {
-        // Served by a root above this one: scan that index, restricted to the
-        // range this subtree occupies in each of its shards. A shard that does
-        // not contain the subtree answers with an empty range and is dropped,
-        // so browsing `~/projects` inside an index of `~` scans one shard
-        // rather than forty-six.
-        if let covering = servedBy[root], let state = readStates[covering] {
-            var slices: [FileMatcher.Slice] = []
-            for name in state.shards.keys.sorted() {
-                guard let corpus = state.shards[name] else { continue }
-                let range = corpus.range(underCanonical: root)
-                guard !range.isEmpty else { continue }
-                slices.append(
-                    FileMatcher.Slice(
-                        corpus: corpus, removed: state.removed[name],
-                        range: range
-                    )
-                )
-            }
-            if let delta = state.delta {
-                let range = delta.range(underCanonical: root)
-                if !range.isEmpty {
-                    slices.append(FileMatcher.Slice(corpus: delta, range: range))
-                }
-            }
-            return slices
-        }
-
-        guard let state = readStates[root] else { return [] }
-        var slices = state.shards.keys.sorted().compactMap { name in
-            state.shards[name].map {
-                FileMatcher.Slice(corpus: $0, removed: state.removed[name])
-            }
-        }
-        if let delta = state.delta {
-            slices.append(FileMatcher.Slice(corpus: delta))
-        }
-        return slices
+        FileIndexSnapshot.slices(
+            forCanonicalRoot: root, readStates: readStates, servedBy: servedBy
+        )
     }
 
     /// An already-indexed root that contains `root`, if there is one.
@@ -325,10 +302,9 @@ public final class FileCorpusStore {
     }
 
     public func hasCorpus(forCanonicalRoot root: String) -> Bool {
-        if let covering = servedBy[root] {
-            return !(readStates[covering]?.shards.isEmpty ?? true)
-        }
-        return !(readStates[root]?.shards.isEmpty ?? true)
+        FileIndexSnapshot.hasCorpus(
+            forCanonicalRoot: root, readStates: readStates, servedBy: servedBy
+        )
     }
 
     /// How many entries the overlay is carrying — files seen created since
@@ -339,13 +315,9 @@ public final class FileCorpusStore {
     }
 
     public func indexedCount(forCanonicalRoot root: String) -> Int {
-        if servedBy[root] != nil {
-            return slices(forCanonicalRoot: root)
-                .reduce(0) { $0 + ($1.range?.count ?? $1.corpus.entryCount) }
-        }
-        guard let state = readStates[root] else { return 0 }
-        let live = state.shards.values.reduce(0) { $0 + $1.entryCount }
-        return live > 0 ? live + state.addedCount : state.progress
+        FileIndexSnapshot.indexedCount(
+            forCanonicalRoot: root, readStates: readStates, servedBy: servedBy
+        )
     }
 
     // MARK: - Building
@@ -383,11 +355,32 @@ public final class FileCorpusStore {
         }
     }
 
+    /// Start indexing without waiting to be let onto the actor.
+    ///
+    /// Indexing already reports through callbacks rather than by returning, so
+    /// a caller has nothing to await except the right to ask — and the callers
+    /// are views reacting to a keystroke, which should not queue behind a walk
+    /// to say "indexing…". `nonisolated` so this can be called from a
+    /// synchronous body on any isolation.
+    nonisolated public func startIndexing(
+        root: URL,
+        skipping requestedSkipList: Set<String>? = nil,
+        onProgress: @MainActor @escaping (Int) -> Void = { _ in },
+        onFinished: @MainActor @escaping () -> Void = {}
+    ) {
+        Task {
+            await index(
+                root: root, skipping: requestedSkipList,
+                onProgress: onProgress, onFinished: onFinished
+            )
+        }
+    }
+
     public func index(
         root: URL,
         skipping requestedSkipList: Set<String>? = nil,
-        onProgress: @escaping (Int) -> Void = { _ in },
-        onFinished: @escaping () -> Void = {}
+        onProgress: @MainActor @escaping (Int) -> Void = { _ in },
+        onFinished: @MainActor @escaping () -> Void = {}
     ) {
         let canonical = FilePaths.canonical(root)
 
@@ -409,7 +402,7 @@ public final class FileCorpusStore {
             // Served from the wider root, so it is that root's mappings that
             // have to be current.
             revalidate(canonicalRoot: covering)
-            onFinished()
+            Task { @MainActor in onFinished() }
             return
         }
 
@@ -436,13 +429,18 @@ public final class FileCorpusStore {
                 skipping: requestedSkipList.map { _ in [] },
                 onProgress: onProgress
             ) { [self] in
-                index(
-                    root: root,
-                    skipping: requestedSkipList,
-                    onProgress: onProgress,
-                    onFinished: onFinished
-                )
-                retireIfRedundant(coveredRoot: canonical, by: covering)
+                // Back onto the actor: the continuation of a covering walk is
+                // this actor's work, and it is reached through a callback that
+                // has to be main-actor for the sake of the reader holding one.
+                Task {
+                    await index(
+                        root: root,
+                        skipping: requestedSkipList,
+                        onProgress: onProgress,
+                        onFinished: onFinished
+                    )
+                    await retireIfRedundant(coveredRoot: canonical, by: covering)
+                }
             }
             return
         }
@@ -454,7 +452,7 @@ public final class FileCorpusStore {
             // current. Another application may have published since, and a
             // mapping never learns that on its own.
             revalidate(canonicalRoot: canonical)
-            onFinished()
+            Task { @MainActor in onFinished() }
             return
         }
         roots[canonical]?.isLoaded = true
@@ -482,7 +480,12 @@ public final class FileCorpusStore {
             ]
         )
 
-        Task { await walkMissingShards(canonical: canonical, onProgress: onProgress, onFinished: onFinished) }
+        spawn { [self] in
+            await walkMissingShards(
+                canonical: canonical, onProgress: onProgress,
+                onFinished: onFinished
+            )
+        }
     }
 
     /// Map every shard the catalog knows about. Anything unreadable is simply
@@ -624,8 +627,8 @@ public final class FileCorpusStore {
 
     private func walkMissingShards(
         canonical: String,
-        onProgress: @escaping (Int) -> Void,
-        onFinished: @escaping () -> Void
+        onProgress: @MainActor @escaping (Int) -> Void,
+        onFinished: @MainActor @escaping () -> Void
     ) async {
         guard let state = roots[canonical] else { return }
         let root = state.url
@@ -636,7 +639,7 @@ public final class FileCorpusStore {
             await walk(shard: "", canonical: canonical, root: root, skipping: skipList, onProgress: onProgress)
         }
         guard let rootShard = roots[canonical]?.shards[""] else {
-            onFinished()
+            await MainActor.run { onFinished() }
             return
         }
         // Filtered here as well as during the walk, because these names come
@@ -661,7 +664,7 @@ public final class FileCorpusStore {
         // replay would be answering questions about a corpus that does not
         // exist yet.
         watch(canonicalRoot: canonical)
-        FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
+        await FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
 
         log.record(
             "index",
@@ -672,7 +675,7 @@ public final class FileCorpusStore {
                 ("entries", "\(indexedCount(forCanonicalRoot: canonical))"),
             ]
         )
-        onFinished()
+        await MainActor.run { onFinished() }
     }
 
     /// The list to walk a root under, resolved now rather than remembered.
@@ -849,7 +852,7 @@ public final class FileCorpusStore {
         canonical: String,
         root: URL,
         skipping skipList: Set<String>,
-        onProgress: @escaping (Int) -> Void
+        onProgress: @MainActor @escaping (Int) -> Void
     ) async {
         guard roots[canonical]?.walkingShards.contains(shard) != true else { return }
         roots[canonical]?.walkingShards.insert(shard)
@@ -862,10 +865,16 @@ public final class FileCorpusStore {
                 shard: shard,
                 skipping: skipList,
                 onProgress: { count in
-                    Task { @MainActor in
-                        FileCorpusStore.shared.report(alreadyHeld + count, for: canonical)
-                        onProgress(alreadyHeld + count)
+                    // Two hops rather than one: the count belongs to the
+                    // store, the callback belongs to whoever is drawing a
+                    // progress bar, and those are no longer the same
+                    // isolation.
+                    Task {
+                        await FileCorpusStore.shared.report(
+                            alreadyHeld + count, for: canonical
+                        )
                     }
+                    Task { @MainActor in onProgress(alreadyHeld + count) }
                 }
             )
         }.value
@@ -952,7 +961,7 @@ public final class FileCorpusStore {
     /// root's own shard was written.
     private func adoptNewShards(
         canonical: String, root: URL, skipping skipList: Set<String>,
-        onProgress: @escaping (Int) -> Void = { _ in }
+        onProgress: @MainActor @escaping (Int) -> Void = { _ in }
     ) async {
         guard let rootShard = roots[canonical]?.shards[""] else { return }
         var names: [String] = []
@@ -1247,6 +1256,14 @@ public final class FileCorpusStore {
     /// Roots whose delta rebuild is already waiting on the next turn.
     private var deltaRebuildQueued: Set<String> = []
 
+    /// Walks started and not yet finished. See `quiesce()`.
+    private var outstanding: [Task<Void, Never>] = []
+
+    /// Start work this store is accountable for finishing.
+    private func spawn(_ body: @escaping () async -> Void) {
+        outstanding.append(Task { await body() })
+    }
+
     /// Mark any shard carrying too much overlay for a rewalk.
     ///
     /// Dirty shards already jump the sweep queue, so this needs no scheduler
@@ -1429,7 +1446,7 @@ public final class FileCorpusStore {
                 ("ceiling", "\(Self.overlayRebuildCeiling)"),
             ]
         )
-        Task { @MainActor in
+        Task {
             self.deltaRebuildQueued.remove(root)
             self.rebuildDeltaNow(root: root)
         }
@@ -1697,9 +1714,30 @@ public final class FileCorpusStore {
     }
 
     /// Drop everything held in memory. For tests.
-    public func forgetAll() {
+    public func forgetAll() async {
+        await quiesce()
         stopWatching()
         roots.removeAll()
         servedBy.removeAll()
+    }
+
+    /// Wait for the walks this store started to finish.
+    ///
+    /// Forgetting state used to be enough on its own: while this shared the
+    /// main actor, a caller on that actor could not be interleaved by a walk,
+    /// so anything started had either finished or not begun. With an executor
+    /// of its own that no longer holds — an unfinished walk will publish
+    /// happily into whatever state came after it, which between two tests
+    /// means one test's walk landing in the next one's index.
+    ///
+    /// Awaited rather than merely cancelled: nothing along the walk path polls
+    /// for cancellation, and a walk that is going to publish anyway is better
+    /// waited for than raced.
+    public func quiesce() async {
+        while !outstanding.isEmpty {
+            let waiting = outstanding
+            outstanding = []
+            for task in waiting { _ = await task.value }
+        }
     }
 }

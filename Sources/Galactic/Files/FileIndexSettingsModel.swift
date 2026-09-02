@@ -157,7 +157,9 @@ public final class FileIndexSettingsModel: ObservableObject {
         guard !trimmed.isEmpty else { return }
         catalog.setSkipListEntry(name: trimmed, skipped: true)
         for root in catalog.roots() {
-            FileCorpusStore.shared.prune(shard: trimmed, canonicalRoot: root)
+            await FileCorpusStore.shared.prune(
+                shard: trimmed, canonicalRoot: root
+            )
         }
         await rewalkShardsMeeting(trimmed, catalog: catalog)
         load()
@@ -196,8 +198,12 @@ public final class FileIndexSettingsModel: ObservableObject {
     /// for it, so a volume visited a single time would otherwise be walked,
     /// watched and swept for as long as the index exists.
     public func stopIndexing(root: String) {
-        FileCorpusStore.shared.stopIndexing(canonicalRoot: root)
         if selectedRoot == root { selectedRoot = nil }
-        load()
+        // Reloaded inside the task rather than after it, so the listing is
+        // read once the root has actually gone rather than while it is going.
+        Task {
+            await FileCorpusStore.shared.stopIndexing(canonicalRoot: root)
+            load()
+        }
     }
 }

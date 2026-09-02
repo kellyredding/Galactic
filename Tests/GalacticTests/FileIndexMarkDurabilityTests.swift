@@ -23,12 +23,12 @@ final class FileIndexMarkDurabilityTests: XCTestCase {
         home = FileManager.default.temporaryDirectory
             .appendingPathComponent("galactic-mark-home-\(UUID().uuidString)")
         setenv("GALACTIC_HOME", home.path, 1)
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         FileIndexPaths.prepare()
     }
 
     override func tearDown() async throws {
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)
         try await super.tearDown()
