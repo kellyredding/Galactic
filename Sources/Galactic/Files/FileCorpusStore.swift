@@ -89,7 +89,55 @@ public final class FileCorpusStore {
         var unmarkableShards: Set<String> = []
     }
 
-    private var roots: [String: RootState] = [:]
+    /// What a reader needs, and nothing that mutates.
+    ///
+    /// Every field is a value or a reference to something immutable: a corpus
+    /// is fixed once built, a removal bitset is an array, and the overlay is
+    /// present only as a count. So this can be handed to a synchronous caller
+    /// on any isolation without the caller being able to see it change, which
+    /// is the property the scan already relies on and the seam along which the
+    /// mutating half moves off the main actor.
+    struct RootReadState {
+        var shards: [String: FileCorpus] = [:]
+        var removed: [String: [UInt64]] = [:]
+        var delta: FileCorpus?
+        var walkingShards: Set<String> = []
+        var addedCount = 0
+        var progress = 0
+    }
+
+    /// The authoritative, mutable state.
+    ///
+    /// Reached through a computed property so that publishing a fresh read
+    /// state cannot be forgotten: every `roots[x]?.y = z` in this file is a
+    /// get-modify-set and therefore runs the setter below. Hooking the storage
+    /// rather than the call sites is deliberate — there are dozens of them, a
+    /// missed one would surface as a stale search result rather than as a
+    /// build error, and more get added over time.
+    private var storedRoots: [String: RootState] = [:] {
+        didSet { republishReadStates() }
+    }
+
+    private var roots: [String: RootState] {
+        get { storedRoots }
+        set { storedRoots = newValue }
+    }
+
+    /// The snapshot every synchronous read is served from.
+    private var readStates: [String: RootReadState] = [:]
+
+    private func republishReadStates() {
+        readStates = storedRoots.mapValues { state in
+            RootReadState(
+                shards: state.shards,
+                removed: state.removed,
+                delta: state.delta,
+                walkingShards: state.walkingShards,
+                addedCount: state.added.count,
+                progress: state.progress
+            )
+        }
+    }
 
     /// A root being browsed → the indexed root that already contains it.
     ///
@@ -137,7 +185,7 @@ public final class FileCorpusStore {
         // not contain the subtree answers with an empty range and is dropped,
         // so browsing `~/projects` inside an index of `~` scans one shard
         // rather than forty-six.
-        if let covering = servedBy[root], let state = roots[covering] {
+        if let covering = servedBy[root], let state = readStates[covering] {
             var slices: [FileMatcher.Slice] = []
             for name in state.shards.keys.sorted() {
                 guard let corpus = state.shards[name] else { continue }
@@ -159,7 +207,7 @@ public final class FileCorpusStore {
             return slices
         }
 
-        guard let state = roots[root] else { return [] }
+        guard let state = readStates[root] else { return [] }
         var slices = state.shards.keys.sorted().compactMap { name in
             state.shards[name].map {
                 FileMatcher.Slice(corpus: $0, removed: state.removed[name])
@@ -273,21 +321,21 @@ public final class FileCorpusStore {
     }
 
     public func isWalking(_ root: String) -> Bool {
-        !(roots[root]?.walkingShards.isEmpty ?? true)
+        !(readStates[root]?.walkingShards.isEmpty ?? true)
     }
 
     public func hasCorpus(forCanonicalRoot root: String) -> Bool {
         if let covering = servedBy[root] {
-            return !(roots[covering]?.shards.isEmpty ?? true)
+            return !(readStates[covering]?.shards.isEmpty ?? true)
         }
-        return !(roots[root]?.shards.isEmpty ?? true)
+        return !(readStates[root]?.shards.isEmpty ?? true)
     }
 
     /// How many entries the overlay is carrying — files seen created since
     /// their shard was written. A number that only grows is the symptom of a
     /// sweep that is not reaching them.
     public func pendingOverlayCount(forCanonicalRoot root: String) -> Int {
-        roots[root]?.added.count ?? 0
+        readStates[root]?.addedCount ?? 0
     }
 
     public func indexedCount(forCanonicalRoot root: String) -> Int {
@@ -295,9 +343,9 @@ public final class FileCorpusStore {
             return slices(forCanonicalRoot: root)
                 .reduce(0) { $0 + ($1.range?.count ?? $1.corpus.entryCount) }
         }
-        guard let state = roots[root] else { return 0 }
+        guard let state = readStates[root] else { return 0 }
         let live = state.shards.values.reduce(0) { $0 + $1.entryCount }
-        return live > 0 ? live + state.added.count : state.progress
+        return live > 0 ? live + state.addedCount : state.progress
     }
 
     // MARK: - Building
