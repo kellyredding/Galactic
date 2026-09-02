@@ -322,15 +322,6 @@ public actor FileCorpusStore {
 
     // MARK: - Building
 
-    /// Ensure a root is indexed: map whatever is already on disk, then walk
-    /// whatever is missing.
-    /// - Parameter skipList: what not to descend into, or `nil` to let the root
-    ///   decide. Passing it is for tests that want an unfiltered walk; a host
-    ///   should not, because the answer is a property of the root and supplying
-    ///   one per application is what let two of them describe a shared corpus
-    ///   differently. It is also easy to get wrong from here: this method
-    ///   recurses to index a wider root, and handing that root the list derived
-    ///   for the subtree would walk a home directory under a repository's rules.
     /// Re-open every root the index already holds, without being asked for one.
     ///
     /// Indexing began only when a picker or a search asked for a root, so an
@@ -342,7 +333,15 @@ public actor FileCorpusStore {
     /// The roots come from the catalog rather than from a setting, so this
     /// resumes what was already being indexed and invents no policy about what
     /// ought to be.
-    public func resumeKnownRoots() {
+    ///
+    /// `nonisolated` for the reason `startIndexing` is: a host calls this once
+    /// while it is launching, nothing is reported back, and a launch has no
+    /// business waiting on a catalog read to carry on drawing a window.
+    nonisolated public func resumeKnownRoots() {
+        Task { await resumeKnownRootsNow() }
+    }
+
+    private func resumeKnownRootsNow() {
         guard let catalog else { return }
         let known = catalog.roots()
         guard !known.isEmpty else { return }
@@ -376,6 +375,16 @@ public actor FileCorpusStore {
         }
     }
 
+    /// Ensure a root is indexed: map whatever is already on disk, then walk
+    /// whatever is missing.
+    /// - Parameter requestedSkipList: what not to descend into, or `nil` to let
+    ///   the root decide. Passing it is for tests that want an unfiltered walk;
+    ///   a host should not, because the answer is a property of the root and
+    ///   supplying one per application is what let two of them describe a
+    ///   shared corpus differently. It is also easy to get wrong from here:
+    ///   this method recurses to index a wider root, and handing that root the
+    ///   list derived for the subtree would walk a home directory under a
+    ///   repository's rules.
     public func index(
         root: URL,
         skipping requestedSkipList: Set<String>? = nil,
