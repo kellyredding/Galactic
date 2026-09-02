@@ -311,6 +311,30 @@ public final class FileCorpusStore {
     ///   differently. It is also easy to get wrong from here: this method
     ///   recurses to index a wider root, and handing that root the list derived
     ///   for the subtree would walk a home directory under a repository's rules.
+    /// Re-open every root the index already holds, without being asked for one.
+    ///
+    /// Indexing began only when a picker or a search asked for a root, so an
+    /// application could run for days with the index untouched — and the event
+    /// cursor advances only while the watcher is running. One measured gap ran
+    /// two days, and the replay that settled it had 2,919,428 paths to account
+    /// for. Nothing about that needed a person to open a picker first.
+    ///
+    /// The roots come from the catalog rather than from a setting, so this
+    /// resumes what was already being indexed and invents no policy about what
+    /// ought to be.
+    public func resumeKnownRoots() {
+        guard let catalog else { return }
+        let known = catalog.roots()
+        guard !known.isEmpty else { return }
+        log.record(
+            "index",
+            [("event", "resuming"), ("roots", "\(known.count)")]
+        )
+        for root in known {
+            index(root: URL(fileURLWithPath: root))
+        }
+    }
+
     public func index(
         root: URL,
         skipping requestedSkipList: Set<String>? = nil,
