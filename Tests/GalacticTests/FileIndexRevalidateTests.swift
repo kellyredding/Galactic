@@ -10,7 +10,7 @@ import XCTest
 /// launch for the rest of its life, and two applications answer the same query
 /// differently.
 @MainActor
-final class FileIndexRevalidateTests: XCTestCase {
+final class FileIndexRevalidateTests: FileIndexIsolatedTestCase {
 
     private var home: URL!
     private var root: URL!

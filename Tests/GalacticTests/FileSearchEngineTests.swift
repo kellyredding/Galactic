@@ -11,7 +11,7 @@ import XCTest
 /// the disk no longer has is a skip rather than a failure, and that the counts
 /// in the header mean what they say.
 @MainActor
-final class FileSearchEngineTests: XCTestCase {
+final class FileSearchEngineTests: FileIndexIsolatedTestCase {
 
     private var home: URL!
     private var root: URL!

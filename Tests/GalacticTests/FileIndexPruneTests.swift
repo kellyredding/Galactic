@@ -9,7 +9,7 @@ import XCTest
 /// directory that becomes skipped therefore cannot be dealt with by marking it
 /// dirty — that rewalks and rebuilds it.
 @MainActor
-final class FileIndexPruneTests: XCTestCase {
+final class FileIndexPruneTests: FileIndexIsolatedTestCase {
 
     private var home: URL!
     private var root: URL!

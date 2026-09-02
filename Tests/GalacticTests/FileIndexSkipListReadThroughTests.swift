@@ -8,7 +8,7 @@ import XCTest
 /// rules another has already changed — and since nothing records which list
 /// produced a shard, the disagreement is invisible as well as unbounded.
 @MainActor
-final class FileIndexSkipListReadThroughTests: XCTestCase {
+final class FileIndexSkipListReadThroughTests: FileIndexIsolatedTestCase {
 
     private var home: URL!
     private var root: URL!

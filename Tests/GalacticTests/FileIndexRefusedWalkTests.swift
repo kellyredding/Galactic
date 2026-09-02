@@ -10,7 +10,7 @@ import XCTest
 /// Exercised with real permissions rather than a stub, because the whole point
 /// is what `open` actually returns.
 @MainActor
-final class FileIndexRefusedWalkTests: XCTestCase {
+final class FileIndexRefusedWalkTests: FileIndexIsolatedTestCase {
 
     private var home: URL!
     private var root: URL!

@@ -9,7 +9,7 @@ import XCTest
 /// rotation is never published, so it froze — and dragged every launch's replay
 /// further back than the last, measured at 550,799 paths from a day earlier.
 @MainActor
-final class FileIndexPositionTests: XCTestCase {
+final class FileIndexPositionTests: FileIndexIsolatedTestCase {
 
     private var home: URL!
     private var root: URL!

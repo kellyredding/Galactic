@@ -9,7 +9,7 @@ import XCTest
 /// protected directories to discover that nothing moved. Both directions can be
 /// answered exactly instead.
 @MainActor
-final class FileIndexEditScopeTests: XCTestCase {
+final class FileIndexEditScopeTests: FileIndexIsolatedTestCase {
 
     private var home: URL!
     private var root: URL!

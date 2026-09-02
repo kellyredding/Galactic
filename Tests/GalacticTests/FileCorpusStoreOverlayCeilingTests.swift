@@ -13,7 +13,7 @@ import XCTest
 /// the main actor for minutes and starved the sweep that would have drained
 /// it. Past a ceiling the rebuild is deferred by one turn instead.
 @MainActor
-final class FileCorpusStoreOverlayCeilingTests: XCTestCase {
+final class FileCorpusStoreOverlayCeilingTests: FileIndexIsolatedTestCase {
 
     private var home: URL!
     private var root: URL!

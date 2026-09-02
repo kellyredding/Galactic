@@ -8,7 +8,7 @@ import XCTest
 /// reachable, and the root that noticed is the wrong place to decide what
 /// another still needs. Deciding it against the whole index is this.
 @MainActor
-final class FileIndexReclaimTests: XCTestCase {
+final class FileIndexReclaimTests: FileIndexIsolatedTestCase {
 
     private var home: URL!
     private var root: URL!

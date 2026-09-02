@@ -24,7 +24,7 @@ import XCTest
 /// of its own and satisfies every assertion made about it. So the child reports
 /// the root it resolved, and the parent refuses to trust a run it cannot place.
 @MainActor
-final class FileIndexMultiProcessTests: XCTestCase {
+final class FileIndexMultiProcessTests: FileIndexIsolatedTestCase {
 
     /// Which part a spawned process plays. Absent in the parent run, which is
     /// how the child-only tests know to skip.
@@ -517,6 +517,7 @@ final class FileIndexMultiProcessTests: XCTestCase {
 
         // Then the promise itself: the sweep closes the gap.
         FileIndexRefreshSweep.targetAge = 0
+        defer { FileIndexRefreshSweep.targetAge = 3_600 }
         FileCorpusStore.shared.forgetAll()
         await indexRoot()
         for _ in 0..<(subtrees * 3) {

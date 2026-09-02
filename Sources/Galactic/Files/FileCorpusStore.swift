@@ -574,6 +574,22 @@ public final class FileCorpusStore {
         return remapped
     }
 
+    /// Whether indexing a root also starts watching it.
+    ///
+    /// Settable for the reason `FileIndexRefreshSweep.targetAge` is: what a
+    /// caller wants exercised is rarely the whole machine. Here the machinery
+    /// in question writes to the same state the caller is about to assert on.
+    /// A watched root is sent its own recent history within milliseconds of
+    /// being indexed, so a deletion already accounted for arrives a second
+    /// time — and `revalidate` deliberately drops removal bits, which means
+    /// the event and the remap disagree about the same file and whichever
+    /// lands last wins. Measured: six failures in twenty runs of two
+    /// revalidation tests, with the only change being a suspension point
+    /// between the remap and the read.
+    ///
+    /// Left on in production, where noticing is the entire purpose.
+    public static var watchesForChanges = true
+
     private func walkMissingShards(
         canonical: String,
         onProgress: @escaping (Int) -> Void,
@@ -612,7 +628,7 @@ public final class FileCorpusStore {
         // fresh. Before that there is nothing for an event to update, and a
         // replay would be answering questions about a corpus that does not
         // exist yet.
-        watch(canonicalRoot: canonical)
+        if Self.watchesForChanges { watch(canonicalRoot: canonical) }
         FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
 
         log.record(

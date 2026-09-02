@@ -6,7 +6,7 @@ import XCTest
 /// renamed, and the sweep that catches whatever the file system did not
 /// tell us about.
 @MainActor
-final class FileIndexLiveTests: XCTestCase {
+final class FileIndexLiveTests: FileIndexIsolatedTestCase {
 
     private var home: URL!
     private var root: URL!
@@ -224,6 +224,9 @@ final class FileIndexLiveTests: XCTestCase {
     /// notification. Slow by nature — the stream coalesces on a latency window
     /// — so it polls rather than assuming a fixed delay.
     func testFileSystemEventsUpdateTheIndexOnTheirOwn() async throws {
+        // The subject of this one test, so it asks for the watcher the rest of
+        // the suite is deliberately without.
+        FileCorpusStore.watchesForChanges = true
         try touch("src/seed.swift")
         await indexRoot()
         XCTAssertTrue(found("watched").isEmpty)
