@@ -34,7 +34,7 @@ final class FileCorpusStoreOverlayCeilingTests: FileIndexIsolatedTestCase {
 
     override func tearDown() async throws {
         await FileCorpusStore.shared.forgetAll()
-        FileIndexRefreshSweep.shared.stop()
+        await FileIndexRefreshSweep.shared.stop()
         FileCorpusStore.overlayRebuildCeiling = 2_000
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)

@@ -70,7 +70,7 @@ final class FileIndexMarkDurabilityTests: XCTestCase {
 
     /// Reporting is not the whole of it: the mark still has to be durable, or
     /// the sweep has nothing to select on.
-    func testALandedMarkIsVisibleToTheSweep() throws {
+    func testALandedMarkIsVisibleToTheSweep() async throws {
         let catalog = try XCTUnwrap(FileIndexCatalog())
         catalog.adopt(root: canonical)
         catalog.record(
@@ -82,26 +82,25 @@ final class FileIndexMarkDurabilityTests: XCTestCase {
         let shard = catalog.shards(forRoot: canonical)
             .first { $0.name == "projects" }
         XCTAssertEqual(shard?.dirty, true)
+        let selected = await FileIndexRefreshSweep.shared.nextShard(
+            in: canonical, from: catalog, now: Date()
+        )?.name
         XCTAssertEqual(
-            FileIndexRefreshSweep.shared.nextShard(
-                in: canonical, from: catalog, now: Date()
-            )?.name,
-            "projects",
+            selected, "projects",
             "a freshly walked shard was not selected on the strength of the mark"
         )
     }
 
     /// And a mark that did not land leaves the sweep with nothing, rather than
     /// with a shard it cannot see.
-    func testALostMarkLeavesTheSweepNothingToDo() throws {
+    func testALostMarkLeavesTheSweepNothingToDo() async throws {
         let catalog = try XCTUnwrap(FileIndexCatalog())
         catalog.adopt(root: canonical)
 
         XCTAssertFalse(catalog.markDirty(root: canonical, name: "go"))
-        XCTAssertNil(
-            FileIndexRefreshSweep.shared.nextShard(
-                in: canonical, from: catalog, now: Date()
-            )
+        let selected = await FileIndexRefreshSweep.shared.nextShard(
+            in: canonical, from: catalog, now: Date()
         )
+        XCTAssertNil(selected)
     }
 }

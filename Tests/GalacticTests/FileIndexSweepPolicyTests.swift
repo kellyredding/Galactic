@@ -26,7 +26,8 @@ final class FileIndexSweepPolicyTests: XCTestCase {
 
     override func tearDown() async throws {
         await FileCorpusStore.shared.forgetAll()
-        FileIndexRefreshSweep.shared.stop()
+        await FileIndexRefreshSweep.shared.stop()
+        await FileIndexRefreshSweep.shared.releaseAll()
         FileIndexRefreshSweep.targetAge = 3_600
         FileIndexRefreshSweep.refusalBackoff = 86_400
         unsetenv("GALACTIC_HOME")
@@ -131,7 +132,7 @@ final class FileIndexSweepPolicyTests: XCTestCase {
             )
         }
 
-        let chosen = FileIndexRefreshSweep.shared.nextShard(
+        let chosen = await FileIndexRefreshSweep.shared.nextShard(
             in: canonical, from: catalog, now: Date()
         )?.name
         XCTAssertEqual(
@@ -152,7 +153,7 @@ final class FileIndexSweepPolicyTests: XCTestCase {
         )
         catalog.markDirty(root: canonical, name: "Downloads")
 
-        let chosen = FileIndexRefreshSweep.shared.nextShard(
+        let chosen = await FileIndexRefreshSweep.shared.nextShard(
             in: canonical, from: catalog, now: Date()
         )?.name
         XCTAssertEqual(
@@ -180,10 +181,11 @@ final class FileIndexSweepPolicyTests: XCTestCase {
         )
         catalog.markDirty(root: canonical, name: "Downloads")
 
+        let selected = await FileIndexRefreshSweep.shared.nextShard(
+            in: canonical, from: catalog, now: Date()
+        )
         XCTAssertNil(
-            FileIndexRefreshSweep.shared.nextShard(
-                in: canonical, from: catalog, now: Date()
-            ),
+            selected,
             "a refusal was bought a second time inside the backoff"
         )
     }
@@ -200,11 +202,11 @@ final class FileIndexSweepPolicyTests: XCTestCase {
         )
         catalog.markDirty(root: canonical, name: "Downloads")
 
+        let selected = await FileIndexRefreshSweep.shared.nextShard(
+            in: canonical, from: catalog, now: Date()
+        )?.name
         XCTAssertEqual(
-            FileIndexRefreshSweep.shared.nextShard(
-                in: canonical, from: catalog, now: Date()
-            )?.name,
-            "Downloads",
+            selected, "Downloads",
             "a day-old refusal still suppressed the rewalk"
         )
     }
@@ -221,11 +223,11 @@ final class FileIndexSweepPolicyTests: XCTestCase {
         )
         catalog.markDirty(root: canonical, name: "projects")
 
+        let selected = await FileIndexRefreshSweep.shared.nextShard(
+            in: canonical, from: catalog, now: Date()
+        )?.name
         XCTAssertEqual(
-            FileIndexRefreshSweep.shared.nextShard(
-                in: canonical, from: catalog, now: Date()
-            )?.name,
-            "projects",
+            selected, "projects",
             "the backoff reached a directory that costs no dialog"
         )
     }
@@ -243,18 +245,17 @@ final class FileIndexSweepPolicyTests: XCTestCase {
             )
         }
 
-        let first = FileIndexRefreshSweep.shared.nextShard(
+        let first = await FileIndexRefreshSweep.shared.nextShard(
             in: canonical, from: catalog, now: Date()
         )?.name
         XCTAssertNotNil(first)
 
-        FileIndexRefreshSweep.shared.inFlight.insert(
-            FileIndexRefreshSweep.inFlightKey(
-                root: canonical, shard: try XCTUnwrap(first)
-            )
+        // Released in `tearDown` rather than by a `defer`, which cannot enter
+        // an actor to undo this.
+        await FileIndexRefreshSweep.shared.hold(
+            shard: try XCTUnwrap(first), inRoot: canonical
         )
-        defer { FileIndexRefreshSweep.shared.inFlight.removeAll() }
-        let second = FileIndexRefreshSweep.shared.nextShard(
+        let second = await FileIndexRefreshSweep.shared.nextShard(
             in: canonical, from: catalog, now: Date()
         )?.name
         XCTAssertNotNil(

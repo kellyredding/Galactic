@@ -38,7 +38,7 @@ final class FileIndexRefusedWalkTests: FileIndexIsolatedTestCase {
             }
         }
         await FileCorpusStore.shared.forgetAll()
-        FileIndexRefreshSweep.shared.stop()
+        await FileIndexRefreshSweep.shared.stop()
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)
         try? FileManager.default.removeItem(at: root)

@@ -45,8 +45,19 @@ import Foundation
 /// trees, not in `~/Pictures`. So the directories least likely to need this
 /// backstop are the only ones that cost a prompt to re-check, and anything
 /// added here should account for that rather than rediscover it.
-@MainActor
-public final class FileIndexRefreshSweep {
+/// ### Why this is an actor and has no timer
+///
+/// Selecting a shard is a database open and a query, and doing that on the
+/// main actor put file I/O on the thread drawing the window once a minute —
+/// and, once a dirty backlog drains back-to-back, once per shard in quick
+/// succession. Small, but the same category of thing as the stall this whole
+/// mechanism exists to prevent.
+///
+/// A `Timer` needs a run loop, which an actor has no business borrowing, so
+/// the cadence is a sleeping task instead. That is not merely equivalent: a
+/// main-run-loop timer does not fire while that run loop is blocked, which is
+/// exactly the condition under which the backstop is most needed.
+public actor FileIndexRefreshSweep {
 
     public static let shared = FileIndexRefreshSweep()
 
@@ -68,7 +79,17 @@ public final class FileIndexRefreshSweep {
     /// recur on any schedule a reader would notice.
     public static var refusalBackoff: TimeInterval = 86_400
 
-    private var timer: Timer?
+    /// The sleeping task that provides the cadence, and the record of whether
+    /// the sweep is running at all.
+    private var loop: Task<Void, Never>?
+    /// Passes started and not yet finished, so `stop()` can mean it.
+    ///
+    /// Keyed so a pass can retire itself. A drain chain runs for as long as
+    /// there is a backlog — forty-four shards after a stale-cursor replay,
+    /// arriving back to back — and a list emptied only by `stop()` would hold
+    /// a finished task for every one of them for the life of the process.
+    private var inFlightPasses: [Int: Task<Void, Never>] = [:]
+    private var nextPassID = 0
     /// Whether a follow-up pass is already queued for a dirty backlog.
     private var backlogDrainScheduled = false
     private var roots: Set<String> = []
@@ -82,7 +103,9 @@ public final class FileIndexRefreshSweep {
     /// one that is stuck.
     ///
     /// Internal so a test can hold a shard busy and watch the sweep route past
-    /// it, which is the behaviour rather than an implementation detail.
+    /// it, which is the behaviour rather than an implementation detail. Reached
+    /// through `hold(shard:inRoot:)` now that mutating it means entering an
+    /// actor, which a `defer` cannot do.
     var inFlight: Set<String> = []
     private let log = FileIndexLog.shared
 
@@ -104,23 +127,68 @@ public final class FileIndexRefreshSweep {
 
     init() {}
 
+    /// Hold a shard busy, as a walk in progress would.
+    ///
+    /// A method rather than direct access to `inFlight`, now that mutating it
+    /// means entering an actor and a `defer` cannot do that.
+    func hold(shard: String, inRoot root: String) {
+        inFlight.insert(Self.inFlightKey(root: root, shard: shard))
+    }
+
+    func releaseAll() {
+        inFlight.removeAll()
+    }
+
+    /// Whether the sweep runs a cadence of its own.
+    ///
+    /// A knob like `targetAge`, and for the same reason: this is a backstop
+    /// that acts on its own schedule, so anything asserting on a corpus it did
+    /// not just build is racing it. In an application that is the point. In a
+    /// test that indexes a tree and then asserts what is in it, a background
+    /// pass rewalking that tree is indistinguishable from a bug, and the test
+    /// exercising the sweep is the one that wants it.
+    public static var isEnabled = true
+
     public func add(canonicalRoot root: String) {
         roots.insert(root)
+        guard Self.isEnabled else { return }
         startIfNeeded()
     }
 
-    public func stop() {
-        timer?.invalidate()
-        timer = nil
+    /// Stop, and wait for whatever was already underway.
+    ///
+    /// Waiting is the part that matters. A timer on the main run loop could
+    /// only fire when the main actor was free, so invalidating it was enough —
+    /// nothing could be halfway through a walk at that moment. On its own
+    /// executor a pass can be anywhere, and a pass that outlives the stop goes
+    /// on to publish under whichever root is registered next.
+    public func stop() async {
+        let running = loop
+        running?.cancel()
+        loop = nil
+        for task in inFlightPasses.values { task.cancel() }
         roots.removeAll()
+        while !inFlightPasses.isEmpty {
+            let waiting = inFlightPasses
+            inFlightPasses = [:]
+            for task in waiting.values { _ = await task.value }
+        }
+        backlogDrainScheduled = false
+        // The cadence task last, because it is the one that may be inside a
+        // pass rather than asleep.
+        _ = await running?.value
     }
 
     private func startIfNeeded() {
-        guard timer == nil else { return }
-        timer = Timer.scheduledTimer(
-            withTimeInterval: Self.tickInterval, repeats: true
-        ) { [weak self] _ in
-            Task { @MainActor in await self?.tick() }
+        guard loop == nil else { return }
+        loop = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(
+                    nanoseconds: UInt64(Self.tickInterval * 1_000_000_000)
+                )
+                guard !Task.isCancelled, let self else { return }
+                await self.tick()
+            }
         }
         log.record(
             "sweep",
@@ -182,18 +250,26 @@ public final class FileIndexRefreshSweep {
     /// a guess, and they arrive in groups: discarding a stale cursor marks
     /// every shard of a root at once, and forty-four of them at a minute each
     /// is three quarters of an hour during which results describe the last
-    /// walk rather than the tree. The timer still governs the steady state —
+    /// walk rather than the tree. The cadence still governs the steady state —
     /// this only skips the wait while there is a backlog to clear.
     private func scheduleBacklogDrain() {
-        guard !backlogDrainScheduled else { return }
+        guard Self.isEnabled, !backlogDrainScheduled else { return }
         backlogDrainScheduled = true
-        Task { @MainActor in
+        let id = nextPassID
+        nextPassID += 1
+        inFlightPasses[id] = Task {
+            // Retired here rather than by whoever stops, so a chain draining a
+            // long backlog does not accumulate its own history.
+            defer { self.inFlightPasses[id] = nil }
+            // Cleared before ticking, not after: the pass that drains the
+            // backlog is also the pass that discovers there is more of it, so
+            // holding the flag across the tick would stop the chain after one.
             self.backlogDrainScheduled = false
             // Not past a stop. This only exists to skip the wait between
-            // ticks, so it has no business running when there are no ticks —
+            // passes, so it has no business running when there are none —
             // and a drain queued just before a stop would otherwise walk
             // under whatever root was registered next.
-            guard self.timer != nil else { return }
+            guard self.loop != nil, !Task.isCancelled else { return }
             await self.tick()
         }
     }

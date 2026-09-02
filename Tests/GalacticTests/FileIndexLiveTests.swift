@@ -27,7 +27,7 @@ final class FileIndexLiveTests: FileIndexIsolatedTestCase {
 
     override func tearDown() async throws {
         await FileCorpusStore.shared.forgetAll()
-        FileIndexRefreshSweep.shared.stop()
+        await FileIndexRefreshSweep.shared.stop()
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)
         try? FileManager.default.removeItem(at: root)
@@ -180,7 +180,7 @@ final class FileIndexLiveTests: FileIndexIsolatedTestCase {
 
         FileIndexRefreshSweep.targetAge = 0
         defer { FileIndexRefreshSweep.targetAge = 3_600 }
-        FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
+        await FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
 
         var refreshed: Set<String> = []
         for _ in 0..<8 {
@@ -209,7 +209,7 @@ final class FileIndexLiveTests: FileIndexIsolatedTestCase {
 
         FileIndexRefreshSweep.targetAge = 0
         defer { FileIndexRefreshSweep.targetAge = 3_600 }
-        FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
+        await FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
         for _ in 0..<8 { _ = await FileIndexRefreshSweep.shared.tick() }
 
         XCTAssertEqual(
@@ -274,7 +274,7 @@ extension FileIndexLiveTests {
 
         FileIndexRefreshSweep.targetAge = 0
         defer { FileIndexRefreshSweep.targetAge = 3_600 }
-        FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
+        await FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
         for _ in 0..<10 { _ = await FileIndexRefreshSweep.shared.tick() }
 
         XCTAssertNotNil(
@@ -393,9 +393,6 @@ extension FileIndexLiveTests {
 
 extension FileIndexLiveTests {
 
-    /// Marking is not lease-guarded and publishing clears the flag, so the gap
-    /// between a walk starting and its publish landing was a hole: an event
-    /// arriving inside it raised a flag the publish erased, and the rewalk it
     /// A group of dirty shards is cleared without waiting a tick each.
     ///
     /// A minute apart suits staleness, which is a guess. Dirty is not a guess,
@@ -403,6 +400,9 @@ extension FileIndexLiveTests {
     /// shard of a root at once, and waiting a minute per shard leaves results
     /// describing the last walk for as long as the group takes.
     func testADirtyBacklogDrainsWithoutATickEach() async throws {
+        // The chain of follow-up passes is the subject here, so this asks for
+        // the self-scheduling the rest of the suite is deliberately without.
+        FileIndexRefreshSweep.isEnabled = true
         try touch("one/file.swift")
         try touch("two/file.swift")
         try touch("three/file.swift")
@@ -412,7 +412,7 @@ extension FileIndexLiveTests {
             catalog.markDirty(root: canonical, name: name)
         }
 
-        FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
+        await FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
         _ = await FileIndexRefreshSweep.shared.tick()
 
         // Waiting on the queued follow-ups, not ticking again ourselves: each
@@ -430,6 +430,9 @@ extension FileIndexLiveTests {
         )
     }
 
+    /// Marking is not lease-guarded and publishing clears the flag, so the gap
+    /// between a walk starting and its publish landing was a hole: an event
+    /// arriving inside it raised a flag the publish erased, and the rewalk it
     /// asked for never happened. The corpus being published cannot contain a
     /// change reported after it was built.
     func testAMarkRaisedDuringAWalkSurvivesThePublish() async throws {
@@ -692,7 +695,7 @@ extension FileIndexLiveTests {
 
         FileIndexRefreshSweep.targetAge = 0
         defer { FileIndexRefreshSweep.targetAge = 3_600 }
-        FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
+        await FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
         for _ in 0..<10 {
             _ = await FileIndexRefreshSweep.shared.tick()
             if found("leaffile").isEmpty { break }
@@ -803,7 +806,7 @@ extension FileIndexLiveTests {
 
         FileIndexRefreshSweep.targetAge = 0
         defer { FileIndexRefreshSweep.targetAge = 3_600 }
-        FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
+        await FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
         for _ in 0..<10 { _ = await FileIndexRefreshSweep.shared.tick() }
 
         await FileCorpusStore.shared.markSubtreeDirty(

@@ -74,7 +74,7 @@ final class FileIndexMultiProcessTests: FileIndexIsolatedTestCase {
 
     override func tearDown() async throws {
         await FileCorpusStore.shared.forgetAll()
-        FileIndexRefreshSweep.shared.stop()
+        await FileIndexRefreshSweep.shared.stop()
         // A child owns none of this: deleting it would take the index out from
         // under the parent that is still measuring it.
         if !isChild {

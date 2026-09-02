@@ -32,7 +32,7 @@ final class FileSearchEngineTests: FileIndexIsolatedTestCase {
 
     override func tearDown() async throws {
         await FileCorpusStore.shared.forgetAll()
-        FileIndexRefreshSweep.shared.stop()
+        await FileIndexRefreshSweep.shared.stop()
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)
         try? FileManager.default.removeItem(at: root)

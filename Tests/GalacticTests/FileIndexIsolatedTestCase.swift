@@ -34,6 +34,7 @@ class FileIndexIsolatedTestCase: XCTestCase {
         try await super.setUp()
 
         let watchesForChanges = FileCorpusStore.watchesForChanges
+        let sweepIsEnabled = FileIndexRefreshSweep.isEnabled
         let targetAge = FileIndexRefreshSweep.targetAge
         let tickInterval = FileIndexRefreshSweep.tickInterval
         let refusalBackoff = FileIndexRefreshSweep.refusalBackoff
@@ -41,6 +42,7 @@ class FileIndexIsolatedTestCase: XCTestCase {
         let overlayRebuildCeiling = FileCorpusStore.overlayRebuildCeiling
         restore = {
             FileCorpusStore.watchesForChanges = watchesForChanges
+            FileIndexRefreshSweep.isEnabled = sweepIsEnabled
             FileIndexRefreshSweep.targetAge = targetAge
             FileIndexRefreshSweep.tickInterval = tickInterval
             FileIndexRefreshSweep.refusalBackoff = refusalBackoff
@@ -51,6 +53,14 @@ class FileIndexIsolatedTestCase: XCTestCase {
         // One test does want real events — `testFileSystemEventsUpdateTheIndexOnTheirOwn`
         // is about nothing else — and it turns this back on for itself.
         FileCorpusStore.watchesForChanges = false
+
+        // Registering a root still works, and so does asking for a pass by
+        // hand; what stops is the sweep coming back for more on its own. A
+        // test driving passes by hand and expecting a known number of them to
+        // suffice cannot know that otherwise — a drain it never asked for
+        // competes for the same two overlapping slots, so some of its passes
+        // return having done nothing.
+        FileIndexRefreshSweep.isEnabled = false
     }
 
     override func tearDown() async throws {
