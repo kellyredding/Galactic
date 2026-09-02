@@ -393,6 +393,40 @@ extension FileIndexLiveTests {
     /// Marking is not lease-guarded and publishing clears the flag, so the gap
     /// between a walk starting and its publish landing was a hole: an event
     /// arriving inside it raised a flag the publish erased, and the rewalk it
+    /// A group of dirty shards is cleared without waiting a tick each.
+    ///
+    /// A minute apart suits staleness, which is a guess. Dirty is not a guess,
+    /// and dirty arrives in groups — discarding a stale cursor marks every
+    /// shard of a root at once, and waiting a minute per shard leaves results
+    /// describing the last walk for as long as the group takes.
+    func testADirtyBacklogDrainsWithoutATickEach() async throws {
+        try touch("one/file.swift")
+        try touch("two/file.swift")
+        try touch("three/file.swift")
+        await indexRoot()
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        for name in ["one", "two", "three"] {
+            catalog.markDirty(root: canonical, name: name)
+        }
+
+        FileIndexRefreshSweep.shared.add(canonicalRoot: canonical)
+        _ = await FileIndexRefreshSweep.shared.tick()
+
+        // Waiting on the queued follow-ups, not ticking again ourselves: each
+        // walk suspends on real work, so yielding alone does not reach them.
+        var stillDirty: [String] = []
+        for _ in 0..<40 {
+            stillDirty = catalog.shards(forRoot: canonical)
+                .filter(\.dirty).map(\.name).sorted()
+            if stillDirty.isEmpty { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertEqual(
+            stillDirty, [],
+            "one tick cleared one shard and left the rest for the timer"
+        )
+    }
+
     /// asked for never happened. The corpus being published cannot contain a
     /// change reported after it was built.
     func testAMarkRaisedDuringAWalkSurvivesThePublish() async throws {

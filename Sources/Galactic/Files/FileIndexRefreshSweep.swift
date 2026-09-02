@@ -69,6 +69,8 @@ public final class FileIndexRefreshSweep {
     public static var refusalBackoff: TimeInterval = 86_400
 
     private var timer: Timer?
+    /// Whether a follow-up pass is already queued for a dirty backlog.
+    private var backlogDrainScheduled = false
     private var roots: Set<String> = []
     /// Which shards are being refreshed right now, as `root` and name.
     ///
@@ -167,9 +169,28 @@ public final class FileIndexRefreshSweep {
             await FileCorpusStore.shared.refresh(
                 shard: chosen.name, canonicalRoot: root
             )
+            if chosen.dirty { scheduleBacklogDrain() }
             return chosen.name
         }
         return nil
+    }
+
+    /// Come straight back for the next dirty shard instead of waiting a tick.
+    ///
+    /// A minute apart is the right cadence for staleness, which is a guess
+    /// about what the file system might not have told us. A dirty shard is not
+    /// a guess, and they arrive in groups: discarding a stale cursor marks
+    /// every shard of a root at once, and forty-four of them at a minute each
+    /// is three quarters of an hour during which results describe the last
+    /// walk rather than the tree. The timer still governs the steady state —
+    /// this only skips the wait while there is a backlog to clear.
+    private func scheduleBacklogDrain() {
+        guard !backlogDrainScheduled else { return }
+        backlogDrainScheduled = true
+        Task { @MainActor in
+            self.backlogDrainScheduled = false
+            await self.tick()
+        }
     }
 
     /// The same roots, rotated so the one after `previous` comes first.
