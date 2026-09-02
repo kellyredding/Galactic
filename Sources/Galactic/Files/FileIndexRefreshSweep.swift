@@ -166,17 +166,22 @@ public actor FileIndexRefreshSweep {
         let running = loop
         running?.cancel()
         loop = nil
-        for task in inFlightPasses.values { task.cancel() }
         roots.removeAll()
+
+        // The cadence task first, and that order is load-bearing. It is the one
+        // that may be *inside* a pass rather than asleep, and a pass that is
+        // mid-refresh goes on to schedule a drain when it finds the shard was
+        // dirty — after any drain loop that ran before it. Waiting here means
+        // every drain this stop has to account for already exists.
+        _ = await running?.value
+
+        for task in inFlightPasses.values { task.cancel() }
         while !inFlightPasses.isEmpty {
             let waiting = inFlightPasses
             inFlightPasses = [:]
             for task in waiting.values { _ = await task.value }
         }
         backlogDrainScheduled = false
-        // The cadence task last, because it is the one that may be inside a
-        // pass rather than asleep.
-        _ = await running?.value
     }
 
     private func startIfNeeded() {

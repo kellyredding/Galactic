@@ -95,6 +95,47 @@ final class FileIndexRevalidateTests: FileIndexIsolatedTestCase {
         return generation
     }
 
+    /// Remapping several shards is one publish, not one per shard.
+    ///
+    /// A shard's corpus and the removal bits gathered against it are indices
+    /// into the same generation, so a publish that carries the new corpus while
+    /// the old bits are still in place tells a reader that whichever unrelated
+    /// file now sits at that index is deleted. Reads are answered from a lock
+    /// rather than from the index's own executor — deliberately, so a keystroke
+    /// never waits on a walk — which is exactly why an intermediate state is
+    /// reachable at all, and why it cannot be asserted on directly: it is
+    /// well-formed data, and it is gone within a millisecond.
+    ///
+    /// So what is asserted is that the window is never opened.
+    func testRemappingSeveralShardsPublishesOnce() async throws {
+        for shard in ["alpha", "beta", "gamma", "delta"] {
+            try touch("\(shard)/first_file.swift")
+        }
+        await indexRoot()
+
+        // Another application republishes every one of them.
+        for shard in ["alpha", "beta", "gamma", "delta"] {
+            try touch("\(shard)/second_file.swift")
+            _ = try publishElsewhere(shard: shard)
+        }
+
+        let before = FileIndexSnapshot.shared.publishCount
+        let remapped = await FileCorpusStore.shared.revalidate(
+            canonicalRoot: canonical
+        )
+        let publishes = FileIndexSnapshot.shared.publishCount - before
+
+        XCTAssertEqual(remapped.sorted(), ["alpha", "beta", "delta", "gamma"])
+        XCTAssertEqual(
+            publishes, 1,
+            """
+            \(remapped.count) shards were remapped in \(publishes) publishes, \
+            so a reader can see a corpus carrying the previous generation's \
+            removal bits
+            """
+        )
+    }
+
     func testANewGenerationIsPickedUpWhenTheRootIsAskedForAgain() async throws {
         try touch("subtree/first_file.swift")
         await indexRoot()

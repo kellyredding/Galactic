@@ -68,6 +68,21 @@ public final class FileIndexSnapshot: @unchecked Sendable {
     /// snapshot rather than a cache with its own invalidation.
     private var coveredSlices: [String: [FileMatcher.Slice]] = [:]
 
+    /// How many times the index has been published.
+    ///
+    /// Internal, for the one thing a test cannot otherwise see. Whether a group
+    /// of edits was published once or once per field is not visible in the
+    /// published values: a corpus paired with the previous generation's removal
+    /// bits is well-formed data that happens to be wrong, and it is gone by the
+    /// time anything could assert on it.
+    private var publishes = 0
+
+    var publishCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return publishes
+    }
+
     init() {}
 
     // MARK: - Publishing
@@ -103,6 +118,7 @@ public final class FileIndexSnapshot: @unchecked Sendable {
         self.servedBy = servedBy
         self.skipLists = skipLists
         self.coveredSlices = covered
+        self.publishes += 1
     }
 
     /// The three together, because they have to agree: `servedBy` names a root

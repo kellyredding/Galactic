@@ -106,12 +106,49 @@ public actor FileCorpusStore {
     /// missed one would surface as a stale search result rather than as a
     /// build error, and more get added over time.
     private var storedRoots: [String: RootState] = [:] {
-        didSet { republishReadStates() }
+        didSet { republishIfNotBatched() }
     }
 
     private var roots: [String: RootState] {
         get { storedRoots }
         set { storedRoots = newValue }
+    }
+
+    /// How many `batched` calls are open.
+    private var batchDepth = 0
+
+    private func republishIfNotBatched() {
+        guard batchDepth == 0 else { return }
+        republishReadStates()
+    }
+
+    /// Publish once at the end of a group of edits rather than after each one.
+    ///
+    /// Republishing per assignment is what makes a forgotten publish
+    /// impossible, and it is exactly what makes a *sequence* of assignments
+    /// wrong. A shard and the removal bits gathered against it are two fields
+    /// that have to agree: a walk that stores the new corpus and then clears
+    /// the bits publishes, in between, a corpus masked by the previous
+    /// generation's bitset — where the same index means a different file, so a
+    /// reader is told an unrelated file is deleted. The overlay and the delta
+    /// encoding it are a second such pair, and a root and the `servedBy`
+    /// entries naming it are a third.
+    ///
+    /// Reads are served from a lock rather than from this actor, deliberately,
+    /// so being on the actor is no protection: a keystroke on the main actor
+    /// only has to take the lock, and it then scans for milliseconds holding
+    /// whatever it got. Before the index had its own executor no reader could
+    /// land there, because every writer was the main actor too.
+    ///
+    /// The body must not suspend — one publish is owed at the end of it, and a
+    /// suspension would hold the whole index unpublished across an await.
+    private func batched<T>(_ body: () -> T) -> T {
+        batchDepth += 1
+        defer {
+            batchDepth -= 1
+            republishIfNotBatched()
+        }
+        return body()
     }
 
     /// This actor's own copy of what it publishes, for the questions it has to
@@ -154,7 +191,7 @@ public actor FileCorpusStore {
     /// published copy left the subtree answering nothing while looking exactly
     /// like a subtree that was genuinely empty.
     private var servedBy: [String: String] = [:] {
-        didSet { republishReadStates() }
+        didSet { republishIfNotBatched() }
     }
     /// Held, but re-opened when the index location changes.
     ///
@@ -595,30 +632,37 @@ public actor FileCorpusStore {
         let recorded = catalog.shards(forRoot: root)
         var remapped: [String] = []
 
-        for shard in recorded where !shard.dirty {
-            guard roots[root]?.generations[shard.name] != shard.generation else {
-                continue
+        // One publish for the whole revalidation. Each remapped shard pairs a
+        // new corpus with a bitset that has to be dropped with it, and this
+        // runs once per picker open against as many shards as the root has.
+        batched {
+            for shard in recorded where !shard.dirty {
+                guard roots[root]?.generations[shard.name] != shard.generation
+                else { continue }
+                let url = FileCorpusFile.url(
+                    shardDirectory: directory,
+                    shard: FileIndexPaths.rootIdentifier(shard.name),
+                    generation: shard.generation
+                )
+                guard let corpus = FileCorpus.load(from: url) else { continue }
+                roots[root]?.shards[shard.name] = corpus
+                roots[root]?.generations[shard.name] = shard.generation
+                roots[root]?.removed[shard.name] = nil
+                remapped.append(shard.name)
             }
-            let url = FileCorpusFile.url(
-                shardDirectory: directory,
-                shard: FileIndexPaths.rootIdentifier(shard.name),
-                generation: shard.generation
-            )
-            guard let corpus = FileCorpus.load(from: url) else { continue }
-            roots[root]?.shards[shard.name] = corpus
-            roots[root]?.generations[shard.name] = shard.generation
-            roots[root]?.removed[shard.name] = nil
-            remapped.append(shard.name)
-        }
 
-        // A shard another application pruned has to go here too, or this process
-        // keeps offering files from a directory the index has stopped covering.
-        let live = Set(recorded.map(\.name))
-        for held in roots[root]?.shards.keys.filter({ !live.contains($0) }) ?? [] {
-            roots[root]?.shards[held] = nil
-            roots[root]?.removed[held] = nil
-            roots[root]?.generations[held] = nil
-            remapped.append(held)
+            // A shard another application pruned has to go here too, or this
+            // process keeps offering files from a directory the index has
+            // stopped covering.
+            let live = Set(recorded.map(\.name))
+            for held in roots[root]?.shards.keys.filter({ !live.contains($0) })
+                ?? []
+            {
+                roots[root]?.shards[held] = nil
+                roots[root]?.removed[held] = nil
+                roots[root]?.generations[held] = nil
+                remapped.append(held)
+            }
         }
 
         if !remapped.isEmpty {
@@ -755,8 +799,13 @@ public actor FileCorpusStore {
         guard let catalog else { return }
         let shards = catalog.shards(forRoot: root)
         catalog.forget(root: root)
-        roots[root] = nil
-        servedBy = servedBy.filter { $0.value != root && $0.key != root }
+        // A root and the subtrees it was answering for go together: published
+        // apart, a subtree is briefly mapped to a root that has gone, which
+        // resolves to nothing and reads as a genuinely empty tree.
+        batched {
+            roots[root] = nil
+            servedBy = servedBy.filter { $0.value != root && $0.key != root }
+        }
         let reclaimed = reclaimOrphanedShardDirectories()
         log.record(
             "index",
@@ -845,10 +894,12 @@ public actor FileCorpusStore {
         defer { writerLease.release() }
 
         let held = roots[root]?.shards[shard]?.entryCount ?? 0
-        roots[root]?.shards[shard] = nil
-        roots[root]?.removed[shard] = nil
-        roots[root]?.dirtyShards.remove(shard)
-        dropOverlayEntries(under: shard, canonical: root)
+        batched {
+            roots[root]?.shards[shard] = nil
+            roots[root]?.removed[shard] = nil
+            roots[root]?.dirtyShards.remove(shard)
+            dropOverlayEntries(under: shard, canonical: root)
+        }
         catalog?.remove(root: root, name: shard)
         // The root shard still lists this directory as an entry of its own, so
         // it is now stale by exactly one row. Nothing depends on that being
@@ -955,13 +1006,18 @@ public actor FileCorpusStore {
                 ]
             )
         }
-        roots[canonical]?.shards[shard] = corpus
-        roots[canonical]?.removed[shard] = nil
-        roots[canonical]?.walkingShards.remove(shard)
-        // Whatever made it dirty has now been answered by walking it, so the
-        // next event that would mark it dirty should be allowed to say so.
-        roots[canonical]?.dirtyShards.remove(shard)
-        dropOverlayEntries(under: shard, canonical: canonical)
+        // One publish for the lot: the corpus and the bitset gathered against
+        // the generation it replaces must never be visible together.
+        batched {
+            roots[canonical]?.shards[shard] = corpus
+            roots[canonical]?.removed[shard] = nil
+            roots[canonical]?.walkingShards.remove(shard)
+            // Whatever made it dirty has now been answered by walking it, so
+            // the next event that would mark it dirty should be allowed to say
+            // so.
+            roots[canonical]?.dirtyShards.remove(shard)
+            dropOverlayEntries(under: shard, canonical: canonical)
+        }
 
         let elapsed = Date().timeIntervalSince(started)
         publish(
@@ -1227,9 +1283,11 @@ public actor FileCorpusStore {
             if state.added[relative] == nil { changed += 1 }
             state.added[relative] = (appearance.modified, isDirectory)
         }
-        roots[root] = state
+        batched {
+            roots[root] = state
+            if changed > 0 { rebuildDelta(root: root) }
+        }
         if changed > 0 {
-            rebuildDelta(root: root)
             log.record("watch", watchFields("created", changed: changed, root: root))
             applyCompactionPressure(root: root)
         }
@@ -1250,9 +1308,11 @@ public actor FileCorpusStore {
             if outcome.removed { changed += 1 }
             if outcome.wasDirectory { vanishedDirectories.append(relative) }
         }
-        roots[root] = state
+        batched {
+            roots[root] = state
+            if changed > 0 { rebuildDelta(root: root) }
+        }
         if changed > 0 {
-            rebuildDelta(root: root)
             log.record("watch", watchFields("removed", changed: changed, root: root))
         }
 
@@ -1472,8 +1532,13 @@ public actor FileCorpusStore {
         state.added = state.added.filter { key, _ in
             shard.isEmpty ? key.contains("/") : !key.hasPrefix(prefix)
         }
-        roots[canonical] = state
-        rebuildDelta(root: canonical)
+        // The overlay and the corpus encoding it are a pair. Published apart,
+        // the entries just folded into the shard are still in the delta as
+        // well, and a reader is offered the same file twice.
+        batched {
+            roots[canonical] = state
+            rebuildDelta(root: canonical)
+        }
     }
 
     /// Re-encode the pending additions as a corpus.
@@ -1793,8 +1858,10 @@ public actor FileCorpusStore {
     public func forgetAll() async {
         await quiesce()
         stopWatching()
-        roots.removeAll()
-        servedBy.removeAll()
+        batched {
+            roots.removeAll()
+            servedBy.removeAll()
+        }
     }
 
     /// Wait for the walks this store started to finish.
