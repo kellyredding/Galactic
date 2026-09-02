@@ -78,6 +78,15 @@ public final class FileCorpusStore {
         /// row and logged the same line dozens of times a second. Held in memory
         /// so the transition is what costs, not the condition.
         var dirtyShards: Set<String> = []
+        /// Names a mark could not be recorded for, the catalog having no row.
+        ///
+        /// Deduped for the reason `dirtyShards` is deduped: most of these are
+        /// not directories at all — a home directory collected 2,544 marks for
+        /// `.claude.json.tmp` files that exist for milliseconds — and without
+        /// this each one would cost a write attempt and a log line on every
+        /// event rather than once. Cleared when a shard is adopted, which is
+        /// the only thing that can change the answer.
+        var unmarkableShards: Set<String> = []
     }
 
     private var roots: [String: RootState] = [:]
@@ -1159,8 +1168,28 @@ public final class FileCorpusStore {
             // overlay stays over the threshold until the rewalk happens, so
             // every subsequent batch would re-mark and re-log a standing fact.
             guard roots[root]?.dirtyShards.contains(shard) != true else { continue }
+            guard
+                roots[root]?.unmarkableShards.contains(shard) != true
+            else { continue }
+
+            // Record the suppression only once the mark is durable. The guard
+            // above is what makes the order load-bearing: a shard remembered
+            // as marked is not marked again, so one remembered after a mark
+            // that landed nowhere is retired permanently. A dependency cache
+            // stranded 24,278 entries exactly that way.
+            guard catalog?.markDirty(root: root, name: shard) == true else {
+                roots[root]?.unmarkableShards.insert(shard)
+                log.record(
+                    "refresh",
+                    [
+                        ("event", "compaction-mark-lost"),
+                        ("shard", shard.isEmpty ? "(root)" : shard),
+                        ("pending", "\(count)"),
+                    ]
+                )
+                continue
+            }
             roots[root]?.dirtyShards.insert(shard)
-            catalog?.markDirty(root: root, name: shard)
             log.record(
                 "refresh",
                 [
@@ -1371,9 +1400,25 @@ public final class FileCorpusStore {
                 isWalking: roots[root]?.walkingShards.contains(shard) == true
             )
         else { return }
+        guard roots[root]?.unmarkableShards.contains(shard) != true else { return }
+
+        // Remember the mark only once the catalog has taken it, for the reason
+        // the dedupe above exists: a shard remembered as marked is not marked
+        // again, so recording one that landed nowhere retires it permanently.
+        guard catalog?.markDirty(root: root, name: shard) == true else {
+            roots[root]?.unmarkableShards.insert(shard)
+            log.record(
+                "refresh",
+                [
+                    ("shard", shard.isEmpty ? "(root)" : shard),
+                    ("event", "mark-lost"),
+                    ("reason", reason),
+                ]
+            )
+            return
+        }
         roots[root]?.dirtyShards.insert(shard)
 
-        catalog?.markDirty(root: root, name: shard)
         log.record(
             "refresh",
             [

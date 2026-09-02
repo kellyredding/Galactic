@@ -549,7 +549,15 @@ public final class FileIndexCatalog: @unchecked Sendable {
         }
     }
 
-    public func markDirty(root: String, name: String) {
+    /// Mark a shard as needing a rewalk, and say whether one was there to mark.
+    ///
+    /// An `UPDATE` naming a shard that has no row is well-formed and changes
+    /// nothing, so the caller cannot otherwise tell the two apart. It has to:
+    /// a caller that records having marked a shard it did not mark will never
+    /// reconsider it, and a shard the sweep selects from this table is
+    /// unreachable until something marks it.
+    @discardableResult
+    public func markDirty(root: String, name: String) -> Bool {
         queue.sync {
             var statement: OpaquePointer?
             let sql = """
@@ -557,12 +565,13 @@ public final class FileIndexCatalog: @unchecked Sendable {
                 WHERE root_path = ? AND name = ?
                 """
             guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK
-            else { return }
+            else { return false }
             defer { sqlite3_finalize(statement) }
             sqlite3_bind_double(statement, 1, Date().timeIntervalSince1970)
             bindText(statement, 2, root)
             bindText(statement, 3, name)
             step(statement, "markDirty")
+            return sqlite3_changes(database) > 0
         }
     }
 
