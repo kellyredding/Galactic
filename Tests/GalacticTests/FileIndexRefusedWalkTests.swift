@@ -25,7 +25,7 @@ final class FileIndexRefusedWalkTests: FileIndexIsolatedTestCase {
         try FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true
         )
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         FileIndexPaths.prepare()
     }
 
@@ -37,7 +37,7 @@ final class FileIndexRefusedWalkTests: FileIndexIsolatedTestCase {
                 chmod(path, 0o700)
             }
         }
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         FileIndexRefreshSweep.shared.stop()
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)
@@ -60,7 +60,7 @@ final class FileIndexRefusedWalkTests: FileIndexIsolatedTestCase {
     private func indexRoot() async {
         await withCheckedContinuation { continuation in
             var resumed = false
-            FileCorpusStore.shared.index(
+            FileCorpusStore.shared.startIndexing(
                 root: root, skipping: [],
                 onFinished: {
                     guard !resumed else { return }
@@ -303,7 +303,7 @@ final class FileIndexRefusedWalkTests: FileIndexIsolatedTestCase {
         XCTAssertEqual(chmod(locked.path, 0o000), 0)
         await FileCorpusStore.shared.refresh(shard: "locked", canonicalRoot: canonical)
 
-        let slices = FileCorpusStore.shared.slices(forCanonicalRoot: canonical)
+        let slices = FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical)
         let rows = FilePickerRanking.matches(
             slices, query: "findablething", relativeTo: canonical
         )

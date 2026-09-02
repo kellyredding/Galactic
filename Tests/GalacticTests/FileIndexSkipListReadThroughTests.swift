@@ -23,12 +23,12 @@ final class FileIndexSkipListReadThroughTests: FileIndexIsolatedTestCase {
         try FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true
         )
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         FileIndexPaths.prepare()
     }
 
     override func tearDown() async throws {
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         FileIndexRefreshSweep.shared.stop()
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)
@@ -52,7 +52,7 @@ final class FileIndexSkipListReadThroughTests: FileIndexIsolatedTestCase {
     private func indexRoot() async {
         await withCheckedContinuation { continuation in
             var resumed = false
-            FileCorpusStore.shared.index(
+            FileCorpusStore.shared.startIndexing(
                 root: root,
                 onFinished: {
                     guard !resumed else { return }
@@ -64,7 +64,7 @@ final class FileIndexSkipListReadThroughTests: FileIndexIsolatedTestCase {
     }
 
     private func found(_ query: String) -> [String] {
-        let slices = FileCorpusStore.shared.slices(forCanonicalRoot: canonical)
+        let slices = FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical)
         return FileMatcher.matches(in: slices, query: query, limit: 50)
             .map { slices[$0.slice].corpus.relativePath(at: $0.index) }
     }
@@ -146,7 +146,7 @@ final class FileIndexSkipListReadThroughTests: FileIndexIsolatedTestCase {
         try touch("node_modules/library_file.swift")
         await withCheckedContinuation { continuation in
             var resumed = false
-            FileCorpusStore.shared.index(
+            FileCorpusStore.shared.startIndexing(
                 root: root, skipping: [],
                 onFinished: {
                     guard !resumed else { return }

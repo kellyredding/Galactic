@@ -208,7 +208,7 @@ public final class FileSearchPresenter: ObservableObject {
 
     private func mapIndex() {
         guard let root else { return }
-        FileCorpusStore.shared.index(root: root)
+        Task { await FileCorpusStore.shared.index(root: root) }
     }
 
     // MARK: - Searching

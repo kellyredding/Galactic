@@ -28,12 +28,12 @@ final class FileCorpusStoreOverlayCeilingTests: FileIndexIsolatedTestCase {
         try FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true
         )
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         FileIndexPaths.prepare()
     }
 
     override func tearDown() async throws {
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         FileIndexRefreshSweep.shared.stop()
         FileCorpusStore.overlayRebuildCeiling = 2_000
         unsetenv("GALACTIC_HOME")
@@ -57,7 +57,7 @@ final class FileCorpusStoreOverlayCeilingTests: FileIndexIsolatedTestCase {
     private func indexRoot() async {
         await withCheckedContinuation { continuation in
             var resumed = false
-            FileCorpusStore.shared.index(
+            FileCorpusStore.shared.startIndexing(
                 root: root, skipping: [],
                 onFinished: {
                     guard !resumed else { return }
@@ -69,9 +69,37 @@ final class FileCorpusStoreOverlayCeilingTests: FileIndexIsolatedTestCase {
     }
 
     private func found(_ query: String) -> [String] {
-        let slices = FileCorpusStore.shared.slices(forCanonicalRoot: canonical)
+        let slices = FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical)
         return FileMatcher.matches(in: slices, query: query, limit: 50)
             .map { slices[$0.slice].corpus.relativePath(at: $0.index) }
+    }
+
+    /// Wait for a coalesced rebuild to land.
+    ///
+    /// Yielding is not enough and never was: the deferred rebuild is queued on
+    /// the store's own executor, so giving up this one proves nothing about
+    /// whether that one has run.
+    private func settle(untilFound query: String, reaches count: Int) async {
+        for _ in 0..<60 where found(query).count != count {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    /// How many times the store has said it deferred a rebuild.
+    ///
+    /// Read from the log the operator reads. The alternative was a counter kept
+    /// only for this, duplicating a signal that already exists and is already
+    /// the thing consulted when asking whether the ceiling ever engages in
+    /// production — where the answer so far is that it does not.
+    private func coalescedRebuildCount() -> Int {
+        FileIndexLog.shared.drain()
+        let url = FileIndexPaths.logsDirectory
+            .appendingPathComponent("index.log")
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            return 0
+        }
+        return text.split(separator: "\n")
+            .filter { $0.contains("event=delta-coalesced") }.count
     }
 
     // MARK: - Below the ceiling
@@ -82,7 +110,7 @@ final class FileCorpusStoreOverlayCeilingTests: FileIndexIsolatedTestCase {
         await indexRoot()
         let created = try touch("src/below_ceiling.swift")
 
-        FileCorpusStore.shared.noteCreated(
+        await FileCorpusStore.shared.noteCreated(
             [created.path], canonicalRoot: canonical
         )
 
@@ -91,28 +119,38 @@ final class FileCorpusStoreOverlayCeilingTests: FileIndexIsolatedTestCase {
 
     // MARK: - Above the ceiling
 
-    /// Past the ceiling the rebuild waits a turn, so the file is not yet
-    /// searchable. This is the cost being bought, asserted so that it is a
-    /// decision rather than a surprise.
-    func testACreatedFileWaitsATurnAboveTheCeiling() async throws {
+    /// Past the ceiling the rebuild is deferred rather than run inline. This is
+    /// the cost being bought, asserted so that it is a decision rather than a
+    /// surprise.
+    ///
+    /// The deferral is asserted by the store saying it took it, not by the file
+    /// being briefly unsearchable. "Not yet searchable" is true and stops being
+    /// observable from outside: the rebuild is queued on the store's own
+    /// executor, so by the time a caller has returned and read the published
+    /// copy it may already have run. Asserting the absence therefore describes
+    /// the scheduler rather than the policy, and it failed about one run in
+    /// three while nothing was wrong. What a caller can rely on is convergence,
+    /// which `testTheOverlayConvergesAfterCoalescing` covers.
+    func testTheRebuildIsDeferredAboveTheCeiling() async throws {
         await indexRoot()
         FileCorpusStore.overlayRebuildCeiling = 1
+        let before = coalescedRebuildCount()
 
         var paths: [String] = []
         for index in 0..<3 {
             paths.append(try touch("src/over_ceiling_\(index).swift").path)
         }
-        FileCorpusStore.shared.noteCreated(paths, canonicalRoot: canonical)
+        await FileCorpusStore.shared.noteCreated(paths, canonicalRoot: canonical)
 
         XCTAssertEqual(
-            FileCorpusStore.shared.pendingOverlayCount(
+            FileIndexSnapshot.shared.pendingOverlayCount(
                 forCanonicalRoot: canonical
             ),
             3,
             "the overlay did not take the entries"
         )
-        XCTAssertTrue(
-            found("overceiling").isEmpty,
+        XCTAssertGreaterThan(
+            coalescedRebuildCount(), before,
             "the rebuild ran inline despite the overlay being over the ceiling"
         )
     }
@@ -127,9 +165,9 @@ final class FileCorpusStoreOverlayCeilingTests: FileIndexIsolatedTestCase {
         for index in 0..<3 {
             paths.append(try touch("src/converged_\(index).swift").path)
         }
-        FileCorpusStore.shared.noteCreated(paths, canonicalRoot: canonical)
+        await FileCorpusStore.shared.noteCreated(paths, canonicalRoot: canonical)
 
-        await Task.yield()
+        await settle(untilFound: "converged", reaches: 3)
 
         XCTAssertEqual(
             found("converged").sorted(),
@@ -150,10 +188,10 @@ final class FileCorpusStoreOverlayCeilingTests: FileIndexIsolatedTestCase {
 
         for index in 0..<5 {
             let path = try touch("src/batched_\(index).swift").path
-            FileCorpusStore.shared.noteCreated([path], canonicalRoot: canonical)
+            await FileCorpusStore.shared.noteCreated([path], canonicalRoot: canonical)
         }
 
-        await Task.yield()
+        await settle(untilFound: "batched", reaches: 5)
 
         XCTAssertEqual(
             found("batched").count, 5,

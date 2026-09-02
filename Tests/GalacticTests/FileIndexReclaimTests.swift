@@ -23,12 +23,12 @@ final class FileIndexReclaimTests: FileIndexIsolatedTestCase {
         try FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true
         )
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         FileIndexPaths.prepare()
     }
 
     override func tearDown() async throws {
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         FileIndexRefreshSweep.shared.stop()
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)
@@ -41,7 +41,7 @@ final class FileIndexReclaimTests: FileIndexIsolatedTestCase {
     private func indexRoot() async {
         await withCheckedContinuation { continuation in
             var resumed = false
-            FileCorpusStore.shared.index(
+            FileCorpusStore.shared.startIndexing(
                 root: root,
                 onFinished: {
                     guard !resumed else { return }
@@ -66,7 +66,9 @@ final class FileIndexReclaimTests: FileIndexIsolatedTestCase {
             to: orphan.appendingPathComponent("abc-1.gfsi")
         )
 
-        XCTAssertEqual(FileCorpusStore.shared.reclaimOrphanedShardDirectories(), 1)
+        let reclaimed = await FileCorpusStore.shared
+            .reclaimOrphanedShardDirectories()
+        XCTAssertEqual(reclaimed, 1)
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: orphan.path),
             "an unreachable directory was left on disk"
@@ -81,13 +83,13 @@ final class FileIndexReclaimTests: FileIndexIsolatedTestCase {
         let live = FileIndexPaths.shardDirectory(forCanonicalRoot: canonical)
         XCTAssertTrue(FileManager.default.fileExists(atPath: live.path))
 
-        FileCorpusStore.shared.reclaimOrphanedShardDirectories()
+        await FileCorpusStore.shared.reclaimOrphanedShardDirectories()
 
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: live.path),
             "the reclaim deleted the index it was protecting"
         )
-        let slices = FileCorpusStore.shared.slices(forCanonicalRoot: canonical)
+        let slices = FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical)
         XCTAssertFalse(slices.isEmpty, "the live corpus went with it")
     }
 
@@ -104,7 +106,7 @@ final class FileIndexReclaimTests: FileIndexIsolatedTestCase {
         XCTAssertTrue(catalog.roots().contains(canonical), "fixture not indexed")
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path))
 
-        FileCorpusStore.shared.stopIndexing(canonicalRoot: canonical)
+        await FileCorpusStore.shared.stopIndexing(canonicalRoot: canonical)
 
         XCTAssertFalse(
             catalog.roots().contains(canonical),
@@ -128,14 +130,14 @@ final class FileIndexReclaimTests: FileIndexIsolatedTestCase {
         )
         await indexRoot()
         XCTAssertFalse(
-            FileCorpusStore.shared.slices(forCanonicalRoot: canonical).isEmpty,
+            FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical).isEmpty,
             "fixture was not mapped"
         )
 
-        FileCorpusStore.shared.stopIndexing(canonicalRoot: canonical)
+        await FileCorpusStore.shared.stopIndexing(canonicalRoot: canonical)
 
         XCTAssertTrue(
-            FileCorpusStore.shared.slices(forCanonicalRoot: canonical).isEmpty,
+            FileIndexSnapshot.shared.slices(forCanonicalRoot: canonical).isEmpty,
             "the corpus is still being served after the root was dropped"
         )
     }
@@ -145,7 +147,7 @@ final class FileIndexReclaimTests: FileIndexIsolatedTestCase {
     func testTheCatalogAndLockAreNotMistakenForOrphans() async throws {
         try Data("x".utf8).write(to: root.appendingPathComponent("a_file.swift"))
         await indexRoot()
-        FileCorpusStore.shared.reclaimOrphanedShardDirectories()
+        await FileCorpusStore.shared.reclaimOrphanedShardDirectories()
 
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: FileIndexPaths.catalogFile.path),

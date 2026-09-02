@@ -68,12 +68,12 @@ final class FileIndexMultiProcessTests: FileIndexIsolatedTestCase {
         try FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true
         )
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         FileIndexPaths.prepare()
     }
 
     override func tearDown() async throws {
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         FileIndexRefreshSweep.shared.stop()
         // A child owns none of this: deleting it would take the index out from
         // under the parent that is still measuring it.
@@ -518,7 +518,7 @@ final class FileIndexMultiProcessTests: FileIndexIsolatedTestCase {
         // Then the promise itself: the sweep closes the gap.
         FileIndexRefreshSweep.targetAge = 0
         defer { FileIndexRefreshSweep.targetAge = 3_600 }
-        FileCorpusStore.shared.forgetAll()
+        await FileCorpusStore.shared.forgetAll()
         await indexRoot()
         for _ in 0..<(subtrees * 3) {
             let dirty = catalog.shards(forRoot: canonical).filter(\.dirty)
@@ -555,7 +555,7 @@ final class FileIndexMultiProcessTests: FileIndexIsolatedTestCase {
     private func indexRoot() async {
         await withCheckedContinuation { continuation in
             var resumed = false
-            FileCorpusStore.shared.index(
+            FileCorpusStore.shared.startIndexing(
                 root: root, skipping: [],
                 onFinished: {
                     guard !resumed else { return }
