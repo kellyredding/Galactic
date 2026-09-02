@@ -32,7 +32,12 @@ public final class FileRootFieldModel: ObservableObject {
     /// One directory per parent. Dropped when the panel opens rather than on a
     /// timer: a folder made since the last look should appear, and opening is
     /// when a reader asks.
-    private var cache: (parent: String, children: [String])?
+    ///
+    /// Internal rather than private so a test can assert which parent is held —
+    /// a read landing for a parent the field has left used to evict the one it
+    /// had not, and from outside that is visible only as a keystroke that went
+    /// to the disk instead of answering from memory.
+    var cache: (parent: String, children: [String])?
     private var loadingParent: String?
 
     public init(
@@ -189,14 +194,29 @@ public final class FileRootFieldModel: ObservableObject {
                 FileDirectoryReader.childDirectories(of: parent)
             }.value
             guard let self, self.isEditing else { return }
-            self.loadingParent = nil
-            self.cache = (parent, children)
+            // Only this read's own claim is released. Clearing it outright let
+            // a read that finished late release the claim a *different* parent
+            // had taken since, so the next keystroke started a second read of
+            // a directory already being read.
+            if self.loadingParent == parent { self.loadingParent = nil }
             // Re-asked rather than captured: more may have been typed while the
             // directory was read, and the rows must answer the field as it
             // stands.
             guard self.field.candidateParent(route: route) == parent else {
                 return
             }
+            // **Held only while still wanted, and that is below the guard for a
+            // reason.** One slot holds one parent, so a read landing for a
+            // parent the field has left does not merely waste its result — it
+            // evicts the parent the reader is actually typing in. Two reads are
+            // in flight together routinely, because the field opens on a path
+            // with no trailing slash and so reads the route's *parent* first,
+            // then reads the route itself as soon as a separator is typed. When
+            // that first directory is the larger of the two it lands second,
+            // and every keystroke after it paid for a fresh read of a directory
+            // whose children were already in hand — the 194 ms per draw this
+            // cache exists to avoid.
+            self.cache = (parent, children)
             self.rows = self.field.rows(children: children, route: route)
         }
     }

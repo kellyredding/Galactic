@@ -13,22 +13,41 @@ import XCTest
 @MainActor
 final class FileRootFieldModelTests: XCTestCase {
 
+    /// The route the model is pointed at.
     private var dir: URL!
 
+    /// The route's parent, and the reason it exists rather than being whatever
+    /// the machine's temporary directory happens to be.
+    ///
+    /// The field opens on a path with **no trailing slash**, so the first
+    /// directory it reads is the route's parent, not the route. Left at the
+    /// temporary directory that is the parent of every other test's scratch
+    /// space too, so what this suite read depended on how many of those the
+    /// machine had accumulated — 346 of them, a week after these tests last
+    /// passed, which is when the read became slow enough to land second and
+    /// take the cache with it. Owning the parent makes both reads this suite's
+    /// own, so a test fails for a reason in the code.
+    private var outer: URL!
+
     override func setUpWithError() throws {
-        dir = FileManager.default.temporaryDirectory
+        outer = FileManager.default.temporaryDirectory
             .appendingPathComponent("root-model-\(UUID().uuidString)")
+        dir = outer.appendingPathComponent("route")
         try FileManager.default.createDirectory(
             at: dir, withIntermediateDirectories: true
         )
     }
 
     override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: dir)
+        try? FileManager.default.removeItem(at: outer)
     }
 
     private func makeDir(_ name: String) throws -> URL {
-        let url = dir.appendingPathComponent(name)
+        try makeDir(name, in: dir)
+    }
+
+    private func makeDir(_ name: String, in parent: URL) throws -> URL {
+        let url = parent.appendingPathComponent(name)
         try FileManager.default.createDirectory(
             at: url, withIntermediateDirectories: true
         )
@@ -124,6 +143,43 @@ final class FileRootFieldModelTests: XCTestCase {
             m.rows.map(\.relativePath), ["alpha"],
             "narrowing answered synchronously, so nothing was read again"
         )
+    }
+
+    /// A read landing for a parent the field has left must not evict the parent
+    /// it is in.
+    ///
+    /// Two reads are in flight together as a matter of course, because the
+    /// field opens on a path with no trailing slash and so reads the route's
+    /// parent first, then the route itself as soon as a separator is typed. One
+    /// slot holds one parent, so whichever lands last wins — and when the one
+    /// the field has *left* is the larger, it wins by being slower.
+    ///
+    /// The ordering here is arranged rather than hoped for: the parent is given
+    /// enough entries that its read is comfortably the slower of the two, so it
+    /// is certain to land second. Before the fix the cache then named the
+    /// parent, and every keystroke inside the route went back to the disk for
+    /// children already in hand — which is the only way this is visible from
+    /// outside, and why the cache is reachable from here at all.
+    func testALateReadForALeftParentDoesNotEvictTheHeldOne() async throws {
+        for i in 0..<400 { _ = try makeDir("pad-\(i)", in: outer) }
+        for name in ["alpha", "album"] { _ = try makeDir(name) }
+        let m = model()
+
+        m.edit(dir.path + "/al")
+        try await settle(m)
+        XCTAssertEqual(m.rows.count, 2, "precondition: the route's read landed")
+
+        // Long enough for the parent's read to land several times over.
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertEqual(
+            m.cache?.parent, dir.path,
+            "the parent's read landed second and took the slot with it"
+        )
+        // And the consequence, which is the part a reader would notice:
+        // narrowing still answers from memory instead of the disk.
+        m.edit(dir.path + "/alp")
+        XCTAssertEqual(m.rows.map(\.relativePath), ["alpha"])
     }
 
     func testLeavingClearsWhatWasOffered() async throws {
