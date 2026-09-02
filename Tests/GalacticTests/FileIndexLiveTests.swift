@@ -387,6 +387,48 @@ extension FileIndexLiveTests {
             "the sibling subtree leaked in, or the path is named from the wrong root"
         )
     }
+
+    /// A file created after the subtree was covered is findable while browsing
+    /// it.
+    ///
+    /// What a subtree's scan should read is resolved when the index publishes
+    /// rather than when a keystroke asks, because restricting each of the
+    /// covering root's shards to the subtree's range is a binary search per
+    /// shard and all but one of them answer with nothing. Resolving it early
+    /// is only sound while every mutation republishes — so the case to hold
+    /// onto is this one, where what changed is the covering root's overlay and
+    /// the reader is asking about the subtree.
+    func testAFileCreatedAfterCoverageIsFoundWhileBrowsingTheSubtree() async throws {
+        try touch("projects/inside/first_file.swift")
+        await indexRoot()
+
+        let subroot = root.appendingPathComponent("projects")
+        let subCanonical = FilePaths.canonical(subroot)
+        await withCheckedContinuation { continuation in
+            var done = false
+            FileCorpusStore.shared.startIndexing(
+                root: subroot, skipping: [],
+                onFinished: { if !done { done = true; continuation.resume() } }
+            )
+        }
+
+        let created = try touch("projects/inside/second_file.swift")
+        await FileCorpusStore.shared.noteCreated(
+            [created.path], canonicalRoot: canonical
+        )
+
+        let slices = FileIndexSnapshot.shared.slices(forCanonicalRoot: subCanonical)
+        let rows = FilePickerRanking.matches(
+            slices, query: "secondfile", relativeTo: subCanonical
+        )
+        XCTAssertEqual(
+            rows.map(\.relativePath), ["inside/second_file.swift"],
+            """
+            the subtree was answered from slices resolved before the file \
+            arrived, so what a keystroke reads is outliving the publish
+            """
+        )
+    }
 }
 
 // MARK: - A dirty mark that must outlive the walk it interrupted
