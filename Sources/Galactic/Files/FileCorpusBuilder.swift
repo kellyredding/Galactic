@@ -111,6 +111,11 @@ public enum FileCorpusBuilder {
         "Library",
         "Photos Library.photoslibrary",
         "OrbStack",
+        // A Go workspace, which is a module cache rather than anywhere a
+        // reader opens a file from: one dependency download wrote 20,702
+        // files into it in four minutes. Home-only for the same reason as
+        // the rest — a `go` directory inside a checkout is source.
+        "go",
     ]
 
     /// Directories macOS asks the user about before letting anything read them.

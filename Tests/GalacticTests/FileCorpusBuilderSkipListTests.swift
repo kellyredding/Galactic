@@ -17,6 +17,7 @@ final class FileCorpusBuilderSkipListTests: XCTestCase {
         XCTAssertTrue(list.contains("Library"))
         XCTAssertTrue(list.contains("Photos Library.photoslibrary"))
         XCTAssertTrue(list.contains("OrbStack"))
+        XCTAssertTrue(list.contains("go"))
         XCTAssertTrue(
             list.isSuperset(of: FileCorpusBuilder.defaultSkipList),
             "the project noise still has to be skipped inside a home directory"
@@ -31,6 +32,10 @@ final class FileCorpusBuilderSkipListTests: XCTestCase {
         let list = FileCorpusBuilder.skipList(forRoot: repository)
 
         XCTAssertFalse(list.contains("Library"))
+        XCTAssertFalse(
+            list.contains("go"),
+            "a Go package's own directory is source, not a module cache"
+        )
         XCTAssertEqual(list, FileCorpusBuilder.defaultSkipList)
     }
 
