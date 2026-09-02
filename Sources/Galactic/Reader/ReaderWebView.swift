@@ -58,8 +58,35 @@ public class ReaderWebView: WKWebView {
     /// Defaults to false: a host that forgets to say gets a reader that
     /// declines keys rather than one that steals them, and the missing wiring
     /// shows up as a chord that does nothing instead of a chord that does
-    /// something invisible.
-    var isVisibleSurface: Bool = false
+    /// something invisible. `ReaderHostView` takes the value without a default
+    /// anyway, so no host can actually reach here without having answered.
+    ///
+    /// **Also the only thing that genuinely hides the page.** A zero alpha
+    /// stops none of what a web view does from pointer position alone: it keeps
+    /// its tracking, so it keeps setting the cursor from the page's
+    /// `cursor: pointer` and keeps raising the native tooltip an HTML `title`
+    /// asks for — both of which are drawn by AppKit outside the pane's opacity
+    /// and appeared over whatever tab replaced this one. Hit testing does not
+    /// help either: SwiftUI's `allowsHitTesting` gates its own hit test, and a
+    /// web view's tracking areas are not part of it.
+    ///
+    /// Assist Ant quiets its covered affordances with `disabled`, which is no
+    /// use here — that works because its own affordances read `isEnabled` and
+    /// drop their tracking areas, and a `WKWebView` reads nothing SwiftUI has
+    /// to say. `isHidden` is the one lever AppKit honors: no tracking, no
+    /// cursor, no tooltip, nothing composited. The page keeps its DOM, its
+    /// scroll position and its running scripts, which is what makes it safe for
+    /// a host that keeps its panes mounted on purpose.
+    var isVisibleSurface: Bool = false {
+        didSet {
+            // Unconditional rather than guarded on a change: a reader that is
+            // created while another surface is in front — a socket event
+            // opening one behind the tab the reader is on — assigns the same
+            // false it started with, and a transition guard would let that one
+            // through unhidden.
+            isHidden = !isVisibleSurface
+        }
+    }
 
     override public init(
         frame: CGRect,
