@@ -28,6 +28,7 @@ final class FileIndexSweepPolicyTests: XCTestCase {
         FileCorpusStore.shared.forgetAll()
         FileIndexRefreshSweep.shared.stop()
         FileIndexRefreshSweep.targetAge = 3_600
+        FileIndexRefreshSweep.refusalBackoff = 86_400
         unsetenv("GALACTIC_HOME")
         try? FileManager.default.removeItem(at: home)
         try await super.tearDown()
@@ -157,6 +158,75 @@ final class FileIndexSweepPolicyTests: XCTestCase {
         XCTAssertEqual(
             chosen, "Downloads",
             "a shard something reported wrong was left alone"
+        )
+    }
+
+    // MARK: - Backing off after a refusal
+
+    /// Evidence qualifies a protected directory once, not repeatedly.
+    ///
+    /// The policy above assumed a dirty mark names a directory. A replay does
+    /// not: one marked all 44 shards at once, and `Music` was selected on that
+    /// basis, spending a dialog and 27.96s to return two entries and a
+    /// refusal. Having already learned the answer is "you cannot read this",
+    /// asking again the same day buys nothing.
+    func testAProtectedDirectoryThatCameBackIncompleteIsLeftAlone() async throws {
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        catalog.adopt(root: canonical)
+        catalog.record(
+            root: canonical, name: "Downloads", generation: 1, entryCount: 2,
+            walkedAt: Date(), eventsUUID: nil, eventsID: nil,
+            refusedDirectoryCount: 1
+        )
+        catalog.markDirty(root: canonical, name: "Downloads")
+
+        XCTAssertNil(
+            FileIndexRefreshSweep.shared.nextShard(
+                in: canonical, from: catalog, now: Date()
+            ),
+            "a refusal was bought a second time inside the backoff"
+        )
+    }
+
+    /// The backoff expires. A refusal is a fact about a moment, not forever —
+    /// consent may since have been granted.
+    func testTheRefusalBackoffExpires() async throws {
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        catalog.adopt(root: canonical)
+        catalog.record(
+            root: canonical, name: "Downloads", generation: 1, entryCount: 2,
+            walkedAt: Date(timeIntervalSinceNow: -172_800),
+            eventsUUID: nil, eventsID: nil, refusedDirectoryCount: 1
+        )
+        catalog.markDirty(root: canonical, name: "Downloads")
+
+        XCTAssertEqual(
+            FileIndexRefreshSweep.shared.nextShard(
+                in: canonical, from: catalog, now: Date()
+            )?.name,
+            "Downloads",
+            "a day-old refusal still suppressed the rewalk"
+        )
+    }
+
+    /// The backoff is about the dialog, not about incompleteness. An ordinary
+    /// tree with an unreadable subdirectory is still worth rewalking promptly.
+    func testAnOpenDirectoryThatCameBackIncompleteIsStillRewalked() async throws {
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        catalog.adopt(root: canonical)
+        catalog.record(
+            root: canonical, name: "projects", generation: 1, entryCount: 5,
+            walkedAt: Date(), eventsUUID: nil, eventsID: nil,
+            refusedDirectoryCount: 1
+        )
+        catalog.markDirty(root: canonical, name: "projects")
+
+        XCTAssertEqual(
+            FileIndexRefreshSweep.shared.nextShard(
+                in: canonical, from: catalog, now: Date()
+            )?.name,
+            "projects",
+            "the backoff reached a directory that costs no dialog"
         )
     }
 

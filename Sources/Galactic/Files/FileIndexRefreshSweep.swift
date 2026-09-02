@@ -58,6 +58,16 @@ public final class FileIndexRefreshSweep {
     /// question costs nothing when the answer is "nothing yet".
     public static var tickInterval: TimeInterval = 60
 
+    /// How long a consent-protected shard is left alone after a walk that
+    /// came back incomplete.
+    ///
+    /// The policy above — a protected directory is eligible only when
+    /// something reported it wrong — assumed a dirty mark names a directory.
+    /// A replay does not: one marked all 44 shards at once, and Music was
+    /// selected on that basis. A day is long enough that a prompt cannot
+    /// recur on any schedule a reader would notice.
+    public static var refusalBackoff: TimeInterval = 86_400
+
     private var timer: Timer?
     private var roots: Set<String> = []
     /// Which shards are being refreshed right now, as `root` and name.
@@ -201,6 +211,22 @@ public final class FileIndexRefreshSweep {
                         Self.inFlightKey(root: root, shard: shard.name)
                     )
                 else { return false }
+
+                // A protected shard whose last walk came back incomplete
+                // has already spent a consent dialog to learn very little —
+                // one measured pass took 27.96s to yield two entries and a
+                // refusal. `walkedAt` is written for a refused attempt too,
+                // so it dates the incomplete walk without a second column.
+                if shard.isIncomplete,
+                    FileCorpusBuilder.isConsentProtected(
+                        shard: shard.name, underCanonicalRoot: root
+                    ),
+                    now.timeIntervalSince(shard.walkedAt)
+                        < Self.refusalBackoff
+                {
+                    return false
+                }
+
                 if shard.dirty { return true }
                 guard now.timeIntervalSince(shard.walkedAt) >= Self.targetAge
                 else { return false }
