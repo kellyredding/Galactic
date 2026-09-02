@@ -895,6 +895,11 @@ public final class FileCorpusStore {
             [("event", "new-subtrees"), ("count", "\(names.count)"),
              ("names", names.prefix(6).joined(separator: ","))]
         )
+        // A name that had no shard to mark now has one, so the dedupe holding
+        // its failed marks has to let go. Nothing else can decide this: the
+        // dedupe exists precisely because re-testing per event is what it was
+        // added to avoid.
+        for name in names { roots[canonical]?.unmarkableShards.remove(name) }
         for name in names {
             await walk(
                 shard: name, canonical: canonical, root: root,
@@ -1156,6 +1161,20 @@ public final class FileCorpusStore {
     /// point where the rebuild is felt.
     static let overlayCompactionThreshold = 500
 
+    /// The overlay size past which the delta rebuild is coalesced rather than
+    /// run once per batch.
+    ///
+    /// Above the compaction threshold, because compaction is the intended
+    /// answer to a large overlay and this is only what keeps the main actor
+    /// usable while that happens. Below the size at which a single rebuild is
+    /// itself felt: two incidents reached 13,226 and 38,718 entries, and at
+    /// those sizes the per-batch rebuild starved the very sweep that drains
+    /// the overlay for ten minutes.
+    static var overlayRebuildCeiling = 2_000
+
+    /// Roots whose delta rebuild is already waiting on the next turn.
+    private var deltaRebuildQueued: Set<String> = []
+
     /// Mark any shard carrying too much overlay for a rewalk.
     ///
     /// Dirty shards already jump the sweep queue, so this needs no scheduler
@@ -1297,15 +1316,54 @@ public final class FileCorpusStore {
     /// Rebuilt whole rather than appended to, because a corpus is immutable
     /// once built, which is what lets a scan hold one without synchronisation.
     ///
-    /// Deliberately **not** coalesced across event batches, though it looked
-    /// like the obvious companion fix to the one above. Eighty-four batches in
-    /// a second do mean eighty-four rebuilds, but the overlay is a few hundred
-    /// entries — thousands of appends and a sort of a two-hundred-element array,
-    /// which is microseconds. Deferring it to the next turn of the loop would
-    /// buy that back and make a created file asynchronously visible, so a
-    /// caller reading straight after being told about one could miss it. The
-    /// cost was the forty-five-shard search, not this.
+    /// Not coalesced across event batches while the overlay is small, though
+    /// it looked like the obvious companion fix to the one above. Eighty-four
+    /// batches in a second do mean eighty-four rebuilds, but a few hundred
+    /// entries is thousands of appends and a sort of a two-hundred-element
+    /// array, which is microseconds. Deferring that to the next turn of the
+    /// loop would buy back nothing and make a created file asynchronously
+    /// visible, so a caller reading straight after being told about one could
+    /// miss it.
+    ///
+    /// Past `overlayRebuildCeiling` the arithmetic inverts and the deferral
+    /// is taken — see `queueDeltaRebuild`.
     private func rebuildDelta(root: String) {
+        guard let state = roots[root] else { return }
+        guard state.added.count <= Self.overlayRebuildCeiling else {
+            queueDeltaRebuild(root: root)
+            return
+        }
+        rebuildDeltaNow(root: root)
+    }
+
+    /// Coalesce to one rebuild per turn of the main actor.
+    ///
+    /// The premise above — that the overlay is a few hundred entries — had
+    /// nothing enforcing it. A stale-cursor replay drove it to 13,226 and one
+    /// dependency cache to 38,718, and at those sizes a per-batch rebuild
+    /// holds the main actor for minutes and starves the sweep that would
+    /// drain it, so the rebuilds and the backlog feed each other.
+    ///
+    /// This trades exactly what the synchronous path exists to protect, and
+    /// only where that protection has become the more expensive of the two.
+    private func queueDeltaRebuild(root: String) {
+        guard !deltaRebuildQueued.contains(root) else { return }
+        deltaRebuildQueued.insert(root)
+        log.record(
+            "watch",
+            [
+                ("event", "delta-coalesced"),
+                ("pending", "\(roots[root]?.added.count ?? 0)"),
+                ("ceiling", "\(Self.overlayRebuildCeiling)"),
+            ]
+        )
+        Task { @MainActor in
+            self.deltaRebuildQueued.remove(root)
+            self.rebuildDeltaNow(root: root)
+        }
+    }
+
+    private func rebuildDeltaNow(root: String) {
         guard let state = roots[root] else { return }
         guard !state.added.isEmpty else {
             roots[root]?.delta = nil
