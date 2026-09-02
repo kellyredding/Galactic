@@ -884,25 +884,36 @@ public actor FileCorpusStore {
         let started = Date()
         let alreadyHeld = roots[canonical]?.shards.values.reduce(0) { $0 + $1.entryCount } ?? 0
 
+        // Reported on a clock rather than per callback. The builder reports
+        // once for every directory it enters, which is what makes it cheap for
+        // a synchronous consumer and expensive for this one: each report leaves
+        // the walking thread for the store and again for the main actor, and a
+        // home directory is tens of thousands of directories. Throttling
+        // belongs here rather than in the builder, because the hop is what
+        // costs and the builder has no hop.
+        let clock = ProgressClock()
         let walked = await Task.detached(priority: .utility) {
             FileCorpusBuilder.buildShard(
                 root: root,
                 shard: shard,
                 skipping: skipList,
                 onProgress: { count in
-                    // Two hops rather than one: the count belongs to the
-                    // store, the callback belongs to whoever is drawing a
-                    // progress bar, and those are no longer the same
-                    // isolation.
-                    Task {
-                        await FileCorpusStore.shared.report(
-                            alreadyHeld + count, for: canonical
-                        )
-                    }
-                    Task { @MainActor in onProgress(alreadyHeld + count) }
+                    guard clock.shouldReport() else { return }
+                    Self.reportProgress(
+                        alreadyHeld + count, for: canonical,
+                        to: onProgress
+                    )
                 }
             )
         }.value
+        // The clock can swallow the builder's last report, so the true total is
+        // sent once the walk is done. Nothing downstream depends on it — a
+        // finished shard is counted from the shard — but leaving a label on a
+        // number that was never the answer is its own small defect.
+        Self.reportProgress(
+            alreadyHeld + walked.corpus.entryCount, for: canonical,
+            to: onProgress
+        )
 
         // A refused top directory is not an empty one, and the corpus looks the
         // same either way. Keeping what is already mapped and declining to
@@ -1088,6 +1099,46 @@ public actor FileCorpusStore {
                 "publish",
                 [("shard", shard), ("result", "failed"), ("error", "\(error)")]
             )
+        }
+    }
+
+    /// Rate-limits progress reporting during a walk.
+    ///
+    /// Mutated only from the thread doing the walking: `buildShard` is
+    /// synchronous and reports from the one thread it runs on, so this needs no
+    /// synchronisation of its own. It is a class rather than a captured `var`
+    /// because the closure holding it escapes into the builder.
+    final class ProgressClock: @unchecked Sendable {
+
+        /// A tenth of a second. What consumes this is a label showing a running
+        /// count, which cannot be read faster, so anything more frequent buys
+        /// nothing and costs two hops off the walking thread.
+        static let interval: TimeInterval = 0.1
+
+        private var last = Date.distantPast
+
+        func shouldReport(now: Date = Date()) -> Bool {
+            guard now.timeIntervalSince(last) >= Self.interval else {
+                return false
+            }
+            last = now
+            return true
+        }
+    }
+
+    /// Carry a running count to the store and to whoever is drawing it.
+    ///
+    /// One task rather than two. The count belongs to the store and the label
+    /// belongs to the main actor, which are no longer the same isolation — but
+    /// they are the same event, and ordering them means a label never leads the
+    /// state it describes.
+    private nonisolated static func reportProgress(
+        _ count: Int, for root: String,
+        to onProgress: @MainActor @escaping (Int) -> Void
+    ) {
+        Task {
+            await FileCorpusStore.shared.report(count, for: root)
+            await MainActor.run { onProgress(count) }
         }
     }
 
