@@ -147,8 +147,7 @@ public final class FilesSurface {
                 .map { row in row.filter { $0 != resultsPath } }
                 .filter { !$0.isEmpty },
             selectedPath: set.selectedPath == resultsPath
-                ? nil : set.selectedPath,
-            lastFollowedAgentRoot: set.lastFollowedAgentRoot
+                ? nil : set.selectedPath
         )
     }
 
@@ -167,9 +166,6 @@ public final class FilesSurface {
         if !saved.root.isEmpty {
             set.changeRoot(to: URL(fileURLWithPath: saved.root))
         }
-        // Without this the first visit after a launch reads a nil memory as the
-        // agent having moved, and re-roots away from the root just restored.
-        set.noteFollowedAgentRoot(saved.lastFollowedAgentRoot)
         set.restore(
             openPathRows: saved.openPathRows, selectedPath: saved.selectedPath
         )
@@ -238,18 +234,90 @@ public final class FilesSurface {
         FilePickerPresenter.shared.present()
     }
 
-    /// Leaving Files takes the panels with it.
+    /// Which panel was up when the surface was last left, to be put back when
+    /// it returns. In memory only, and for one round trip.
+    ///
+    /// **The two rooted panels only.** Both are a place in a tree — they read
+    /// the same `currentSet.root` and either can move it — so leaving one open
+    /// says the reader is mid-task somewhere and wants to come back to it. The
+    /// line jump is about the open document rather than about a root, holds no
+    /// saved state, and clears its query on every present, so restoring it
+    /// would raise an empty prompt nobody asked for.
+    private var panelLeftOpen: OpenPanel?
+
+    private enum OpenPanel { case picker, searcher }
+
+    /// The host's Files surface is going away.
+    ///
+    /// **The panels go down with it, and that is a correctness point rather
+    /// than tidiness.** An overlay left presented while nothing draws it keeps
+    /// its Escape monitor armed, and a local monitor runs ahead of the
+    /// responder chain — so an Escape meant for a running agent is swallowed
+    /// dismissing a card nobody can see, and the abort it was meant to trigger
+    /// never happens. `ModalState` refuses file drops on the same predicate, so
+    /// dragging stops working everywhere for as long as that state lasts.
+    ///
+    /// Which panel was up is remembered rather than discarded, because coming
+    /// back to it is the one way a reader keeps a root across a visit
+    /// elsewhere — see `enterFilesSurface`.
+    public func leaveFilesSurface() {
+        panelLeftOpen =
+            FilePickerPresenter.shared.isPresented
+            ? .picker
+            : (FileSearchPresenter.shared.isPresented ? .searcher : nil)
+        dismissPanels()
+    }
+
+    /// The host's Files surface is coming back.
+    ///
+    /// **A panel left open is the escape hatch from the re-root.** It is put
+    /// back as it was and the root is left alone, so a reader who has browsed
+    /// somewhere and wants to keep it simply does not close the picker before
+    /// stepping away. One who does close it arrives at the agent's directory.
+    ///
+    /// Nothing is restored by hand: each presenter saves its own place per
+    /// owner as it dismisses and reads it back as it presents. That restore is
+    /// conditional on the root not having moved, which holds here precisely
+    /// because this path declines to move it.
+    ///
+    /// - Parameter agentRoot: where the host's agent is now, or nil for a host
+    ///   with no agent to follow.
+    /// - Returns: whether the set was re-rooted.
+    @discardableResult
+    public func enterFilesSurface(agentRoot: URL?) -> Bool {
+        if let panel = panelLeftOpen {
+            panelLeftOpen = nil
+            switch panel {
+            case .picker: FilePickerPresenter.shared.present()
+            case .searcher: FileSearchPresenter.shared.present()
+            }
+            return false
+        }
+        guard let agentRoot else { return false }
+        return followAgentRoot(to: agentRoot)
+    }
+
+    /// Take every panel down.
     ///
     /// A menu key equivalent is matched ahead of the responder chain entirely,
     /// so the view-switch chords reach the menu even while a panel holds the
     /// keyboard. Without this a panel is left floating over a surface it cannot
     /// open a file into.
+    ///
+    /// **All three, which is what `GalacticModals.filesPanelIsClaimingKeyboard`
+    /// already counts.** The line jump was missing here for as long as both
+    /// existed: left up, it went on holding an armed Escape monitor behind a
+    /// surface nobody was looking at, and blocked every later re-root through a
+    /// guard that could not see which panel was answering.
     public func dismissPanels() {
         if FilePickerPresenter.shared.isPresented {
             FilePickerPresenter.shared.dismiss()
         }
         if FileSearchPresenter.shared.isPresented {
             FileSearchPresenter.shared.dismiss()
+        }
+        if LineJumpPresenter.shared.isPresented {
+            LineJumpPresenter.shared.dismiss()
         }
     }
 
@@ -473,20 +541,24 @@ public final class FilesSurface {
         persist(set)
     }
 
-    /// Re-root the current set to where its agent now is, if the agent has
-    /// moved since this set last followed it.
+    /// Re-root the current set to where its agent now is.
     ///
-    /// The host decides when to ask — Galaxy asks on entering its Files tab —
-    /// and what its agent's directory is. What is decided here is whether the
-    /// ask amounts to anything, because both facts it turns on live here: the
-    /// root last followed, and whether a panel is open.
+    /// The host decides when to ask — Galaxy asks on arriving at its Files tab
+    /// — and what its agent's directory is. What is decided here is whether
+    /// the ask amounts to anything.
     ///
-    /// **Refuses while a Files panel is up, and deliberately does not record
-    /// the root when it refuses.** A reader with the picker open is mid-task,
-    /// and the point of asking on entry rather than on the agent's event is to
-    /// never move the ground under them. Recording it anyway would satisfy the
-    /// comparison on the next entry and lose the reset entirely, so the refusal
-    /// has to leave the question open.
+    /// **Arriving is what resets the root, so a root the reader chose lasts as
+    /// long as they stay on the surface and no longer.** Compared against the
+    /// set's own root rather than against a memory of the last directory
+    /// followed, and that memory is the thing this replaced: an agent sitting
+    /// in one directory for a whole session matched it from the first arrival
+    /// onward, so the follow fired exactly once and a reader's own re-root was
+    /// never undone again. A reader who wants a root to survive a trip to
+    /// another tab leaves a panel open — see `enterFilesSurface`.
+    ///
+    /// **Refuses while a Files panel is up.** A reader with the picker open is
+    /// mid-task, and the point of asking on arrival rather than on the agent's
+    /// event is to never move the ground under them.
     ///
     /// **Refuses before the owner's set exists**, which is what keeps it from
     /// running ahead of `restoreIfNeeded`. A set created here would be empty,
@@ -507,16 +579,8 @@ public final class FilesSurface {
         }
 
         let canonical = FilePaths.canonical(url)
-        guard set.lastFollowedAgentRoot != canonical else { return false }
+        guard FilePaths.canonical(set.root) != canonical else { return false }
 
-        set.noteFollowedAgentRoot(canonical)
-        // The agent moved somewhere the reader had already browsed to. Worth
-        // recording so the next move is measured from here, but there is
-        // nothing to re-root and no change to report.
-        guard FilePaths.canonical(set.root) != canonical else {
-            persist(set)
-            return false
-        }
         set.changeRoot(to: url)
         persist(set)
         return true

@@ -3,11 +3,15 @@ import XCTest
 
 @testable import Galactic
 
-/// Following an agent's directory, and the four ways of not following it.
+/// Following an agent's directory, and the three ways of not following it.
 ///
 /// The refusals are the substance. Re-rooting is one line; what took the
-/// deciding was when *not* to — a reader mid-task, a reader who chose their own
-/// root, and an agent that has not actually gone anywhere.
+/// deciding was when *not* to — a reader mid-task, a set that does not exist
+/// yet, and an agent that is already where the reader is.
+///
+/// A root the reader chose is deliberately *not* among them: arriving at the
+/// surface resets it, and keeping one across a visit elsewhere is what leaving
+/// a panel open is for.
 @MainActor
 final class FilesSurfaceFollowAgentTests: XCTestCase {
 
@@ -64,6 +68,7 @@ final class FilesSurfaceFollowAgentTests: XCTestCase {
     override func tearDownWithError() throws {
         FilePickerPresenter.shared.dismiss()
         FileSearchPresenter.shared.dismiss()
+        LineJumpPresenter.shared.dismiss()
         try? FileManager.default.removeItem(at: dir)
         try super.tearDownWithError()
     }
@@ -87,6 +92,11 @@ final class FilesSurfaceFollowAgentTests: XCTestCase {
         FilePickerPresenter.shared.present()
     }
 
+    private func presentSearcher() {
+        FileSearchPresenter.shared.rootProvider = { nil }
+        FileSearchPresenter.shared.present()
+    }
+
     // MARK: - Following
 
     func testFollowingAnAgentThatMovedRerootsTheSet() throws {
@@ -107,41 +117,35 @@ final class FilesSurfaceFollowAgentTests: XCTestCase {
         XCTAssertFalse(moved)
     }
 
-    /// An agent that moved to where the reader already was records the move
-    /// without reporting one — there is nothing to re-root.
-    func testAnAgentMovingToTheCurrentRootRecordsWithoutMoving() throws {
+    /// An agent already where the reader is moves nothing.
+    func testAnAgentAtTheCurrentRootMovesNothing() throws {
         let a = try make("a")
         surface.changeRoot(to: a)
 
         let moved = surface.followAgentRoot(to: a)
 
         XCTAssertFalse(moved)
-        XCTAssertEqual(
-            surface.currentSet.lastFollowedAgentRoot, FilePaths.canonical(a)
-        )
     }
 
     // MARK: - The reader's own root
 
-    /// **The reader's own choice survives.** A root they browsed to differs
-    /// from the agent's cwd for as long as they leave it there, so a comparison
-    /// against the set's root would undo it on every visit.
-    func testAReaderRerootIsNotUndoneWhileTheAgentStaysPut() throws {
+    /// **A root the reader chose does not survive the next arrival.** Compared
+    /// against the set's own root, so an agent that never moves is still
+    /// followed every time — which the memory this replaced made impossible,
+    /// since it matched from the first arrival onward and the follow fired
+    /// exactly once for the life of a session.
+    func testAReaderRerootIsUndoneOnTheNextArrival() throws {
         let a = try make("a")
         surface.followAgentRoot(to: a)
         surface.changeRoot(to: try make("elsewhere"))
 
         let moved = surface.followAgentRoot(to: a)
 
-        XCTAssertFalse(moved)
-        XCTAssertEqual(
-            surface.currentSet.root.lastPathComponent, "elsewhere",
-            "the agent has not moved, so the reader's root stands"
-        )
+        XCTAssertTrue(moved)
+        XCTAssertEqual(surface.currentSet.root.lastPathComponent, "a")
     }
 
-    /// And is undone once the agent does move, which is the requested behaviour
-    /// rather than a concession.
+    /// And equally when the agent has moved on in the meantime.
     func testAReaderRerootYieldsOnceTheAgentMoves() throws {
         surface.followAgentRoot(to: try make("a"))
         surface.changeRoot(to: try make("elsewhere"))
@@ -209,13 +213,12 @@ final class FilesSurfaceFollowAgentTests: XCTestCase {
 
     // MARK: - Across a relaunch
 
-    /// A root chosen before quitting comes back, rather than being read as a
-    /// move the moment the reader first opens Files again.
+    /// A root chosen before quitting comes back with the set, and then yields
+    /// on the first arrival — a relaunch is an arrival like any other.
     ///
-    /// The whole of what persisting the memory buys: restored without it, the
-    /// nil answers "the agent has gone somewhere new" for an agent that has not
-    /// moved at all, and the reader's root is gone on the first visit.
-    func testAReaderRerootSurvivesARelaunchWithTheAgentStationary() throws {
+    /// The tabs that came back with it are untouched: re-rooting moves where
+    /// browsing starts, not what is open.
+    func testARestoredRootYieldsToTheAgentOnTheFirstArrival() throws {
         let store = Store()
         let agent = try make("a")
         let chosen = try make("elsewhere")
@@ -228,7 +231,106 @@ final class FilesSurfaceFollowAgentTests: XCTestCase {
         second.restoreIfNeeded(ownerID: host.currentOwnerID)
         let moved = second.followAgentRoot(to: agent)
 
+        XCTAssertTrue(moved)
+        XCTAssertEqual(second.currentSet.root.lastPathComponent, "a")
+    }
+
+    // MARK: - Leaving and coming back
+
+    /// **A panel left open is the escape hatch**, and the only one. A reader
+    /// who wants a root to survive a trip to another tab does not close the
+    /// picker before going.
+    func testAPanelLeftOpenSurvivesTheRoundTripAndBlocksTheReroot() throws {
+        let chosen = try make("elsewhere")
+        surface.changeRoot(to: chosen)
+        presentPicker()
+
+        surface.leaveFilesSurface()
+        XCTAssertFalse(
+            FilePickerPresenter.shared.isPresented,
+            "the panel goes down while the surface is away, so nothing "
+                + "invisible holds the keyboard"
+        )
+
+        let moved = surface.enterFilesSurface(agentRoot: try make("a"))
+
         XCTAssertFalse(moved)
-        XCTAssertEqual(second.currentSet.root.lastPathComponent, "elsewhere")
+        XCTAssertTrue(FilePickerPresenter.shared.isPresented)
+        XCTAssertEqual(surface.currentSet.root.lastPathComponent, "elsewhere")
+    }
+
+    /// With nothing open, coming back is a plain arrival.
+    func testComingBackWithNoPanelRerootsToTheAgent() throws {
+        surface.changeRoot(to: try make("elsewhere"))
+
+        let moved = surface.enterFilesSurface(agentRoot: try make("a"))
+
+        XCTAssertTrue(moved)
+        XCTAssertEqual(surface.currentSet.root.lastPathComponent, "a")
+        XCTAssertFalse(FilePickerPresenter.shared.isPresented)
+    }
+
+    /// The hatch is spent once used, so a second trip with nothing open
+    /// re-roots like any other arrival.
+    func testTheHatchIsNotReusedOnTheNextTrip() throws {
+        surface.changeRoot(to: try make("elsewhere"))
+        presentPicker()
+        surface.leaveFilesSurface()
+        surface.enterFilesSurface(agentRoot: try make("a"))
+        FilePickerPresenter.shared.dismiss()
+
+        surface.leaveFilesSurface()
+        let moved = surface.enterFilesSurface(agentRoot: try make("a"))
+
+        XCTAssertTrue(moved)
+        XCTAssertEqual(surface.currentSet.root.lastPathComponent, "a")
+    }
+
+    /// The searcher is a rooted surface too — it reads the same set root, and
+    /// its own root field can move it — so it gets the same hatch.
+    func testTheSearcherLeftOpenAlsoSurvivesAndBlocksTheReroot() throws {
+        surface.changeRoot(to: try make("elsewhere"))
+        presentSearcher()
+
+        surface.leaveFilesSurface()
+        XCTAssertFalse(FileSearchPresenter.shared.isPresented)
+
+        let moved = surface.enterFilesSurface(agentRoot: try make("a"))
+
+        XCTAssertFalse(moved)
+        XCTAssertTrue(FileSearchPresenter.shared.isPresented)
+        XCTAssertEqual(surface.currentSet.root.lastPathComponent, "elsewhere")
+    }
+
+    /// **The line jump goes down with the rest and is not put back.** It holds
+    /// an armed Escape monitor like the other two, so leaving it presented
+    /// behind an unwatched surface is the same defect — but it is about the
+    /// open document rather than about a root, so arriving re-roots as usual.
+    func testTheLineJumpIsDismissedAndDoesNotBlockTheReroot() throws {
+        surface.changeRoot(to: try make("elsewhere"))
+        LineJumpPresenter.shared.present()
+
+        surface.leaveFilesSurface()
+        XCTAssertFalse(LineJumpPresenter.shared.isPresented)
+
+        let moved = surface.enterFilesSurface(agentRoot: try make("a"))
+
+        XCTAssertTrue(moved)
+        XCTAssertFalse(LineJumpPresenter.shared.isPresented)
+        XCTAssertEqual(surface.currentSet.root.lastPathComponent, "a")
+    }
+
+    /// A host with no agent to follow leaves the root alone, and still gets its
+    /// panel back.
+    func testAHostWithNoAgentRootKeepsItsRootAndItsPanel() throws {
+        surface.changeRoot(to: try make("elsewhere"))
+        presentPicker()
+        surface.leaveFilesSurface()
+
+        let moved = surface.enterFilesSurface(agentRoot: nil)
+
+        XCTAssertFalse(moved)
+        XCTAssertTrue(FilePickerPresenter.shared.isPresented)
+        XCTAssertEqual(surface.currentSet.root.lastPathComponent, "elsewhere")
     }
 }
