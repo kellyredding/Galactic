@@ -343,32 +343,52 @@ extension TerminalBackend {
                 outcome?(.abandoned)
                 return
             }
-            self.send(text: text, asPaste: false)
-            SessionSubmit.log(
-                String(
-                    format: "  input %@ (+%.0fms) — wrote text",
-                    ready ? "ready" : "TIMED OUT",
-                    Date().timeIntervalSince(t0) * 1000)
-            )
+            // Submitted only once the text is genuinely there. The pacing
+            // delay used to start when the write was *handed over*, which for
+            // anything past a pty's ~1022 bytes is well before it has landed —
+            // so the submit sent the part that had arrived and the rest turned
+            // up afterwards, unattached, as a fragment of its own.
+            self.send(text: text, asPaste: false) { wrote in
+                SessionSubmit.log(
+                    String(
+                        format: "  input %@ (+%.0fms) — %@",
+                        ready ? "ready" : "TIMED OUT",
+                        Date().timeIntervalSince(t0) * 1000,
+                        wrote ? "wrote text" : "WRITE INCOMPLETE")
+                )
 
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + harness.inputPacingDelay
-            ) {
-                guard isAlive() else {
-                    SessionSubmit.log("  session gone before the submit")
+                guard wrote else {
+                    // Not submitted, deliberately. A fragment submitted reads
+                    // as a whole instruction, which is worse than one that
+                    // never went — and the retry policy can still resend the
+                    // whole thing, which a half-submitted prompt cannot be
+                    // rescued into.
+                    SessionSubmit.log(
+                        "  not submitting a partial write")
                     then?()
                     outcome?(.abandoned)
                     return
                 }
-                self.submitPrompt(harness: harness)
-                self.verifySubmission(
-                    text: text,
-                    harness: harness,
-                    verification: verification,
-                    retry: retry,
-                    outcome: outcome
-                )
-                then?()
+
+                DispatchQueue.main.asyncAfter(
+                    deadline: .now() + harness.inputPacingDelay
+                ) {
+                    guard isAlive() else {
+                        SessionSubmit.log("  session gone before the submit")
+                        then?()
+                        outcome?(.abandoned)
+                        return
+                    }
+                    self.submitPrompt(harness: harness)
+                    self.verifySubmission(
+                        text: text,
+                        harness: harness,
+                        verification: verification,
+                        retry: retry,
+                        outcome: outcome
+                    )
+                    then?()
+                }
             }
         }
     }
@@ -477,33 +497,50 @@ extension TerminalBackend {
             // repeats the previous command — so the second write is what
             // stops a rescue from re-running unrelated work. A harness that
             // does nothing on an empty submit is safe to resubmit directly.
+            let resubmit = { [weak self] in
+                DispatchQueue.main.asyncAfter(
+                    deadline: .now() + harness.inputPacingDelay
+                ) {
+                    guard let self, verification.isAlive() else {
+                        outcome?(.abandoned)
+                        return
+                    }
+                    self.submitPrompt(harness: harness)
+                    self.verifySubmission(
+                        text: text,
+                        harness: harness,
+                        verification: verification,
+                        retry: retry,
+                        retriesLeft: remaining - 1,
+                        outcome: outcome
+                    )
+                }
+            }
+
             if harness.retypeOnRetry {
                 SessionSubmit.log(
                     "  NOT accepted — retyping and resubmitting (\(remaining) left)"
                 )
-                self.send(text: text, asPaste: false)
+                // Waits for the retype the same way the first attempt waits
+                // for its own write, and for a sharper reason: this is the
+                // rescue. Submitting a half-written retype turns one prompt
+                // that went unconfirmed into a fragment that reads as an
+                // instruction, which is the outcome a retry exists to avoid.
+                self.send(text: text, asPaste: false) { wrote in
+                    guard wrote else {
+                        SessionSubmit.log(
+                            "  retype INCOMPLETE — not resubmitting"
+                        )
+                        outcome?(.abandoned)
+                        return
+                    }
+                    resubmit()
+                }
             } else {
                 SessionSubmit.log(
                     "  NOT accepted — resubmitting (\(remaining) left)"
                 )
-            }
-
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + harness.inputPacingDelay
-            ) { [weak self] in
-                guard let self, verification.isAlive() else {
-                    outcome?(.abandoned)
-                    return
-                }
-                self.submitPrompt(harness: harness)
-                self.verifySubmission(
-                    text: text,
-                    harness: harness,
-                    verification: verification,
-                    retry: retry,
-                    retriesLeft: remaining - 1,
-                    outcome: outcome
-                )
+                resubmit()
             }
         }
     }

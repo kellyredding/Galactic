@@ -189,6 +189,31 @@ public protocol TerminalBackend: AnyObject {
     /// `asPaste` has no effect and the text is sent verbatim.
     func send(text: String, asPaste: Bool)
 
+    /// Send text, reporting when every byte has reached the child.
+    ///
+    /// Required rather than defaulted, and that is the point: a default that
+    /// reported completion the moment it had handed the bytes over is exactly
+    /// the answer that made a prompt arrive in two pieces, and it would be
+    /// silently inherited by any backend that did not think about it.
+    ///
+    /// The report is what a caller needs before writing a keystroke that
+    /// depends on the text being there — a submit, above all. **No delay can
+    /// stand in for it.** A pty in raw mode was measured to take about 1022
+    /// bytes at a time, so a composed prompt of any size needs several rounds
+    /// against a child that is busy, and how long those take is a fact about
+    /// what the child is doing rather than about the text. A prompt written
+    /// while an agent worked had its submit pressed after 100 ms flat, which
+    /// sent the part that had landed and left the rest to arrive afterwards,
+    /// on its own, into whatever was on screen by then.
+    ///
+    /// `completion` reports `false` when the bytes did not all get there. A
+    /// caller must not submit then: a fragment submitted is worse than
+    /// nothing, because it reads as a whole instruction.
+    ///
+    /// Delivered on the main queue.
+    func send(
+        text: String, asPaste: Bool, completion: @escaping (Bool) -> Void)
+
     /// Adjust scrollback history size at runtime.
     func changeHistorySize(_ lines: Int)
 

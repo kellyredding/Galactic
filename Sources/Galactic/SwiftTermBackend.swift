@@ -325,6 +325,30 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
         }
     }
 
+    /// Write the text, then report once it has all reached the child.
+    ///
+    /// The bytes still go through the view rather than straight to the
+    /// process, because the view does more than forward them — the caret is
+    /// brought back into view on the way past — and a write that skipped it
+    /// would be a different write.
+    ///
+    /// Completion is a **zero-byte send queued behind the payload**. The
+    /// process serializes its writes, so a send issued after the text is
+    /// dequeued after it, and an empty one completes as soon as it is reached
+    /// — which is exactly the moment the text before it finished. Asking the
+    /// question this way keeps the reporting to one place rather than
+    /// threading a callback through every layer between here and the pty.
+    func send(
+        text: String, asPaste: Bool, completion: @escaping (Bool) -> Void
+    ) {
+        send(text: text, asPaste: asPaste)
+        guard let process = terminalView.process else {
+            completion(false)
+            return
+        }
+        process.send(data: ArraySlice<UInt8>(), completion: completion)
+    }
+
     // MARK: - Buffer / appearance
 
     func changeHistorySize(_ lines: Int) {

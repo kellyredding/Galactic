@@ -28,6 +28,39 @@ final class StubBackend: TerminalBackend {
     }
     func send(bytes: [UInt8]) { bytesWritten.append(bytes) }
 
+    /// What the next completion-bearing write reports.
+    ///
+    /// Settable so a test can describe a write that did not all get there,
+    /// which is the case the submit path has to decline rather than press
+    /// Return into.
+    var writeSucceeds = true
+
+    /// Held rather than called, when a test wants to observe the gap.
+    ///
+    /// The point of the completion is that the submit waits for it, and a stub
+    /// that always answered immediately could not tell a caller that waits
+    /// from one that does not. Left nil, it answers straight away.
+    var heldWriteCompletion: ((Bool) -> Void)?
+    var holdsWriteCompletion = false
+
+    func send(
+        text: String, asPaste: Bool, completion: @escaping (Bool) -> Void
+    ) {
+        send(text: text, asPaste: asPaste)
+        if holdsWriteCompletion {
+            heldWriteCompletion = completion
+        } else {
+            completion(writeSucceeds)
+        }
+    }
+
+    /// Release a held write, as the pty draining would.
+    func completeHeldWrite(_ ok: Bool = true) {
+        let held = heldWriteCompletion
+        heldWriteCompletion = nil
+        held?(ok)
+    }
+
     // Unused by the tests that share this.
     var view: NSView { NSView() }
     var viewportRow: Int { 0 }

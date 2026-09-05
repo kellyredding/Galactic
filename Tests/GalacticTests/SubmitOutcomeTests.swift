@@ -244,4 +244,67 @@ final class SubmitOutcomeTests: XCTestCase {
         XCTAssertEqual(reported, [.abandoned])
         XCTAssertTrue(backend.written.isEmpty)
     }
+
+    // MARK: - Waiting for the write
+
+    /// **The regression these exist for.** The submit used to be scheduled a
+    /// fixed 100ms after the write was *handed over*, which for a payload past
+    /// a pty's ~1022 bytes is well before it has landed: the part that had
+    /// arrived was submitted, and the remainder turned up afterwards as a
+    /// fragment of its own, submitted separately as though it were an
+    /// instruction. Nothing here could have caught that, because nothing
+    /// distinguished handing bytes over from their arriving.
+    func testTheSubmitWaitsForTheWriteToLand() {
+        let (quick, backend) = quickGesture()
+        let agent = Agent()
+        agent.accepted = true
+        backend.holdsWriteCompletion = true
+
+        backend.deliverPrompt(
+            "hello", harness: quick,
+            isAlive: { true },
+            verification: agent.verification,
+            outcome: { _ in })
+        settle(6)
+
+        XCTAssertEqual(
+            backend.written, ["hello "],
+            "the text goes out first, with the harness's trailing space")
+        XCTAssertTrue(
+            backend.bytesWritten.isEmpty,
+            "no submit while the write is still in flight")
+
+        backend.completeHeldWrite()
+        settle(6)
+
+        XCTAssertEqual(
+            backend.bytesWritten, [[0x0D]],
+            "the submit follows once the bytes have landed")
+    }
+
+    /// A write that did not all get there must not be submitted. A fragment
+    /// reads as a whole instruction, which is worse than a prompt that never
+    /// went — and only a whole prompt can be retried.
+    func testAPartialWriteIsNotSubmitted() {
+        let (quick, backend) = quickGesture()
+        backend.writeSucceeds = false
+        var reported: [SubmitOutcome] = []
+        var gestureFinished = false
+
+        backend.deliverPrompt(
+            "hello", harness: quick,
+            isAlive: { true },
+            verification: nil,
+            then: { gestureFinished = true },
+            outcome: { reported.append($0) })
+        settle(6)
+
+        XCTAssertEqual(backend.written, ["hello "])
+        XCTAssertTrue(
+            backend.bytesWritten.isEmpty,
+            "a partial write is never followed by a Return")
+        XCTAssertEqual(reported, [.abandoned])
+        XCTAssertTrue(
+            gestureFinished, "the gate still releases, or a queue strands")
+    }
 }
