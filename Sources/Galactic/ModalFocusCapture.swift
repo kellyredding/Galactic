@@ -82,6 +82,24 @@ final class ModalFocusCapture {
         priorWindow = nil
         priorResponder = nil
 
+        // **Declines when another modal has since taken the keyboard**, and the
+        // note is consumed above either way so a refusal cannot restore into
+        // some later, unrelated moment.
+        //
+        // Two of these trade places directly — ⇧⌘F over the picker dismisses it
+        // and raises the searcher — and the two halves of that trade are not
+        // simultaneous. The incoming card claims its field as it appears; the
+        // outgoing one hands the keyboard back only once its own card has
+        // finished fading, a tenth of a second later. Without this the second
+        // event undoes the first, and the panel the reader is looking straight
+        // at has no caret in it.
+        //
+        // Safe to ask here where `installEscape` must not: this runs from the
+        // view's disappearance, which happens because the caller was dismissed
+        // — so the caller is not among the claimants counted, and what is
+        // counted is whatever replaced it.
+        guard !GalacticModals.isClaimingKeyboard else { return }
+
         guard let window, let responder else { return }
         // A view that has left the window it was saved from must not be
         // dragged back into focus: the caret belongs to whatever replaced it.
@@ -90,6 +108,25 @@ final class ModalFocusCapture {
         if let view = responder as? NSView, view.window !== window { return }
         if !window.isKeyWindow { window.makeKey() }
         _ = window.makeFirstResponder(responder)
+    }
+
+    /// Take over another modal's note, for a card that is replacing it.
+    ///
+    /// **Who was interrupted does not change when two cards trade places.** By
+    /// the time the incoming one arms itself the outgoing one has been
+    /// dismissed but its field still holds first responder, so the capture a
+    /// moment earlier recorded a view about to be torn down — and a handback to
+    /// a view that no longer exists restores nothing at all, leaving the window
+    /// with no first responder once the trade is over.
+    ///
+    /// Declines when there is nothing to take, so a caller need not ask whether
+    /// the other card was up.
+    func adopt(from other: ModalFocusCapture) {
+        guard other.priorResponder != nil else { return }
+        priorWindow = other.priorWindow
+        priorResponder = other.priorResponder
+        other.priorWindow = nil
+        other.priorResponder = nil
     }
 
     /// Install the Escape monitor that closes the modal.

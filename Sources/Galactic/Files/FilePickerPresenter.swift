@@ -260,6 +260,9 @@ public final class FilePickerPresenter: ObservableObject {
             isActive: { [weak self] in self?.isPresented ?? false },
             onEscape: { [weak self] in self?.dismiss() }
         )
+        // The searcher's card, if that is what this is replacing, still holds
+        // the caret — so the note just captured names a field about to go.
+        focus.adopt(from: FileSearchPresenter.shared.focus)
         isPresented = true
         // Offered before the walk starts, and not after it. What an empty query
         // shows — closed files, then recent ones — is the host's own history and

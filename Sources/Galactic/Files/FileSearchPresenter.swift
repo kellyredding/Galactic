@@ -139,6 +139,9 @@ public final class FileSearchPresenter: ObservableObject {
                 }
             }
         )
+        // The picker's card, if that is what this is replacing, still holds the
+        // caret — so the note just captured names a field about to go.
+        focus.adopt(from: FilePickerPresenter.shared.focus)
         isPresented = true
 
         // The corpus has to have been asked for before it answers: `slices`

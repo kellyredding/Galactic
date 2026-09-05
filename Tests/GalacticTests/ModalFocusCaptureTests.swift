@@ -86,6 +86,66 @@ final class ModalFocusCaptureTests: XCTestCase {
         XCTAssertNil(focus.priorResponder)
     }
 
+    // MARK: - Handing back into a modal that replaced this one
+
+    /// **The handback stands down for whatever took the keyboard since.**
+    ///
+    /// Two cards trade places directly and the halves are not simultaneous: the
+    /// incoming one claims its field as it appears, the outgoing one hands back
+    /// only once its own card has finished fading. Restoring then takes the
+    /// caret out of a panel the reader is looking straight at — which is what
+    /// ⇧⌘F over an open picker did.
+    func testRestoringStandsDownWhileAnotherModalHoldsTheKeyboard() {
+        let focus = ModalFocusCapture()
+        let window = NSWindow()
+        focus.priorWindow = window
+        focus.priorResponder = window
+        FilePickerPresenter.shared.rootProvider = { nil }
+        FilePickerPresenter.shared.present()
+        defer { FilePickerPresenter.shared.dismiss() }
+
+        focus.restore()
+
+        XCTAssertNil(
+            focus.priorWindow,
+            "the note is consumed even when the handback declines, so it "
+                + "cannot land in some later unrelated moment"
+        )
+        XCTAssertNil(focus.priorResponder)
+    }
+
+    /// A card replacing another takes over its note, because who was
+    /// interrupted did not change when the two swapped.
+    func testAdoptingTakesTheOtherNoteAndLeavesNoneBehind() {
+        let outgoing = ModalFocusCapture()
+        let incoming = ModalFocusCapture()
+        let window = NSWindow()
+        outgoing.priorWindow = window
+        outgoing.priorResponder = window
+
+        incoming.adopt(from: outgoing)
+
+        XCTAssertTrue(incoming.priorResponder === window)
+        XCTAssertNil(
+            outgoing.priorResponder,
+            "one note, moved rather than copied — two modals restoring to the "
+                + "same responder is the trade happening twice"
+        )
+    }
+
+    /// Declines with nothing to take, so a card that was not replacing anything
+    /// keeps the note it just captured.
+    func testAdoptingNothingLeavesTheOwnNoteAlone() {
+        let incoming = ModalFocusCapture()
+        let window = NSWindow()
+        incoming.priorWindow = window
+        incoming.priorResponder = window
+
+        incoming.adopt(from: ModalFocusCapture())
+
+        XCTAssertTrue(incoming.priorResponder === window)
+    }
+
     /// The monitor is installed regardless of `isActive`; the handler is what
     /// gates. Worth pinning separately from the gate itself, because "no Escape
     /// arrived" and "Escape arrived and was declined" look identical from
