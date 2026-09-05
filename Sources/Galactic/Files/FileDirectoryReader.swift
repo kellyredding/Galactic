@@ -48,23 +48,47 @@ enum FileDirectoryReader {
     /// Everything in a directory, files included, each flagged.
     ///
     /// What the tree expands with. Both notes above apply to it unchanged.
+    /// **A symlinked directory is read by path, because the URL form refuses
+    /// it.** Measured: for a link pointing at a directory,
+    /// `contentsOfDirectory(at:)` throws while `contentsOfDirectory(atPath:)`
+    /// on the same string answers its contents. Without the second attempt a
+    /// symlinked folder expands to nothing — it opens, it is a directory, and
+    /// it is empty, which reads as a genuinely empty folder rather than as a
+    /// failure. `~/projects/implementation-plans` is one such link.
+    ///
+    /// Tried in this order rather than always by path: the URL form prefetches
+    /// the resource values `isBrowsableDirectory` then reads back for free,
+    /// and paying a fresh `stat` per entry on every ordinary directory is the
+    /// cost this file already has performance history about.
     nonisolated static func childEntries(
         of path: String
     ) -> [FileTreeOutline.Entry] {
+        let prefix = path.hasSuffix("/") ? path : path + "/"
+        if let contents = try? FileManager.default.contentsOfDirectory(
+            at: URL(fileURLWithPath: path),
+            includingPropertiesForKeys: [
+                .isDirectoryKey, .isSymbolicLinkKey,
+            ],
+            options: []
+        ) {
+            return contents.map { url in
+                FileTreeOutline.Entry(
+                    path: prefix + url.lastPathComponent,
+                    isDirectory: isBrowsableDirectory(url)
+                )
+            }
+        }
         guard
-            let contents = try? FileManager.default.contentsOfDirectory(
-                at: URL(fileURLWithPath: path),
-                includingPropertiesForKeys: [
-                    .isDirectoryKey, .isSymbolicLinkKey,
-                ],
-                options: []
+            let names = try? FileManager.default.contentsOfDirectory(
+                atPath: path
             )
         else { return [] }
-        let prefix = path.hasSuffix("/") ? path : path + "/"
-        return contents.map { url in
+        return names.map { name in
             FileTreeOutline.Entry(
-                path: prefix + url.lastPathComponent,
-                isDirectory: isBrowsableDirectory(url)
+                path: prefix + name,
+                isDirectory: isBrowsableDirectory(
+                    URL(fileURLWithPath: prefix + name)
+                )
             )
         }
     }
