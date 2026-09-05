@@ -2,10 +2,10 @@ import Foundation
 
 /// What a restore needs to rebuild a set.
 ///
-/// Three fields, and provably the minimum: `FileSet` exposes exactly these as
-/// its persistable surface, and `restore(openPathRows:selectedPath:)` takes
-/// precisely two of them. **Notes are absent by construction** — they live in
-/// memory and have no representation here to be tempted by.
+/// What `FileSet` exposes as its persistable surface, and no more:
+/// `restore(openPathRows:selectedPath:)` takes two of these and
+/// `noteFollowedAgentRoot` the last. **Notes are absent by construction** —
+/// they live in memory and have no representation here to be tempted by.
 ///
 /// The shape lives in the package rather than in each host because it had
 /// already been spelled out once per application before there was a second one,
@@ -15,22 +15,36 @@ public struct PersistedFileSet: Codable, Equatable {
     public var openPathRows: [[String]]
     public var selectedPath: String?
 
+    /// Carried across a relaunch so the first visit to a restored set does not
+    /// read a nil memory as the agent having moved, and re-root away from the
+    /// root the reader chose before quitting.
+    public var lastFollowedAgentRoot: String?
+
     public init(
-        root: String, openPathRows: [[String]], selectedPath: String?
+        root: String, openPathRows: [[String]], selectedPath: String?,
+        // Defaulted so every existing caller keeps compiling — a host with no
+        // agent has nothing to pass.
+        lastFollowedAgentRoot: String? = nil
     ) {
         self.root = root
         self.openPathRows = openPathRows
         self.selectedPath = selectedPath
+        self.lastFollowedAgentRoot = lastFollowedAgentRoot
     }
 
     /// Every field falls back rather than throwing, so a malformed set costs the
-    /// set and not whatever larger document a host has nested it inside.
+    /// set and not whatever larger document a host has nested it inside. A
+    /// record written before a field existed decodes as absent, which is why
+    /// adding one needs no migration.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         root = try c.decodeIfPresent(String.self, forKey: .root) ?? ""
         openPathRows =
             try c.decodeIfPresent([[String]].self, forKey: .openPathRows) ?? []
         selectedPath = try c.decodeIfPresent(String.self, forKey: .selectedPath)
+        lastFollowedAgentRoot = try c.decodeIfPresent(
+            String.self, forKey: .lastFollowedAgentRoot
+        )
     }
 }
 

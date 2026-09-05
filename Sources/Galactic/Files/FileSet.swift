@@ -34,6 +34,14 @@ public final class FileSet: ObservableObject {
     /// Where browsing starts, and what a tab's label is relative to.
     @Published public private(set) var root: URL
 
+    /// The agent root this set last followed, canonical.
+    ///
+    /// What separates following an agent from overriding a reader. A root the
+    /// reader chose differs from the agent's cwd for as long as they leave it
+    /// there, so a host comparing against `root` would undo that choice every
+    /// time they came back to the surface. Nil in a host with no agent.
+    public private(set) var lastFollowedAgentRoot: String?
+
     @Published public private(set) var tabs: FileTabStripModel
 
     @Published public private(set) var closedTabs: ClosedTabStack
@@ -308,6 +316,16 @@ public final class FileSet: ObservableObject {
     public func changeRoot(to url: URL) {
         guard url.path != root.path else { return }
         root = url
+    }
+
+    /// Record an agent root as followed.
+    ///
+    /// Paired with `changeRoot`, never a substitute for it: this says what was
+    /// seen, not where the set is. The two move together everywhere except a
+    /// refusal, and separating them is what lets a refusal leave the question
+    /// open.
+    public func noteFollowedAgentRoot(_ canonicalPath: String?) {
+        lastFollowedAgentRoot = canonicalPath
     }
 
     public func rename(to newName: String) {

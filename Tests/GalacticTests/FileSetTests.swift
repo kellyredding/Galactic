@@ -292,6 +292,18 @@ final class FileSetTests: XCTestCase {
         XCTAssertNotNil(set.file(forPath: url.path))
     }
 
+    /// The memory of an agent's root is not the root. Folding the two together
+    /// would make every recorded observation a re-root, which is the thing
+    /// `FilesSurface.followAgentRoot` exists to decide separately.
+    func testNotingAFollowedAgentRootDoesNotMoveTheSet() {
+        let set = makeSet()
+
+        set.noteFollowedAgentRoot("/tmp/somewhere-else")
+
+        XCTAssertEqual(set.root, dir)
+        XCTAssertEqual(set.lastFollowedAgentRoot, "/tmp/somewhere-else")
+    }
+
     // MARK: - Persistence
 
     func testOpenPathRowsReportTheArrangement() throws {

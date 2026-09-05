@@ -147,7 +147,8 @@ public final class FilesSurface {
                 .map { row in row.filter { $0 != resultsPath } }
                 .filter { !$0.isEmpty },
             selectedPath: set.selectedPath == resultsPath
-                ? nil : set.selectedPath
+                ? nil : set.selectedPath,
+            lastFollowedAgentRoot: set.lastFollowedAgentRoot
         )
     }
 
@@ -166,6 +167,9 @@ public final class FilesSurface {
         if !saved.root.isEmpty {
             set.changeRoot(to: URL(fileURLWithPath: saved.root))
         }
+        // Without this the first visit after a launch reads a nil memory as the
+        // agent having moved, and re-roots away from the root just restored.
+        set.noteFollowedAgentRoot(saved.lastFollowedAgentRoot)
         set.restore(
             openPathRows: saved.openPathRows, selectedPath: saved.selectedPath
         )
@@ -467,6 +471,55 @@ public final class FilesSurface {
         let set = currentSet
         set.changeRoot(to: url)
         persist(set)
+    }
+
+    /// Re-root the current set to where its agent now is, if the agent has
+    /// moved since this set last followed it.
+    ///
+    /// The host decides when to ask — Galaxy asks on entering its Files tab —
+    /// and what its agent's directory is. What is decided here is whether the
+    /// ask amounts to anything, because both facts it turns on live here: the
+    /// root last followed, and whether a panel is open.
+    ///
+    /// **Refuses while a Files panel is up, and deliberately does not record
+    /// the root when it refuses.** A reader with the picker open is mid-task,
+    /// and the point of asking on entry rather than on the agent's event is to
+    /// never move the ground under them. Recording it anyway would satisfy the
+    /// comparison on the next entry and lose the reset entirely, so the refusal
+    /// has to leave the question open.
+    ///
+    /// **Refuses before the owner's set exists**, which is what keeps it from
+    /// running ahead of `restoreIfNeeded`. A set created here would be empty,
+    /// and persisting it would write that emptiness over the tabs still waiting
+    /// on disk to be restored. Nothing is lost by declining: a set built later
+    /// takes `FilesHost.defaultRoot` — the agent's directory — as its root.
+    ///
+    /// Nothing here clears a query. Both panels discard their saved state when
+    /// the root they saved it against has moved — see
+    /// `FileSearchPresenter.restoreState` — so re-rooting is the whole of it.
+    ///
+    /// - Returns: whether the set was re-rooted.
+    @discardableResult
+    public func followAgentRoot(to url: URL) -> Bool {
+        guard !GalacticModals.filesPanelIsClaimingKeyboard else { return false }
+        guard let set = existingSet(forOwner: host.currentOwnerID) else {
+            return false
+        }
+
+        let canonical = FilePaths.canonical(url)
+        guard set.lastFollowedAgentRoot != canonical else { return false }
+
+        set.noteFollowedAgentRoot(canonical)
+        // The agent moved somewhere the reader had already browsed to. Worth
+        // recording so the next move is measured from here, but there is
+        // nothing to re-root and no change to report.
+        guard FilePaths.canonical(set.root) != canonical else {
+            persist(set)
+            return false
+        }
+        set.changeRoot(to: url)
+        persist(set)
+        return true
     }
 
     // MARK: - What a host's menu asks
