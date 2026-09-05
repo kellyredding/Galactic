@@ -172,7 +172,7 @@ public struct FilePickerView: View {
             Text(
                 focus == .root
                     ? "⇥ complete · ↩ set folder"
-                    : "⇧⇥ change folder"
+                    : "⇧⇥ change folder · ⌘↩ open and stay"
             )
             .font(.system(size: 10))
             .foregroundStyle(.tertiary)
@@ -278,8 +278,11 @@ public struct FilePickerView: View {
                 case "h": presenter.selectMode(.search)
                 case "l": presenter.selectMode(.browse)
                 default:
-                    guard treeIsShowing else { return .ignored }
-                    presenter.rerootToSelectedTreeRow()
+                    if treeIsShowing {
+                        presenter.activateSelectedTreeRow(keepingOpen: true)
+                    } else {
+                        presenter.commit(keepingOpen: true)
+                    }
                 }
                 return .handled
             }
@@ -316,7 +319,12 @@ public struct FilePickerView: View {
                             )
                             .id(row.id)
                             .reportingTopRow(id: row.id, in: Self.space)
-                            .onTapGesture { presenter.open(row) }
+                            .onTapGesture {
+                                presenter.open(
+                                    row,
+                                    keepingOpen: FilePickerClick.wantsToKeepOpen
+                                )
+                            }
                         }
                     }
                 }

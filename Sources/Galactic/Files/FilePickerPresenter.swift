@@ -328,10 +328,20 @@ public final class FilePickerPresenter: ObservableObject {
     /// The row to land on once the tree has been rebuilt, by path.
     private var pendingSelection: String?
 
+    /// Bumped once the panel's view has gone and its focus handback has run.
+    ///
+    /// A signal rather than a state, because `isPresented` cannot answer this:
+    /// it flips when the panel is asked to close, and the card then fades for a
+    /// further tenth of a second with the caret still in its field. A surface
+    /// behind it that needs the moment *after* the field is torn down has
+    /// nothing else to watch.
+    @Published private(set) var focusHandbacks = 0
+
     /// Called by `FilePickerView` as it disappears, not by `dismiss` — see
     /// `ModalFocusCapture.restore` for why that ordering is the whole argument.
     func restoreFocus() {
         focus.restore()
+        focusHandbacks &+= 1
     }
 
     // MARK: - Choosing
@@ -369,13 +379,13 @@ public final class FilePickerPresenter: ObservableObject {
     /// each rule answered a real case — but every one of those cases was a
     /// consequence of asking one field what it was being used for. The field
     /// above answers paths now, so this answers rows.
-    public func commit() {
+    public func commit(keepingOpen: Bool = false) {
         guard rows.indices.contains(selectedIndex) else { return }
-        activate(rows[selectedIndex])
+        activate(rows[selectedIndex], keepingOpen: keepingOpen)
     }
 
-    public func open(_ item: FilePickerItem) {
-        activate(item)
+    public func open(_ item: FilePickerItem, keepingOpen: Bool = false) {
+        activate(item, keepingOpen: keepingOpen)
     }
 
     /// What a row does, in one place — so a click and Return cannot diverge.
@@ -383,12 +393,19 @@ public final class FilePickerPresenter: ObservableObject {
     /// A folder is browsed into and the picker **stays open**: re-rooting is
     /// what someone does in order to then find a file there, and dismissing
     /// would make them reopen it to do the thing they re-rooted for.
-    private func activate(_ item: FilePickerItem) {
+    ///
+    /// **`keepingOpen` puts a file on the same footing as a folder** — ⌘Return
+    /// or a ⌘-click, for opening several files near each other without
+    /// reopening the panel between them. Neither list is rebuilt afterwards,
+    /// and that is deliberate: opening a file makes it no longer a closed one,
+    /// so an empty query's answer has changed, and refreshing would move the
+    /// row out from under the selection the modifier exists to preserve.
+    private func activate(_ item: FilePickerItem, keepingOpen: Bool) {
         guard item.source != .folder else {
             changeRoot(to: item.url)
             return
         }
-        dismiss()
+        if !keepingOpen { dismiss() }
         onOpen(item.url)
     }
 
@@ -666,11 +683,21 @@ public final class FilePickerPresenter: ObservableObject {
     }
 
     /// Return: open a file, or toggle a folder.
-    public func activateSelectedTreeRow() {
+    ///
+    /// **With `keepingOpen`** — ⌘Return, or a ⌘-click — the modifier asks for
+    /// whatever this row does *beyond* Return: a file opens with the panel left
+    /// standing, and a folder is browsed into as the new root rather than
+    /// merely expanded. Both leave the picker up, which is what makes them one
+    /// key rather than two that happen to share a chord.
+    public func activateSelectedTreeRow(keepingOpen: Bool = false) {
         guard let row = selectedTreeRow else { return }
         guard row.isDirectory else {
-            dismiss()
+            if !keepingOpen { dismiss() }
             onOpen(URL(fileURLWithPath: row.path))
+            return
+        }
+        if keepingOpen {
+            rerootToSelectedTreeRow()
             return
         }
         if row.isExpanded, row.isRevealedByFilter { return }
@@ -678,9 +705,9 @@ public final class FilePickerPresenter: ObservableObject {
         refreshTree()
     }
 
-    /// ⌘Return: browse this folder as the root, which is the same act as typing
-    /// its path into the field.
-    public func rerootToSelectedTreeRow() {
+    /// Browse this folder as the root, which is the same act as typing its path
+    /// into the field. Reached by ⌘Return and by a ⌘-click.
+    private func rerootToSelectedTreeRow() {
         guard let row = selectedTreeRow, row.isDirectory else { return }
         changeRoot(to: URL(fileURLWithPath: row.path))
     }

@@ -31,7 +31,9 @@ struct FileTreeView: View {
                         .reportingTopRow(id: row.id, in: Self.space)
                         .onTapGesture {
                             presenter.selectTreeRow(row)
-                            presenter.activateSelectedTreeRow()
+                            presenter.activateSelectedTreeRow(
+                                keepingOpen: FilePickerClick.wantsToKeepOpen
+                            )
                         }
                     }
                 }

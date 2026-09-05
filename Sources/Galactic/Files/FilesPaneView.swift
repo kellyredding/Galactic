@@ -181,6 +181,11 @@ public struct FilesPaneView: View {
             claimReaderFocus()
             syncFindBarPanel()
         }
+        // Watched rather than `picker.isPresented`, which flips a tenth of a
+        // second before the field is actually gone — see `focusHandbacks`.
+        .onChange(of: picker.focusHandbacks) { _, _ in
+            claimReaderFocus(onlyIfStranded: true)
+        }
     }
 
     /// Put first responder in the reader while this is the surface in front.
@@ -201,13 +206,23 @@ public struct FilesPaneView: View {
     /// already claimed the caret. Deferred a turn for the reason `claimField`
     /// is, and re-reads the gate rather than the captured value, because a view
     /// struct is a snapshot and the tab may have moved on.
-    private func claimReaderFocus() {
+    ///
+    /// **`onlyIfStranded` is for the moment a panel goes away.** The picker can
+    /// open a file while staying up, which rebuilds the reader out from under
+    /// the responder it recorded — so its handback declines and the window is
+    /// left with nobody holding the keyboard, which is the window itself.
+    /// Claiming unconditionally there would instead take focus from a handback
+    /// that landed.
+    private func claimReaderFocus(onlyIfStranded: Bool = false) {
         guard !GalacticModals.filesPanelIsClaimingKeyboard else { return }
         DispatchQueue.main.async {
-            guard gate.isVisibleSurface, let webView = webViewRef else {
+            guard gate.isVisibleSurface, let webView = webViewRef,
+                let window = webView.window
+            else { return }
+            guard !onlyIfStranded || window.firstResponder === window else {
                 return
             }
-            webView.window?.makeFirstResponder(webView)
+            window.makeFirstResponder(webView)
         }
     }
 
