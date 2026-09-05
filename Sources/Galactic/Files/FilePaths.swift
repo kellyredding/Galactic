@@ -93,4 +93,25 @@ public enum FilePaths {
         else { return nil }
         return child.dropFirst(root.count).joined(separator: "/")
     }
+
+    /// Every absolute path from `root` down to `relative`, inclusive of both.
+    ///
+    /// What the picker expands to reveal a file: all of it but the last entry
+    /// is the folders to open, and the last entry is the row to land on.
+    ///
+    /// Takes a **relative path** rather than two absolutes, because the caller
+    /// has already had to decide which spelling of the file it is working in —
+    /// see `FileDirectoryReader`, whose children are spelled against the parent
+    /// they were asked for rather than resolved. Recomputing it here from a
+    /// canonical path would answer with rows the tree does not contain.
+    public static func chain(to relative: String, under root: String) -> [String]
+    {
+        var built = root
+        var result = [root]
+        for segment in relative.split(separator: "/") {
+            built += "/" + segment
+            result.append(built)
+        }
+        return result
+    }
 }

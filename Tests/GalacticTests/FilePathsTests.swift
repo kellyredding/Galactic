@@ -64,6 +64,26 @@ final class FilePathsTests: XCTestCase {
         XCTAssertNil(FilePaths.relativePath(of: dir, under: dir))
     }
 
+    // MARK: - The chain down to a file
+
+    func testTheChainRunsFromTheRootDownToTheFile() {
+        XCTAssertEqual(
+            FilePaths.chain(to: "app/models/user.swift", under: "/work"),
+            [
+                "/work", "/work/app", "/work/app/models",
+                "/work/app/models/user.swift",
+            ]
+        )
+    }
+
+    /// A file directly in the root is a two-entry chain: the root, and it.
+    func testAFileAtTheRootIsTheRootAndItself() {
+        XCTAssertEqual(
+            FilePaths.chain(to: "a.swift", under: "/work"),
+            ["/work", "/work/a.swift"]
+        )
+    }
+
     // MARK: - The two failures that made this a type
 
     /// A root reached through a symlink. `/var` is one, and the directory

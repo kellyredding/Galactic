@@ -70,6 +70,37 @@ final class FileRootFieldModelTests: XCTestCase {
         }
     }
 
+    // MARK: - A root changed from somewhere else
+
+    /// The field shows a value rather than deriving one, so a root moved by
+    /// anything other than this field has to be told to it — a folder chosen in
+    /// the tree, or a reveal aiming the panel at another file.
+    func testNotingARootChangeRefillsTheField() throws {
+        var route = outer!
+        let m = FileRootFieldModel(route: { route }, onCommit: { _ in })
+        m.noteRootChanged()
+        XCTAssertEqual(m.field.text, outer.path, "precondition")
+
+        route = dir
+        m.noteRootChanged()
+
+        XCTAssertEqual(m.field.text, dir.path)
+    }
+
+    /// **Refused while the caret is in it.** Rewriting a path under someone
+    /// halfway through typing is worse than showing them a stale one.
+    func testNotingARootChangeLeavesATypedPathAlone() throws {
+        var route = outer!
+        let m = FileRootFieldModel(route: { route }, onCommit: { _ in })
+        m.beginEditing()
+        m.edit("/somewhere/half-typed")
+
+        route = dir
+        m.noteRootChanged()
+
+        XCTAssertEqual(m.field.text, "/somewhere/half-typed")
+    }
+
     // MARK: - What is offered
 
     func testAPartialSegmentOffersTheMatchingFolders() async throws {

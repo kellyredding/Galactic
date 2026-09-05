@@ -565,6 +565,53 @@ final class FilePickerPresenterTests: XCTestCase {
         XCTAssertEqual(p.query, "userthing")
     }
 
+    /// Run the loop for a fixed span, for the case where what is asserted is
+    /// that nothing arrives.
+    private func spin(for seconds: TimeInterval) {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+    }
+
+    /// **A filter is poisoned on the way out of one, not only on the way into
+    /// another.** Cancelling only when a new query arrives left the scan for a
+    /// query just deleted free to land afterwards and repaint the tree with its
+    /// matches: rows highlighted under an empty field, and the expansion the
+    /// reader is browsing replaced by whatever matched.
+    func testClearingAQueryCancelsTheFilterItWasRunning() throws {
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent("app"),
+            withIntermediateDirectories: true
+        )
+        _ = try write("app/userthing.rb")
+        _ = try write("unrelated.md")
+
+        let p = opened(owner: "one", root: dir)
+        p.selectMode(.browse)
+        p.query = "userthing"
+        settle("the corpus to answer once") { p.treeRows.count > 1 }
+        XCTAssertFalse(
+            p.treeRows.contains { $0.path.hasSuffix("unrelated.md") },
+            "precondition: the filter is actually filtering"
+        )
+
+        // Both in one turn, so the second scan is certainly still in flight —
+        // its ranking runs on a detached task that cannot have finished yet.
+        p.query = "userthin"
+        p.query = ""
+        spin(for: 0.3)
+
+        XCTAssertTrue(
+            p.treeRows.contains { $0.path.hasSuffix("unrelated.md") },
+            "the cancelled scan must not have repainted the tree"
+        )
+        XCTAssertTrue(
+            p.treeRows.allSatisfy { $0.matchedOffsets.isEmpty },
+            "no row is highlighted under an empty field"
+        )
+    }
+
     /// Scrolling a long way is not the same act as selecting, and coming back
     /// to the selection would undo the scroll a reader is asking to keep.
     func testReopeningAsksToScrollBackToWhereItWas() throws {

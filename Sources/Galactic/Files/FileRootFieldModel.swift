@@ -75,6 +75,22 @@ public final class FileRootFieldModel: ObservableObject {
         rows = []
     }
 
+    /// The root moved, and not by anything this field did.
+    ///
+    /// The field shows a value rather than deriving one, so a root changed from
+    /// somewhere else — a folder picked in the tree, a reveal aiming the panel
+    /// at another file — leaves it naming where the reader used to be until the
+    /// caret lands in it and `beginEditing` refills it.
+    ///
+    /// **Refuses while the caret is in the field.** Rewriting a path someone is
+    /// halfway through typing is worse than showing a stale one, and the commit
+    /// path needs no help: it re-reads for itself once its own change has been
+    /// applied.
+    public func noteRootChanged() {
+        guard !isEditing else { return }
+        field.reset(to: route())
+    }
+
     // MARK: - Typing
 
     public func edit(_ text: String) {

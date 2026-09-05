@@ -522,6 +522,40 @@ public final class FilesSurface {
         return true
     }
 
+    /// Show the selected file where it sits, in the picker's Browse tree.
+    ///
+    /// The root is resolved first because it decides everything after it: a
+    /// file outside the current tree cannot be revealed in it, and the answer
+    /// to that is a policy with a floor in it — see `FileRevealRoot`.
+    ///
+    /// **Refuses the results tab by path.** It is a real file under
+    /// `~/.galactic`, so reaching it climbs to the home directory and collapses
+    /// the tree the reader was working in, to show them a synthetic file they
+    /// cannot act on. `snapshot(of:)` already treats that path as not-a-file
+    /// for persistence; this treats it as not-a-file for reveal.
+    ///
+    /// `present()` returns early when the picker is already up, so the same
+    /// call covers both — which is what lets this re-aim an open panel rather
+    /// than needing a second path for it.
+    public func revealSelectedFile() {
+        guard let path = currentSet.selectedPath,
+            path != Self.searchResultsURL(owner: currentSet.ownerID).path,
+            FileManager.default.fileExists(atPath: path)
+        else {
+            NSSound.beep()
+            return
+        }
+        let file = URL(fileURLWithPath: path)
+        let target = FileRevealRoot.resolve(
+            file: file,
+            from: currentSet.root,
+            floor: URL(fileURLWithPath: NSHomeDirectory())
+        )
+        host.showFilesSurface()
+        FilePickerPresenter.shared.present()
+        FilePickerPresenter.shared.reveal(file: file, rootedAt: target)
+    }
+
     // MARK: - What a host's menu asks
 
     public var hasClosedFiles: Bool { !currentSet.closedTabs.isEmpty }

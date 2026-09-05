@@ -410,6 +410,54 @@ public final class FilePickerPresenter: ObservableObject {
         selectMode(mode == .search ? .browse : .search)
     }
 
+    /// Point the Browse tree at one file: expand down to it, select it, scroll
+    /// to it.
+    ///
+    /// **The query is cleared first, and that is a mechanism rather than a
+    /// courtesy.** With one set, `refreshTree` builds from the index via
+    /// `rows(root:matching:)`, which never reads `expandedByReader` — so the
+    /// chain below would not be overridden, it would be unread.
+    ///
+    /// The tree fills in over several passes, one per directory read, and the
+    /// selection is claimed by `clampTreeSelection` the first pass the row
+    /// exists. That is the same path a reopened picker takes to restore a saved
+    /// tree; this only computes the expansion set rather than remembering it.
+    ///
+    /// - Parameter url: the file **as the strip spells it**, not
+    ///   canonicalised. `FileDirectoryReader` spells children against the
+    ///   parent it was asked for, so a canonical path matches no row under a
+    ///   symlinked folder.
+    public func reveal(file url: URL, rootedAt newRoot: URL) {
+        // Before the root moves: this cancels the outgoing mode's scan, which
+        // `changeRoot` does not do.
+        selectMode(.browse)
+
+        if root.map(FilePaths.canonical) != FilePaths.canonical(newRoot) {
+            // Clears the query and resets the tree on its own.
+            changeRoot(to: newRoot)
+        } else {
+            query = ""
+        }
+
+        // **The reader's own spelling first, and the inversion is the point.**
+        // `relativePath` prefers the resolved spelling, which for a link
+        // *inside* the root names a real row — just not the row the reader has
+        // open. The tree grew along the spelling they browsed, so that is tried
+        // first; resolving is the fallback for a root and a file spelled
+        // differently, which is the case `relativePath` exists for.
+        guard let root,
+            let relative = FilePaths.relative(url.path, under: root.path)
+                ?? FilePaths.relativePath(of: url, under: root)
+        else { return }
+        let chain = FilePaths.chain(
+            to: relative, under: FilePaths.canonical(root)
+        )
+        for directory in chain.dropLast() { outline.expand(directory) }
+        pendingSelection = chain.last
+        pendingTreeScroll = chain.last
+        refreshTree()
+    }
+
     private func resetBrowseState() {
         childCache = [:]
         loadingChildren = []
@@ -440,6 +488,17 @@ public final class FilePickerPresenter: ObservableObject {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !trimmed.isEmpty else {
+            // **The running filter is poisoned on the way out of a filter, not
+            // only on the way into another one.** Cancelling only in the
+            // filtered branch below left a scan for the query just deleted free
+            // to land afterwards and repaint the tree with its matches — rows
+            // highlighted under an empty field, with the expansion the reader
+            // is actually browsing replaced by whatever matched. Reached by
+            // clearing a query faster than it answers, and by revealing a file
+            // while one is running.
+            filterTask?.cancel()
+            filterTask = nil
+            filterCancellation.cancel()
             treeRows = outline.rows(root: canonical) { [weak self] path in
                 self?.children(of: path) ?? []
             }
@@ -637,6 +696,10 @@ public final class FilePickerPresenter: ObservableObject {
 
         root = url
         onChangeRoot(url)
+        // The field above the query names the root, and nothing else tells it
+        // the root moved — so without this it goes on naming the old one until
+        // the caret lands in it.
+        rootFieldModel.noteRootChanged()
         query = ""
         // The tree was a view of the old root, so it is rebuilt rather than
         // re-rooted: every expansion in it names a path that is no longer where
