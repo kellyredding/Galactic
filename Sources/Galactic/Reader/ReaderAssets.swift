@@ -25,8 +25,16 @@ public enum ReaderAssets {
     /// the only thing any of them read — the file reader, fenced code, and
     /// Galaxy's diff reader in another package. A grammar injected anywhere
     /// else would reach some of those and silently miss the rest.
+    ///
+    /// Order is load-bearing. The corrections wrap the registration function,
+    /// so they have to be in place before the grammars that arrive through it;
+    /// each grammar names itself against the global the library defines, so
+    /// the library has to precede both. Ruby is re-registered rather than
+    /// merely patched, because the library already registered its own copy
+    /// during evaluation, before anything here could intercept it.
     public static let highlightJS: String =
-        highlightLibraryJS + "\n" + crystalJS
+        [highlightLibraryJS, grammarFixesJS, rubyJS, crystalJS]
+        .joined(separator: "\n")
 
     /// The stock upstream bundle, registering its common subset of languages.
     ///
@@ -40,6 +48,19 @@ public enum ReaderAssets {
     /// Upstream ships it as a standalone file that registers itself against
     /// the global the library defines, so it has to follow the library.
     static let crystalJS: String = load("crystal.min", "js")
+
+    /// The stock Ruby grammar, shipped so it can be registered a second time
+    /// with the corrections below applied. Byte-identical to upstream's.
+    static let rubyJS: String = load("ruby.min", "js")
+
+    /// Corrections to two upstream grammar defects, applied as each grammar
+    /// registers itself.
+    ///
+    /// The only file here this package wrote. It exists so the two grammar
+    /// files beside it can stay byte-identical to upstream and be checked
+    /// against a published checksum — the property that let this bundle's
+    /// provenance be recovered when nothing in the repository recorded it.
+    static let grammarFixesJS: String = load("grammar-fixes", "js")
 
     /// mermaid.js, for diagram rendering. Large — see the note above.
     public static let mermaidJS: String = load("mermaid.min", "js")
