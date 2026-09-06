@@ -132,11 +132,17 @@ public enum SourceRenderer {
         isDark: Bool
     ) -> String {
         let hjsContent = ReaderAssets.highlightJS
-        let themeCSS = ReaderAssets.highlightThemeCSS(
-            isDark: isDark
-        )
+        let source = SourceTheme.active(isDark: isDark)
+        let themeCSS = source.highlightCSS
 
+        // Only the page's two colours move. `ReaderDocument.render` reads
+        // `background`, `foreground` and `isDark` and nothing else, so the rest
+        // of the palette is left alone rather than reconstructed.
         let theme = ReaderTheme.standard(isDark: isDark)
+            .withPage(
+                background: source.background,
+                foreground: source.foreground
+            )
 
         // Build line-numbered code block
         let lines = content.components(separatedBy: "\n")
@@ -186,12 +192,12 @@ public enum SourceRenderer {
                 text-align: right;
                 padding-right: 12px !important;
                 padding-left: 8px !important;
-                color: \(theme.lineNumber);
-                background: \(theme.gutter);
+                color: \(source.lineNumber);
+                background: \(source.gutter);
                 user-select: none;
                 -webkit-user-select: none;
                 border-right: 1px solid
-                    \(isDark ? "#21262d" : "#d0d7de");
+                    \(source.gutterBorder);
                 position: sticky;
                 left: 0;
                 z-index: 1;
@@ -200,7 +206,8 @@ public enum SourceRenderer {
                 padding-left: 12px !important;
                 padding-right: 16px !important;
             }
-            /* Override hljs background — we handle it */
+            /* The page already carries the theme's background, and an opaque
+               one here would paint over the annotation row tints below. */
             .hljs { background: transparent !important; }
             /* Annotation highlight adaption for table rows */
             .code-line.annotation-highlight td {

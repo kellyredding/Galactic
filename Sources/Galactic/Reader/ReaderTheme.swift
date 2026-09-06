@@ -69,6 +69,30 @@ public struct ReaderTheme: Equatable, Sendable {
         self.accent = accent
     }
 
+    /// The same palette with the page recoloured.
+    ///
+    /// For a reader whose surface a host can theme. Only these two roles move:
+    /// the rest — raised and sunken surfaces, borders, the accent — belong to
+    /// readers a custom theme does not reach, and reconstructing them from two
+    /// colours would change documents nobody asked to change.
+    public func withPage(
+        background: String,
+        foreground: String
+    ) -> ReaderTheme {
+        ReaderTheme(
+            isDark: isDark,
+            background: background,
+            foreground: foreground,
+            mutedForeground: mutedForeground,
+            lineNumber: lineNumber,
+            gutter: gutter,
+            border: border,
+            raisedSurface: raisedSurface,
+            sunkenSurface: sunkenSurface,
+            accent: accent
+        )
+    }
+
     /// The palette the readers already shared, named.
     public static func standard(isDark: Bool) -> ReaderTheme {
         isDark
