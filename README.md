@@ -8,13 +8,13 @@ directly to any specific implementation.
 
 ## Status
 
-v0.8.0. Began as an engine bridge and is now also the shared
+v0.9.0. Began as an engine bridge and is now also the shared
 substrate for the applications built on it: pane composition, the
 scrollback surface, find, text-entry bindings, automated prompt
-submission, and reading files. The surface is correspondingly
-wider than it once was and still evolving — pin it exactly, and
-expect breaking changes in minor versions while the major version
-is zero.
+submission, reading files, and the colours a source document is
+drawn in. The surface is correspondingly wider than it once was
+and still evolving — pin it exactly, and expect breaking changes
+in minor versions while the major version is zero.
 
 ## Requirements
 
@@ -29,7 +29,7 @@ released tag:
 ```swift
 .package(
     url: "https://github.com/kellyredding/Galactic.git",
-    exact: "0.8.0"
+    exact: "0.9.0"
 )
 ```
 
