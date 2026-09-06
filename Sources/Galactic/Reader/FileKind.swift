@@ -158,10 +158,8 @@ public enum FileKind: Equatable, Sendable {
     /// file with no extension still has a language: `Makefile` and `.bashrc`
     /// are answered by `filenameLanguages`.
     ///
-    /// A nil is not a failure. `SourceRenderer` renders an unstyled document
-    /// perfectly well, and naming a language this package does not ship is
-    /// worse than naming none — `hljs.highlightElement` falls back to
-    /// auto-detection, which guesses.
+    /// A nil is not a failure — `SourceRenderer` renders an unstyled document
+    /// perfectly well.
     public static func highlightLanguage(
         forFilename filename: String
     ) -> String? {
@@ -322,16 +320,15 @@ public enum FileKind: Equatable, Sendable {
 
     /// Extension to highlight.js language.
     ///
-    /// Only languages the vendored bundle actually registers appear here. It
-    /// ships the common subset — thirty-five languages — so most of what a
-    /// repository contains has no entry and renders unstyled, which is the
-    /// intended outcome rather than a gap to fill.
+    /// Only languages the shipped JavaScript actually registers appear here —
+    /// the vendored bundle's common subset of thirty-five, and Crystal, which
+    /// travels beside it as its own file. Most of what a repository contains
+    /// has no entry and renders unstyled, which is the intended outcome rather
+    /// than a gap to fill.
     ///
     /// Approximations are used where a family is close enough and there is
     /// precedent: `zsh` and `fish` answer as bash, `vue` and `erb` as xml,
-    /// `toml` as ini. `cr` answers as crystal, which the bundle does *not*
-    /// register — it predates this note and degrades to auto-detection rather
-    /// than failing, so it is left alone.
+    /// `toml` as ini.
     private static let highlightLanguages: [String: String] = [
         "rb": "ruby", "cr": "crystal",
         "py": "python", "js": "javascript",
@@ -380,6 +377,17 @@ public enum FileKind: Equatable, Sendable {
         // Diffs
         "diff": "diff", "patch": "diff",
     ]
+
+    /// Every language name the three tables can hand to the highlighter.
+    ///
+    /// Exposed so a test can check the shipped JavaScript registers them.
+    /// Naming one it does not have renders the file unstyled and reports
+    /// nothing, which is how `crystal` sat broken behind a passing test.
+    static var mappedLanguages: Set<String> {
+        Set(highlightLanguages.values)
+            .union(filenameLanguages.values)
+            .union(shebangLanguages.values)
+    }
 
     /// Whole filename to highlight.js language, for files with no extension.
     ///

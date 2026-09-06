@@ -89,8 +89,9 @@ public enum SourceRenderer {
 
         function galaxyHighlightSource(language) {
             if (typeof hljs === "undefined") { return; }
-            // An unregistered name is worse than none: hljs answers one by
-            // auto-detecting, which is the behaviour being escaped.
+            // An unregistered name cannot highlight anything, so leave the rows
+            // plain rather than pay a throw and the per-line fallback to reach
+            // the same place.
             if (!language || !hljs.getLanguage(language)) { return; }
 
             var cells = Array.prototype.slice.call(

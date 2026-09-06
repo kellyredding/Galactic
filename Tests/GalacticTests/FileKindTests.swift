@@ -500,4 +500,73 @@ final class FileKindTests: XCTestCase {
         XCTAssertNil(FileKind.shebangLanguage("#!/usr/bin/env"))
         XCTAssertNil(FileKind.shebangLanguage("#!/usr/bin/env fortran"))
     }
+
+    func testACrystalShebangNamesCrystal() {
+        XCTAssertEqual(
+            FileKind.shebangLanguage("#!/usr/bin/env crystal"), "crystal"
+        )
+    }
+
+    // MARK: - The tables against what actually ships
+
+    /// Languages a table names that the shipped JavaScript does not register.
+    ///
+    /// `shebangLanguages` is deliberately permissive — the renderer checks
+    /// before it highlights, so an unregistered name costs a file its colour
+    /// and nothing else. Naming them here keeps that a decision rather than an
+    /// oversight, which is what `crystal` was for as long as it sat in the
+    /// extension table with no grammar behind it.
+    private let knownUnregistered: Set<String> = ["awk", "tcl", "groovy"]
+
+    /// Every language the shipped JavaScript registers.
+    ///
+    /// Two shapes, because the grammars arrive two ways: the bundle registers
+    /// its own from `grmr_`-prefixed keys, and a grammar shipped as its own
+    /// file names itself in a `registerLanguage` call.
+    private var registeredLanguages: Set<String> {
+        let js = ReaderAssets.highlightJS
+        var found: Set<String> = []
+        for match in js.matches(of: #/grmr_([A-Za-z0-9_]+)/#) {
+            found.insert(
+                String(match.1).replacingOccurrences(of: "_", with: "-")
+            )
+        }
+        for match in js.matches(of: #/registerLanguage\("([^"]+)"/#) {
+            found.insert(String(match.1))
+        }
+        return found
+    }
+
+    /// The check that was missing.
+    ///
+    /// `FileKindTests` asserted `.cr` answers "crystal" and passed, while the
+    /// bundle registered no such grammar and every `.cr` file rendered flat.
+    /// Nothing failed, because naming a language and shipping one are
+    /// different facts and nothing compared them.
+    func testEveryMappedLanguageIsRegisteredInTheShippedJavaScript() {
+        let registered = registeredLanguages
+        XCTAssertTrue(
+            registered.contains("crystal"),
+            "the Crystal grammar is not in the shipped JavaScript"
+        )
+        for language in FileKind.mappedLanguages.subtracting(knownUnregistered) {
+            XCTAssertTrue(
+                registered.contains(language),
+                "\(language) is mapped by FileKind but no shipped grammar "
+                    + "registers it — files naming it render unstyled"
+            )
+        }
+    }
+
+    /// The exceptions are real, so the list cannot rot into a blanket excuse.
+    func testTheUnregisteredExceptionsAreStillUnregistered() {
+        let registered = registeredLanguages
+        for language in knownUnregistered {
+            XCTAssertFalse(
+                registered.contains(language),
+                "\(language) now ships a grammar — drop it from "
+                    + "knownUnregistered so the check covers it"
+            )
+        }
+    }
 }

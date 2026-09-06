@@ -42,6 +42,7 @@ let package = Package(
                 .copy("Resources/emoji-data.js"),
                 .copy("Resources/emoji-autocomplete.js"),
                 .copy("Resources/highlight.min.js"),
+                .copy("Resources/crystal.min.js"),
                 .copy("Resources/github.min.css"),
                 .copy("Resources/github-dark.min.css"),
                 .copy("Resources/mermaid.min.js"),

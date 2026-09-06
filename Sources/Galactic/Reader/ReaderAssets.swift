@@ -18,8 +18,28 @@ import Foundation
 /// Loaded once and held. A theme change rebuilds the whole document, and
 /// re-reading three megabytes from disk on every toggle is a visible pause.
 public enum ReaderAssets {
-    /// highlight.js, for source and fenced-code rendering.
-    public static let highlightJS: String = load("highlight.min", "js")
+    /// highlight.js, for source and fenced-code rendering, with the grammars
+    /// that ship beside it rather than inside it.
+    ///
+    /// Composed here rather than at the call sites because this property is
+    /// the only thing any of them read — the file reader, fenced code, and
+    /// Galaxy's diff reader in another package. A grammar injected anywhere
+    /// else would reach some of those and silently miss the rest.
+    public static let highlightJS: String =
+        highlightLibraryJS + "\n" + crystalJS
+
+    /// The stock upstream bundle, registering its common subset of languages.
+    ///
+    /// Held apart from the composed `highlightJS` so `ReaderAssetsTests` can
+    /// see each file's presence on its own. Concatenated, one of them going
+    /// missing still leaves a non-empty string.
+    static let highlightLibraryJS: String = load("highlight.min", "js")
+
+    /// The Crystal grammar, which the bundle does not carry.
+    ///
+    /// Upstream ships it as a standalone file that registers itself against
+    /// the global the library defines, so it has to follow the library.
+    static let crystalJS: String = load("crystal.min", "js")
 
     /// mermaid.js, for diagram rendering. Large — see the note above.
     public static let mermaidJS: String = load("mermaid.min", "js")

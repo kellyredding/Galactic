@@ -21,7 +21,8 @@ final class ReaderAssetsTests: XCTestCase {
     /// Name → contents, for every asset shipped to a reader document.
     private var readerAssets: [(String, String)] {
         [
-            ("highlight.min.js", ReaderAssets.highlightJS),
+            ("highlight.min.js", ReaderAssets.highlightLibraryJS),
+            ("crystal.min.js", ReaderAssets.crystalJS),
             ("mermaid.min.js", ReaderAssets.mermaidJS),
             ("github.min.css", ReaderAssets.githubLightCSS),
             ("github-dark.min.css", ReaderAssets.githubDarkCSS),
@@ -57,6 +58,6 @@ final class ReaderAssetsTests: XCTestCase {
     /// The list above is hand-maintained, so the failure mode is forgetting to
     /// add an asset rather than an entry going stale.
     func testCoverageHasNotShrunk() {
-        XCTAssertGreaterThanOrEqual(readerAssets.count, 4)
+        XCTAssertGreaterThanOrEqual(readerAssets.count, 5)
     }
 }
