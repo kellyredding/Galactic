@@ -316,8 +316,9 @@ private struct AgentInboxList: View {
 
     /// The way out when a message cannot be sent and cannot be retyped.
     ///
-    /// `entry.body`, never the row's preview: the preview is a 220-character
-    /// first line and the body behind it routinely runs to tens of thousands.
+    /// `entry.body`, never what the row displays: a collapsed row shows a
+    /// capped first line, and the body behind it routinely runs to tens of
+    /// thousands — an expanded one shows all of it, but not every row is.
     /// Nothing else holds that text — the surface that composed it is torn down
     /// before the send, and this queue is memory-only — so a truncated copy
     /// here loses the rest of it for good.
@@ -381,6 +382,10 @@ private struct AgentInboxRow: View {
     let onDelete: () -> Void
 
     @State private var isHovering = false
+    /// Held per row rather than as a set in the list, because the row is
+    /// already identified by its entry — a set in the parent would have to be
+    /// kept clear of messages that have since been sent or discarded.
+    @State private var isExpanded = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -405,12 +410,18 @@ private struct AgentInboxRow: View {
                     .monospacedDigit()
                     .foregroundStyle(.tertiary)
             }
-            Text(preview)
+            Text(isExpanded
+                ? AgentInboxPreview.full(entry.body)
+                : AgentInboxPreview.collapsed(entry.body))
                 .font(.system(size: 12))
                 .foregroundStyle(entry.state == .ready ? .primary : .secondary)
-                .lineLimit(3)
+                .lineLimit(isExpanded ? nil : 3)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            if AgentInboxPreview.isTruncated(entry.body) {
+                expandToggle
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
@@ -422,6 +433,22 @@ private struct AgentInboxRow: View {
         .background(Color.primary.opacity(isHovering ? 0.06 : 0))
         .animation(.easeInOut(duration: 0.12), value: isHovering)
         .onHover { isHovering = $0 }
+    }
+
+    /// Reveals the rest of a message the collapsed row cut short.
+    ///
+    /// Leading-aligned and inside the row's own stack, unlike the hover
+    /// actions: those are an overlay so that showing them cannot move the text,
+    /// and this one is meant to move it. Always visible rather than revealed on
+    /// hover, because it is the only sign that there is anything more to see.
+    private var expandToggle: some View {
+        Button(isExpanded ? "Show less" : "Show more") {
+            isExpanded.toggle()
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 11))
+        .foregroundStyle(Color.accentColor)
+        .padding(.top, 1)
     }
 
     /// Copy, send, hold, discard — left to right, destructive last and furthest
@@ -475,18 +502,6 @@ private struct AgentInboxRow: View {
             .foregroundStyle(tint)
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(Capsule().fill(tint.opacity(0.12)))
-    }
-
-    /// First line, trimmed. The body can run to tens of thousands of characters
-    /// — a scrollback selection routinely does — and a row is for recognising a
-    /// message, not reading it.
-    private var preview: String {
-        let flattened = entry.body
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\n", with: " ")
-        return flattened.count > 220
-            ? String(flattened.prefix(220)) + "…"
-            : flattened
     }
 
     private var age: String {
