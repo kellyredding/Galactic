@@ -21,11 +21,15 @@ struct FileSetSwitcherView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
+            // The arrow over everything the card covers, set on entering: the
+            // page underneath no longer sets one, so whatever it left would stay.
             Color.clear
                 .contentShape(Rectangle())
                 .onTapGesture { presenter.dismiss() }
+                .onHover { if $0 { NSCursor.arrow.set() } }
             GeometryReader { geometry in
                 card
+                    .onHover { if $0 { NSCursor.arrow.set() } }
                     .padding(.leading, Metrics.leadingInset)
                     .padding(.top, Metrics.topInset)
                     .onChange(of: geometry.size.height, initial: true) {
@@ -249,24 +253,38 @@ private struct FileSetSwitcherRow: View {
             .contentShape(Rectangle())
             .onTapGesture(perform: onActivate)
 
-            if row.setID != nil, !row.isDefault, showsActions {
-                Button(action: onRename) {
-                    Image(systemName: "pencil").font(.system(size: 11))
+            // Laid out on every set's row and only revealed, so the row never
+            // changes width under the pointer. Added on hover, the gap they
+            // opened took the hover away and hid them again, in a loop.
+            if row.setID != nil, !row.isDefault {
+                HStack(spacing: 4) {
+                    actionButton("pencil", help: "Rename", action: onRename)
+                    actionButton("trash", help: "Delete", action: onDelete)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Rename")
-                Button(action: onDelete) {
-                    Image(systemName: "trash").font(.system(size: 11))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Delete")
+                .opacity(showsActions ? 1 : 0)
+                .allowsHitTesting(showsActions)
             }
         }
         .padding(.horizontal, 12)
         .frame(height: FileSetSwitcherView.Metrics.rowHeight)
+        // The whole row answers hover, the gaps between its parts included.
+        .contentShape(Rectangle())
         .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+    }
+
+    private func actionButton(
+        _ glyph: String, help: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: glyph)
+                .font(.system(size: 11))
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help(help)
+        .modifier(PointingHandCursor())
     }
 
     private var glyph: String {
@@ -276,5 +294,28 @@ private struct FileSetSwitcherRow: View {
 
     private var files: String {
         row.fileCount == 1 ? "1 file" : "\(row.fileCount) files"
+    }
+}
+
+/// A pointing hand while over a row's button.
+///
+/// Put back on disappearing while hovered: deleting a row takes its button away
+/// under the pointer, and no exit arrives to restore the arrow.
+private struct PointingHandCursor: ViewModifier {
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                isHovering = inside
+                if inside {
+                    NSCursor.pointingHand.set()
+                } else {
+                    NSCursor.arrow.set()
+                }
+            }
+            .onDisappear {
+                if isHovering { NSCursor.arrow.set() }
+            }
     }
 }
