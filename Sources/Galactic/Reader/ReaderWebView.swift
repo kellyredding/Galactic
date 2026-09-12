@@ -197,6 +197,40 @@ public class ReaderWebView: WKWebView {
         """)
     }
 
+    // MARK: - The pointer under a panel
+
+    /// Whether a panel is drawn over the page. The tracking that sets the cursor
+    /// belongs to WebKit's `WKMouseTrackingObserver`, not this view (measured),
+    /// so it is set aside while covered rather than overridden.
+    var isCovered: Bool = false {
+        didSet {
+            guard isCovered != oldValue else { return }
+            if isCovered {
+                setAsideWebKitTracking()
+            } else {
+                restoreWebKitTracking()
+            }
+        }
+    }
+
+    private var setAsideTracking: [NSTrackingArea] = []
+
+    private func setAsideWebKitTracking() {
+        setAsideTracking = trackingAreas.filter {
+            ($0.owner as AnyObject?) !== self
+        }
+        for area in setAsideTracking { removeTrackingArea(area) }
+    }
+
+    private func restoreWebKitTracking() {
+        let present = trackingAreas
+        for area in setAsideTracking
+        where !present.contains(where: { $0 === area }) {
+            addTrackingArea(area)
+        }
+        setAsideTracking = []
+    }
+
     // MARK: - File Drag and Drop
 
     override public func draggingEntered(

@@ -107,6 +107,10 @@ public struct ReaderHostView: NSViewRepresentable {
     /// declaration.
     public var isVisibleSurface: Bool
 
+    /// Whether a panel is drawn over the page, which quiets the page's pointer
+    /// tracking so it stops setting the cursor under the panel.
+    public var isCovered: Bool
+
     public init(
         isDark: Bool,
         reloadToken: AnyHashable,
@@ -116,6 +120,7 @@ public struct ReaderHostView: NSViewRepresentable {
         baseURL: URL?,
         webView: Binding<WKWebView?>,
         isVisibleSurface: Bool,
+        isCovered: Bool = false,
         onAnnotationMessage: ((AnnotationMessage) -> Void)? = nil,
         onLinkActivated: ((URL) -> Void)? = nil,
         landingJS: (() -> String?)? = nil,
@@ -129,6 +134,7 @@ public struct ReaderHostView: NSViewRepresentable {
         self.baseURL = baseURL
         self._webView = webView
         self.isVisibleSurface = isVisibleSurface
+        self.isCovered = isCovered
         self.onAnnotationMessage = onAnnotationMessage
         self.onLinkActivated = onLinkActivated
         self.landingJS = landingJS
@@ -148,6 +154,7 @@ public struct ReaderHostView: NSViewRepresentable {
         view.setValue(false, forKey: "drawsBackground")
         view.isInspectable = isInspectable
         view.isVisibleSurface = isVisibleSurface
+        view.isCovered = isCovered
         view.navigationDelegate = context.coordinator
         view.wantsLayer = true
         view.layer?.backgroundColor = backdrop
@@ -182,6 +189,7 @@ public struct ReaderHostView: NSViewRepresentable {
         // guard, the flag would be right only on the passes that happened to
         // rebuild the page — which is never the pass that matters.
         view.isVisibleSurface = isVisibleSurface
+        view.isCovered = isCovered
 
         guard context.coordinator.lastToken != reloadToken else { return }
         context.coordinator.lastToken = reloadToken

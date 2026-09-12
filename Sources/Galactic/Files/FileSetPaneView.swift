@@ -56,6 +56,16 @@ struct FileSetPaneView: View {
     @State private var webViewRef: WKWebView?
     @State private var escapeMonitor: Any?
 
+    /// Received rather than observed, so the switcher's typing does not redraw
+    /// every pane.
+    @State private var switcherIsUp = false
+
+    /// The panels with a scrim over the whole reader. The line jump is a small
+    /// card the page stays usable around.
+    private var panelCoversReader: Bool {
+        picker.isPresented || searcher.isPresented || switcherIsUp
+    }
+
     /// What the Escape monitor reads instead of this struct's own properties.
     ///
     /// **A local monitor outlives the view value that installed it.** Its
@@ -191,6 +201,9 @@ struct FileSetPaneView: View {
         // typing does not redraw every pane.
         .onReceive(FileSetSwitcherPresenter.shared.$focusHandbacks) { _ in
             claimReaderFocus(onlyIfStranded: true)
+        }
+        .onReceive(FileSetSwitcherPresenter.shared.$isPresented) {
+            switcherIsUp = $0
         }
     }
 
@@ -377,6 +390,7 @@ struct FileSetPaneView: View {
                 textEntry: surface.textEntryPayload,
                 isDark: isDark,
                 isVisibleSurface: isVisibleSurface,
+                isCovered: isVisibleSurface && panelCoversReader,
                 webViewRef: $webViewRef,
                 // The rescue and the restore are one operation, and the set is
                 // what performs it: the blob arriving belongs to the page being
@@ -466,6 +480,7 @@ private struct FileReaderView: View {
     let textEntry: [String: [[String: Any]]]?
     let isDark: Bool
     let isVisibleSurface: Bool
+    let isCovered: Bool
     @Binding var webViewRef: WKWebView?
     let handOffComposer: (String?) -> String?
     let handOffScroll: (Double) -> Double
@@ -518,6 +533,7 @@ private struct FileReaderView: View {
             baseURL: baseURL,
             webView: $webViewRef,
             isVisibleSurface: isVisibleSurface,
+            isCovered: isCovered,
             onAnnotationMessage: onAnnotationMessage,
             onLinkActivated: onLinkActivated,
             landingJS: landingJS
