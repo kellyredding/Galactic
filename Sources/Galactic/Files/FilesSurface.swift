@@ -223,23 +223,23 @@ public final class FilesSurface {
         return nil
     }
 
-    /// Delete a set, asking first when it holds notes. The default refuses.
+    /// Delete a set, always asking first. The default refuses.
     public func deleteSet(id: String) {
         let group = currentGroup
         guard let target = group.set(withID: id), !target.isDefault else {
             NSSound.beep()
             return
         }
-        let count = target.totalNoteCount
-        guard count > 0, let window = SheetAlert.hostWindow() else {
+        guard let window = SheetAlert.hostWindow() else {
             removeSet(id: id, from: group)
             return
         }
         FileConfirmations.confirmDeleteSet(
             in: window,
             setName: target.name,
-            count: count,
-            onDiscard: { [weak self] in self?.removeSet(id: id, from: group) }
+            fileCount: target.fileCount,
+            noteCount: target.totalNoteCount,
+            onDelete: { [weak self] in self?.removeSet(id: id, from: group) }
         )
     }
 

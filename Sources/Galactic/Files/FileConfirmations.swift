@@ -172,27 +172,51 @@ public enum FileConfirmations {
 
     // MARK: - Deleting a set
 
-    static func deleteSetDetail(setName: String, count: Int) -> String {
-        "\(notesPhrase(count)) in \(setName) \(count == 1 ? "has" : "have") "
-            + "not been sent. Deleting the set closes its files and takes the "
-            + "notes with them. " + finality
+    static func deleteSetMessage(setName: String, noteCount: Int) -> String {
+        noteCount > 0
+            ? "Delete “\(setName)” and discard its notes?"
+            : "Delete “\(setName)”?"
     }
 
-    /// Deleting a set that still holds notes. One with none goes without
-    /// asking: its files can be opened again, and nothing else is lost.
+    static func deleteSetDetail(
+        setName: String, fileCount: Int, noteCount: Int
+    ) -> String {
+        if noteCount > 0 {
+            return "\(notesPhrase(noteCount)) in “\(setName)” "
+                + "\(noteCount == 1 ? "has" : "have") not been sent. Deleting "
+                + "the set closes its files and takes the notes with them. "
+                + finality
+        }
+        switch fileCount {
+        case 0:
+            return "“\(setName)” has no files open, so only the set itself goes."
+        case 1:
+            return "Deleting “\(setName)” closes the file open in it. The file "
+                + "on disk is not touched."
+        default:
+            return "Deleting “\(setName)” closes the \(fileCount) files open "
+                + "in it. The files on disk are not touched."
+        }
+    }
+
+    /// Asked every time, notes or not: the row's delete button sits beside the
+    /// rename one, and a stray click is the accident this is for.
     public static func confirmDeleteSet(
         in window: NSWindow,
         setName: String,
-        count: Int,
-        onDiscard: @escaping () -> Void,
+        fileCount: Int,
+        noteCount: Int,
+        onDelete: @escaping () -> Void,
         onCancel: @escaping () -> Void = {}
     ) {
         SheetAlert.confirm(
             in: window,
-            message: "Delete \(setName) and discard its notes?",
-            detail: deleteSetDetail(setName: setName, count: count),
+            message: deleteSetMessage(setName: setName, noteCount: noteCount),
+            detail: deleteSetDetail(
+                setName: setName, fileCount: fileCount, noteCount: noteCount
+            ),
             confirm: "Delete",
-            onConfirm: onDiscard,
+            onConfirm: onDelete,
             onCancel: onCancel
         )
     }

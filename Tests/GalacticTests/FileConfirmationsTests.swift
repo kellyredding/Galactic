@@ -23,7 +23,9 @@ final class FileConfirmationsTests: XCTestCase {
         let details = [
             FileConfirmations.closeDetail(fileName: "user.rb", count: 2),
             FileConfirmations.reloadDetail(fileName: "user.rb", count: 2),
-            FileConfirmations.deleteSetDetail(setName: "auth", count: 2),
+            FileConfirmations.deleteSetDetail(
+                setName: "auth", fileCount: 1, noteCount: 2
+            ),
         ]
         for detail in details {
             XCTAssertTrue(
@@ -91,14 +93,47 @@ final class FileConfirmationsTests: XCTestCase {
 
     /// Deleting takes one set's notes, so the prompt names the set — and its
     /// verb agrees with the count.
-    func testDeletingASetNamesItAndAgreesWithItsCount() {
+    func testDeletingASetWithNotesNamesItAndAgreesWithItsCount() {
         XCTAssertTrue(
-            FileConfirmations.deleteSetDetail(setName: "auth", count: 1)
-                .contains("1 note in auth has not been sent")
+            FileConfirmations.deleteSetDetail(
+                setName: "auth", fileCount: 3, noteCount: 1
+            ).contains("1 note in “auth” has not been sent")
         )
         XCTAssertTrue(
-            FileConfirmations.deleteSetDetail(setName: "auth", count: 2)
-                .contains("2 notes in auth have not been sent")
+            FileConfirmations.deleteSetDetail(
+                setName: "auth", fileCount: 3, noteCount: 2
+            ).contains("2 notes in “auth” have not been sent")
+        )
+    }
+
+    /// Asked with nothing to lose but the set too, so the prompt says what goes
+    /// and what stays — and claims no loss that is not one.
+    func testDeletingASetWithoutNotesSaysItsFilesCloseAndStayOnDisk() {
+        let detail = FileConfirmations.deleteSetDetail(
+            setName: "auth", fileCount: 3, noteCount: 0
+        )
+
+        XCTAssertTrue(detail.contains("3 files"))
+        XCTAssertTrue(detail.contains("not touched"))
+        XCTAssertFalse(detail.contains("cannot be recovered"))
+    }
+
+    func testDeletingAnEmptySetSaysOnlyTheSetGoes() {
+        XCTAssertTrue(
+            FileConfirmations.deleteSetDetail(
+                setName: "auth", fileCount: 0, noteCount: 0
+            ).contains("no files open")
+        )
+    }
+
+    func testTheDeletePromptMentionsNotesOnlyWhenThereAreSome() {
+        XCTAssertEqual(
+            FileConfirmations.deleteSetMessage(setName: "auth", noteCount: 0),
+            "Delete “auth”?"
+        )
+        XCTAssertEqual(
+            FileConfirmations.deleteSetMessage(setName: "auth", noteCount: 2),
+            "Delete “auth” and discard its notes?"
         )
     }
 }
