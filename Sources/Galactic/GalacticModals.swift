@@ -40,13 +40,15 @@ public enum GalacticModals {
                 || FilePickerPresenter.isClaimingKeyboard
                 || FileSearchPresenter.isClaimingKeyboard
                 || LineJumpPresenter.isClaimingKeyboard
+                || FileSetSwitcherPresenter.isClaimingKeyboard
                 || SheetAlert.isClaimingKeyboard
         }
     }
 
-    /// The three cards that hang under the file strip.
+    /// The cards that hang in the Files surface: three under the file strip,
+    /// and the set switcher under the set bar.
     ///
-    /// They dismiss one another on `present()` — one card, one anchor — so from
+    /// They dismiss one another on `present()` — one card at a time — so from
     /// outside they behave as a single surface that changes which panel it is
     /// showing.
     public static var filesPanelIsClaimingKeyboard: Bool {
@@ -54,6 +56,7 @@ public enum GalacticModals {
             FilePickerPresenter.isClaimingKeyboard
                 || FileSearchPresenter.isClaimingKeyboard
                 || LineJumpPresenter.isClaimingKeyboard
+                || FileSetSwitcherPresenter.isClaimingKeyboard
         }
     }
 

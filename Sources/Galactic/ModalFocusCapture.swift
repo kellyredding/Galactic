@@ -129,6 +129,13 @@ final class ModalFocusCapture {
         other.priorResponder = nil
     }
 
+    /// Drop the note without handing the keyboard back — for a modal whose
+    /// choice has hidden the view it was opened over.
+    func forget() {
+        priorWindow = nil
+        priorResponder = nil
+    }
+
     /// Install the Escape monitor that closes the modal.
     ///
     /// A local event monitor rather than `.onExitCommand` on the view: an

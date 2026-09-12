@@ -244,6 +244,7 @@ public final class FilePickerPresenter: ObservableObject {
         // `FileSearchPresenter.present()`, which says the same in the other
         // direction.
         FileSearchPresenter.shared.dismiss()
+        FileSetSwitcherPresenter.shared.dismiss()
         rows = []
         resetSelection()
         // Dropped on open rather than on a timer: a folder created since the
@@ -262,6 +263,7 @@ public final class FilePickerPresenter: ObservableObject {
         // The searcher's card, if that is what this is replacing, still holds
         // the caret — so the note just captured names a field about to go.
         focus.adopt(from: FileSearchPresenter.shared.focus)
+        focus.adopt(from: FileSetSwitcherPresenter.shared.focus)
         isPresented = true
         // Offered before the walk starts, and not after it. What an empty query
         // shows — closed files, then recent ones — is the host's own history and

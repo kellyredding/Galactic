@@ -46,12 +46,14 @@ public final class LineJumpPresenter: ObservableObject {
 
     public func present(lineCount: Int? = nil) {
         guard !isPresented else { return }
+        FileSetSwitcherPresenter.shared.dismiss()
         query = ""
         self.lineCount = lineCount
         focus.arm(
             isActive: { [weak self] in self?.isPresented ?? false },
             onEscape: { [weak self] in self?.dismiss() }
         )
+        focus.adopt(from: FileSetSwitcherPresenter.shared.focus)
         isPresented = true
     }
 

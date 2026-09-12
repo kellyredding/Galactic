@@ -3,7 +3,7 @@ import Combine
 import SwiftUI
 import WebKit
 
-/// The Files surface: the strip of open files, and one reader under it.
+/// One set's pane: its strip of open files, and one reader under it.
 ///
 /// **One reader, rebuilt on every file switch.** Not one web view per tab — that
 /// would keep each tab's scroll position for free and cost a web view per open
@@ -11,11 +11,12 @@ import WebKit
 /// remembered is kept on the tab instead, and the rebuild path already exists
 /// because a theme change takes the same route.
 ///
-/// A host supplies the set to show, whether this surface is the one in front,
-/// and three publishers for the keystrokes its menu owns. Everything else —
-/// the overlays, the reader dispatch, the find bar, the escape ladder, the empty
-/// state — is the same in every host and lives here.
-public struct FilesPaneView: View {
+/// `FilesPaneView` mounts one of these per set visited and supplies the set,
+/// whether this is the pane in front, and the host's three keystroke
+/// publishers. Everything else — the overlays, the reader dispatch, the find
+/// bar, the escape ladder, the empty state — is the same in every host and
+/// lives here.
+struct FileSetPaneView: View {
 
     private let surface: FilesSurface
     @ObservedObject private var set: FileSet
@@ -58,7 +59,7 @@ public struct FilesPaneView: View {
     /// What the Escape monitor reads instead of this struct's own properties.
     ///
     /// **A local monitor outlives the view value that installed it.** Its
-    /// closure captures the `FilesPaneView` present at `onAppear`, and a SwiftUI
+    /// closure captures the `FileSetPaneView` present at `onAppear`, and a SwiftUI
     /// view struct is a snapshot — so a captured `isVisibleSurface` stays
     /// whatever it was when the pane first mounted, which for a pane behind an
     /// opacity switch is `false` for the life of the process. Escape then never
@@ -76,7 +77,7 @@ public struct FilesPaneView: View {
         webView: nil, reverse: false
     )
 
-    public init(
+    init(
         surface: FilesSurface,
         set: FileSet,
         isVisibleSurface: Bool,
@@ -98,7 +99,7 @@ public struct FilesPaneView: View {
 
     private var isDark: Bool { colorScheme == .dark }
 
-    public var body: some View {
+    var body: some View {
         VStack(spacing: 0) {
             FileTabStripView(
                 set: set,
@@ -184,6 +185,11 @@ public struct FilesPaneView: View {
         // Watched rather than `picker.isPresented`, which flips a tenth of a
         // second before the field is actually gone — see `focusHandbacks`.
         .onChange(of: picker.focusHandbacks) { _, _ in
+            claimReaderFocus(onlyIfStranded: true)
+        }
+        // The switcher's the same way — received rather than observed, so its
+        // typing does not redraw every pane.
+        .onReceive(FileSetSwitcherPresenter.shared.$focusHandbacks) { _ in
             claimReaderFocus(onlyIfStranded: true)
         }
     }

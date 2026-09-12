@@ -284,6 +284,15 @@ public final class FilesSurface {
         }
         searcher.onRun = { [weak self] run in self?.showSearchResults(run) }
         searcher.onChangeRoot = { [weak self] url in self?.changeRoot(to: url) }
+
+        let switcher = FileSetSwitcherPresenter.shared
+        switcher.groupProvider = { [weak self] in self?.currentGroup }
+        switcher.onSelect = { [weak self] id in self?.selectSet(id: id) }
+        switcher.onCreate = { [weak self] name in self?.createSet(named: name) }
+        switcher.onRename = { [weak self] id, name in
+            self?.renameSet(id: id, to: name)
+        }
+        switcher.onDelete = { [weak self] id in self?.deleteSet(id: id) }
     }
 
     /// The surface first, so a panel opens over the place the file will appear
@@ -296,6 +305,21 @@ public final class FilesSurface {
     public func presentSearcher() {
         host.showFilesSurface()
         FileSearchPresenter.shared.present()
+    }
+
+    /// The surface first, so the switcher drops from the bar the reader sees.
+    public func presentSwitcher() {
+        host.showFilesSurface()
+        FileSetSwitcherPresenter.shared.present()
+    }
+
+    public func toggleSwitcher() {
+        let switcher = FileSetSwitcherPresenter.shared
+        if switcher.isPresented {
+            switcher.dismiss()
+        } else {
+            presentSwitcher()
+        }
     }
 
     /// Arriving at Files with nothing open.
@@ -379,7 +403,7 @@ public final class FilesSurface {
     /// keyboard. Without this a panel is left floating over a surface it cannot
     /// open a file into.
     ///
-    /// **All three, which is what `GalacticModals.filesPanelIsClaimingKeyboard`
+    /// **All four, which is what `GalacticModals.filesPanelIsClaimingKeyboard`
     /// already counts.** The line jump was missing here for as long as both
     /// existed: left up, it went on holding an armed Escape monitor behind a
     /// surface nobody was looking at, and blocked every later re-root through a
@@ -393,6 +417,9 @@ public final class FilesSurface {
         }
         if LineJumpPresenter.shared.isPresented {
             LineJumpPresenter.shared.dismiss()
+        }
+        if FileSetSwitcherPresenter.shared.isPresented {
+            FileSetSwitcherPresenter.shared.dismiss()
         }
     }
 
@@ -587,6 +614,9 @@ public final class FilesSurface {
     /// pair, "the one before" and "the one after" are the same key pressed
     /// twice, and a reader who wanted Browse should reach it with either.
     public func selectPreviousInnerTab() {
+        // The switcher has no tabs, and the strip behind it is not what the
+        // reader is looking at.
+        guard !FileSetSwitcherPresenter.shared.isPresented else { return }
         if FilePickerPresenter.shared.isPresented {
             FilePickerPresenter.shared.selectMode(.search)
         } else {
@@ -595,6 +625,7 @@ public final class FilesSurface {
     }
 
     public func selectNextInnerTab() {
+        guard !FileSetSwitcherPresenter.shared.isPresented else { return }
         if FilePickerPresenter.shared.isPresented {
             FilePickerPresenter.shared.selectMode(.browse)
         } else {

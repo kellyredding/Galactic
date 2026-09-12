@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import XCTest
 
 @testable import Galactic
@@ -243,5 +244,32 @@ final class FilesSurfaceSetsTests: XCTestCase {
         XCTAssertEqual(group.sets.map(\.name), ["Default", "auth"])
         XCTAssertEqual(group.selected.id, auth.id)
         XCTAssertEqual(group.selected.selectedPath, url.path)
+    }
+
+    // MARK: - Mounting and the switcher
+
+    func testTheFilesPaneIsMountedFromTheOwnersGroup() {
+        XCTAssertNotNil(
+            FilesPaneView(
+                surface: surface,
+                group: surface.currentGroup,
+                isVisibleSurface: true,
+                findActivations: Empty().eraseToAnyPublisher(),
+                lineJumpActivations: Empty().eraseToAnyPublisher(),
+                searchActivations: Empty().eraseToAnyPublisher()
+            )
+        )
+    }
+
+    func testTheSwitcherGoesDownWithTheOtherPanels() {
+        let switcher = FileSetSwitcherPresenter.shared
+        defer { switcher.dismiss() }
+
+        surface.presentSwitcher()
+        XCTAssertTrue(switcher.isPresented)
+
+        surface.dismissPanels()
+
+        XCTAssertFalse(switcher.isPresented)
     }
 }

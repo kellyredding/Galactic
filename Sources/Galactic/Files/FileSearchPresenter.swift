@@ -119,6 +119,7 @@ public final class FileSearchPresenter: ObservableObject {
         // at the same width, so two open at once would overlap — and both would
         // hold live Escape monitors with no contracted ordering between them.
         FilePickerPresenter.shared.dismiss()
+        FileSetSwitcherPresenter.shared.dismiss()
 
         root = rootProvider()
         presentedOwner = ownerProvider()
@@ -141,6 +142,7 @@ public final class FileSearchPresenter: ObservableObject {
         // The picker's card, if that is what this is replacing, still holds the
         // caret — so the note just captured names a field about to go.
         focus.adopt(from: FilePickerPresenter.shared.focus)
+        focus.adopt(from: FileSetSwitcherPresenter.shared.focus)
         isPresented = true
 
         // The corpus has to have been asked for before it answers: `slices`
