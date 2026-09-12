@@ -35,6 +35,23 @@ public protocol FilesHost: AnyObject {
 
     /// Lines shown either side of a hit in search results.
     var searchContextLines: Int { get }
+
+    /// Bring Files forward for an agent acting on `ownerID`'s sets, answering
+    /// whether it is on screen now. A host that cannot show that owner yet may
+    /// arrange to later and answer false.
+    @discardableResult
+    func showFilesSurface(forAgentOwner ownerID: String) -> Bool
+}
+
+@MainActor
+extension FilesHost {
+    /// The owner in front comes forward at once; any other is left alone.
+    @discardableResult
+    public func showFilesSurface(forAgentOwner ownerID: String) -> Bool {
+        guard ownerID == currentOwnerID else { return false }
+        showFilesSurface()
+        return true
+    }
 }
 
 /// The Files surface, minus the application.
@@ -223,6 +240,21 @@ public final class FilesSurface {
         return nil
     }
 
+    /// Put one of an owner's sets on screen for its agent, answering whether it
+    /// is on screen now. For the owner in front the panels come down on a
+    /// switch, since each files its state under the set it was opened over.
+    @discardableResult
+    func bringForward(_ set: FileSet, in group: FileSetGroup) -> Bool {
+        if group.ownerID == host.currentOwnerID {
+            if group.selectedID != set.id { dismissPanels() }
+            // Left in, it would come back up over the files the agent opened.
+            panelLeftOpen = nil
+        }
+        group.select(id: set.id)
+        persist(group)
+        return host.showFilesSurface(forAgentOwner: group.ownerID)
+    }
+
     /// Delete a set, always asking first. The default refuses.
     public func deleteSet(id: String) {
         let group = currentGroup
@@ -243,7 +275,7 @@ public final class FilesSurface {
         )
     }
 
-    private func removeSet(id: String, from group: FileSetGroup) {
+    func removeSet(id: String, from group: FileSetGroup) {
         guard group.remove(id: id) != nil else { return }
         searchRuns[id] = nil
         persist(group)
