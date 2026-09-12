@@ -23,7 +23,7 @@ final class FileConfirmationsTests: XCTestCase {
         let details = [
             FileConfirmations.closeDetail(fileName: "user.rb", count: 2),
             FileConfirmations.reloadDetail(fileName: "user.rb", count: 2),
-            FileConfirmations.switchSetDetail(setName: "Default", count: 2),
+            FileConfirmations.deleteSetDetail(setName: "auth", count: 2),
         ]
         for detail in details {
             XCTAssertTrue(
@@ -89,10 +89,16 @@ final class FileConfirmationsTests: XCTestCase {
         XCTAssertFalse(reason.contains("\n"))
     }
 
-    func testSwitchingSetsNamesTheSetBeingLeft() {
+    /// Deleting takes one set's notes, so the prompt names the set — and its
+    /// verb agrees with the count.
+    func testDeletingASetNamesItAndAgreesWithItsCount() {
         XCTAssertTrue(
-            FileConfirmations.switchSetDetail(setName: "auth", count: 2)
-                .contains("in auth")
+            FileConfirmations.deleteSetDetail(setName: "auth", count: 1)
+                .contains("1 note in auth has not been sent")
+        )
+        XCTAssertTrue(
+            FileConfirmations.deleteSetDetail(setName: "auth", count: 2)
+                .contains("2 notes in auth have not been sent")
         )
     }
 }

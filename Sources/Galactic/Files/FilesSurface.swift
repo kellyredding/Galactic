@@ -63,14 +63,14 @@ public final class FilesSurface {
     /// what was on disk at launch.
     private var restoredOwners: Set<String> = []
 
-    /// Told whenever the selected file changes, including to nothing.
+    /// Told whenever the set on screen changes, or the file selected in it does.
     ///
     /// A hook rather than a protocol member because only one host has anything
     /// to do with it: Galaxy mirrors the selection onto its session so route
     /// history can record and restore it. A host with no history leaves it nil.
-    public var onSelectionChanged: ((String?) -> Void)?
+    public var onSelectionChanged: ((FileSet) -> Void)?
 
-    /// The run behind a results tab, and the owner it belongs to.
+    /// The run behind each set's results tab, by set id.
     ///
     /// Held rather than baked into the file so a theme change re-renders in the
     /// new appearance. Deliberately **not** published: it is read during a view
@@ -79,8 +79,7 @@ public final class FilesSurface {
     ///
     /// `internal` rather than `private` only because the note and results code
     /// lives in a sibling file, and `private` in Swift is file-scoped.
-    var searchRun: FileSearchRun?
-    var searchRunOwner: String?
+    var searchRuns: [String: FileSearchRun] = [:]
 
     /// Where the next page build should land, consumed once.
     var pendingJump: (path: String, line: Int)?
@@ -98,20 +97,25 @@ public final class FilesSurface {
 
     // MARK: - Sets
 
-    public func set(forOwner ownerID: String) -> FileSet {
-        sets.set(forOwner: ownerID)
+    public func group(forOwner ownerID: String) -> FileSetGroup {
+        sets.group(forOwner: ownerID)
     }
 
-    /// The set the host says is current.
-    public var currentSet: FileSet { sets.set(forOwner: host.currentOwnerID) }
+    /// The group of the owner the host says is current.
+    public var currentGroup: FileSetGroup {
+        sets.group(forOwner: host.currentOwnerID)
+    }
 
-    /// The set an owner already has, without bringing one into being.
+    /// The set on screen: the current group's selected set.
+    public var currentSet: FileSet { currentGroup.selected }
+
+    /// An owner's sets if it has any, without bringing them into being.
     ///
     /// The distinction matters at quit and at close, where the question is "is
     /// there anything to lose" — and asking the creating form would answer it by
-    /// making an empty set for every owner that never opened Files.
-    public func existingSet(forOwner ownerID: String) -> FileSet? {
-        sets.existingSet(forOwner: ownerID)
+    /// making an empty group for every owner that never opened Files.
+    public func existingGroup(forOwner ownerID: String) -> FileSetGroup? {
+        sets.existingGroup(forOwner: ownerID)
     }
 
     public func discard(ownerID: String) {
@@ -123,14 +127,29 @@ public final class FilesSurface {
         sets.pendingNoteTally
     }
 
-    /// Write the set down and tell the host what is selected now.
+    /// Write the set's group down, and tell the host what is selected when the
+    /// set is the one on screen.
     ///
     /// Every mutation ends here, so the two facts are made to agree in one place
     /// rather than once per action — and so the results-path filtering below
     /// cannot be forgotten at one call site out of eleven.
     func persist(_ set: FileSet) {
-        store?.save(snapshot(of: set), forOwner: set.ownerID)
-        onSelectionChanged?(set.selectedPath)
+        let group = sets.group(forOwner: set.ownerID)
+        store?.save(snapshot(of: group), forOwner: group.ownerID)
+        if set.id == group.selectedID { onSelectionChanged?(set) }
+    }
+
+    /// For a change to which sets exist or which one is showing.
+    func persist(_ group: FileSetGroup) {
+        store?.save(snapshot(of: group), forOwner: group.ownerID)
+        onSelectionChanged?(group.selected)
+    }
+
+    func snapshot(of group: FileSetGroup) -> PersistedFileSetGroup {
+        PersistedFileSetGroup(
+            sets: group.sets.map { snapshot(of: $0) },
+            selectedID: group.selectedID
+        )
     }
 
     /// What a restore would need, with the results tab taken out.
@@ -140,8 +159,12 @@ public final class FilesSurface {
     /// on the way to storage rather than made unreal, which would have cost a
     /// branch everywhere a tab is a file.
     func snapshot(of set: FileSet) -> PersistedFileSet {
-        let resultsPath = Self.searchResultsURL(owner: set.ownerID).path
+        let resultsPath = Self.searchResultsURL(setID: set.id).path
         return PersistedFileSet(
+            id: set.id,
+            name: set.name,
+            isDefault: set.isDefault,
+            origin: set.origin,
             root: set.root.path,
             openPathRows: set.openPathRows
                 .map { row in row.filter { $0 != resultsPath } }
@@ -151,7 +174,7 @@ public final class FilesSurface {
         )
     }
 
-    /// Rebuild an owner's set from the last write, once.
+    /// Rebuild an owner's sets from the last write, once.
     ///
     /// **Deliberately does not persist afterwards.** A restore that dropped two
     /// deleted files and immediately saved the shortened list would make a
@@ -162,14 +185,68 @@ public final class FilesSurface {
         guard !restoredOwners.contains(ownerID) else { return }
         restoredOwners.insert(ownerID)
         guard let saved = store?.load(forOwner: ownerID) else { return }
-        let set = sets.set(forOwner: ownerID)
-        if !saved.root.isEmpty {
-            set.changeRoot(to: URL(fileURLWithPath: saved.root))
+        let group = sets.group(forOwner: ownerID)
+        group.restore(from: saved)
+        onSelectionChanged?(group.selected)
+    }
+
+    // MARK: - Choosing, making and removing sets
+
+    /// Show one of an owner's sets — the current owner's, unless a group is
+    /// named, which history needs for the session it is restoring.
+    public func selectSet(id: String, in group: FileSetGroup? = nil) {
+        let group = group ?? currentGroup
+        guard group.selectedID != id, group.select(id: id) else { return }
+        persist(group)
+    }
+
+    /// Make a set beside the one on screen, show it, and offer the picker — a
+    /// new set is empty, and filling it is the only thing to do next.
+    @discardableResult
+    public func createSet(named name: String) -> FileSetNameProblem? {
+        let group = currentGroup
+        switch group.create(name: name, root: currentSet.root) {
+        case .failure(let problem):
+            return problem
+        case .success(let created):
+            group.select(id: created.id)
+            persist(group)
+            offerPickerOnArrival()
+            return nil
         }
-        set.restore(
-            openPathRows: saved.openPathRows, selectedPath: saved.selectedPath
+    }
+
+    public func renameSet(id: String, to name: String) -> FileSetNameProblem? {
+        let group = currentGroup
+        if let problem = group.rename(id: id, to: name) { return problem }
+        persist(group)
+        return nil
+    }
+
+    /// Delete a set, asking first when it holds notes. The default refuses.
+    public func deleteSet(id: String) {
+        let group = currentGroup
+        guard let target = group.set(withID: id), !target.isDefault else {
+            NSSound.beep()
+            return
+        }
+        let count = target.totalNoteCount
+        guard count > 0, let window = SheetAlert.hostWindow() else {
+            removeSet(id: id, from: group)
+            return
+        }
+        FileConfirmations.confirmDeleteSet(
+            in: window,
+            setName: target.name,
+            count: count,
+            onDiscard: { [weak self] in self?.removeSet(id: id, from: group) }
         )
-        onSelectionChanged?(set.selectedPath)
+    }
+
+    private func removeSet(id: String, from group: FileSetGroup) {
+        guard group.remove(id: id) != nil else { return }
+        searchRuns[id] = nil
+        persist(group)
     }
 
     // MARK: - The panels
@@ -185,7 +262,7 @@ public final class FilesSurface {
     public func connectPresenters() {
         let picker = FilePickerPresenter.shared
         picker.rootProvider = { [weak self] in self?.currentSet.root }
-        picker.ownerProvider = { [weak self] in self?.host.currentOwnerID ?? "" }
+        picker.ownerProvider = { [weak self] in self?.currentSet.id ?? "" }
         picker.closedProvider = { [weak self] in
             self?.currentSet.closedTabs.presented() ?? []
         }
@@ -197,9 +274,7 @@ public final class FilesSurface {
 
         let searcher = FileSearchPresenter.shared
         searcher.rootProvider = { [weak self] in self?.currentSet.root }
-        searcher.ownerProvider = { [weak self] in
-            self?.host.currentOwnerID ?? ""
-        }
+        searcher.ownerProvider = { [weak self] in self?.currentSet.id ?? "" }
         // The host's setting, not the index's: it decides how much of a file a
         // reader is shown rather than what the corpus holds, which is why two
         // applications may answer it differently without contradicting one
@@ -541,7 +616,8 @@ public final class FilesSurface {
         persist(set)
     }
 
-    /// Re-root the current set to where its agent now is.
+    /// Re-root the owner's default set to where its agent now is, whichever set
+    /// is showing. Custom sets keep the root they were made with.
     ///
     /// The host decides when to ask — Galaxy asks on arriving at its Files tab
     /// — and what its agent's directory is. What is decided here is whether
@@ -574,9 +650,8 @@ public final class FilesSurface {
     @discardableResult
     public func followAgentRoot(to url: URL) -> Bool {
         guard !GalacticModals.filesPanelIsClaimingKeyboard else { return false }
-        guard let set = existingSet(forOwner: host.currentOwnerID) else {
-            return false
-        }
+        guard let set = existingGroup(forOwner: host.currentOwnerID)?.defaultSet
+        else { return false }
 
         let canonical = FilePaths.canonical(url)
         guard FilePaths.canonical(set.root) != canonical else { return false }
@@ -603,7 +678,7 @@ public final class FilesSurface {
     /// than needing a second path for it.
     public func revealSelectedFile() {
         guard let path = currentSet.selectedPath,
-            path != Self.searchResultsURL(owner: currentSet.ownerID).path,
+            path != Self.searchResultsURL(setID: currentSet.id).path,
             FileManager.default.fileExists(atPath: path)
         else {
             NSSound.beep()

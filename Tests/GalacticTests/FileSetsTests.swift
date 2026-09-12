@@ -4,10 +4,8 @@ import XCTest
 
 /// The owner-keyed collection, exercised with both shapes it has to serve.
 ///
-/// Assist Ant passes a constant and Galaxy will pass a session id, so the tests
-/// use both — the point of building this before Galaxy needs it is that the
-/// keyed case is not a later redesign, and a test that only ever used one key
-/// would not have shown that.
+/// Assist Ant passes a constant and Galaxy a session id, so the tests use both —
+/// a test that only ever used one key would not show the keyed case works.
 final class FileSetsTests: XCTestCase {
 
     private func makeSets() -> FileSets {
@@ -16,14 +14,33 @@ final class FileSetsTests: XCTestCase {
         })
     }
 
-    func testASetIsCreatedOnFirstAskAndReturnedAfterwards() {
+    private func tempDir(_ label: String) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(label)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: dir, withIntermediateDirectories: true
+        )
+        return dir
+    }
+
+    private func note(_ url: URL, in set: FileSet) {
+        set.addNote(
+            filePath: url.path, startLine: 1, endLine: 1,
+            lineContent: "one", content: "n",
+            createdAt: "2026-08-18T00:00:00Z"
+        )
+    }
+
+    func testAGroupIsCreatedOnFirstAskAndReturnedAfterwards() {
         let sets = makeSets()
 
-        let first = sets.set(forOwner: "default")
-        let second = sets.set(forOwner: "default")
+        let first = sets.group(forOwner: "default")
+        let second = sets.group(forOwner: "default")
 
         XCTAssertTrue(first === second)
         XCTAssertEqual(first.ownerID, "default")
+        XCTAssertEqual(first.sets.count, 1)
+        XCTAssertTrue(first.selected.isDefault)
     }
 
     /// The root is resolved per owner, which is what Galaxy's sessions need — a
@@ -31,14 +48,18 @@ final class FileSetsTests: XCTestCase {
     func testEachOwnerGetsItsOwnRoot() {
         let sets = makeSets()
 
-        XCTAssertEqual(sets.set(forOwner: "a").root.path, "/work/a")
-        XCTAssertEqual(sets.set(forOwner: "b").root.path, "/work/b")
+        XCTAssertEqual(
+            sets.group(forOwner: "a").defaultSet.root.path, "/work/a"
+        )
+        XCTAssertEqual(
+            sets.group(forOwner: "b").defaultSet.root.path, "/work/b"
+        )
     }
 
-    func testSetsForDifferentOwnersAreIndependent() throws {
+    func testGroupsForDifferentOwnersAreIndependent() {
         let sets = makeSets()
-        let a = sets.set(forOwner: "a")
-        let b = sets.set(forOwner: "b")
+        let a = sets.group(forOwner: "a").defaultSet
+        let b = sets.group(forOwner: "b").defaultSet
 
         a.changeRoot(to: URL(fileURLWithPath: "/elsewhere"))
 
@@ -46,101 +67,118 @@ final class FileSetsTests: XCTestCase {
         XCTAssertEqual(b.root.path, "/work/b")
     }
 
-    /// Asking whether an owner has a set must not be a way to give it one — the
-    /// quit-time check asks about every session in the window.
-    func testAskingForAnExistingSetDoesNotCreateOne() {
+    /// Presenter memory and search results are filed by set id, so two
+    /// sessions' defaults must not share one.
+    func testDefaultSetsOfDifferentOwnersHaveDifferentIds() {
         let sets = makeSets()
 
-        XCTAssertNil(sets.existingSet(forOwner: "a"))
+        XCTAssertNotEqual(
+            sets.group(forOwner: "a").defaultSet.id,
+            sets.group(forOwner: "b").defaultSet.id
+        )
+    }
+
+    /// Asking whether an owner has sets must not be a way to give it some — the
+    /// quit-time check asks about every session in the window.
+    func testAskingForAnExistingGroupDoesNotCreateOne() {
+        let sets = makeSets()
+
+        XCTAssertNil(sets.existingGroup(forOwner: "a"))
         XCTAssertTrue(sets.allSets.isEmpty)
 
-        _ = sets.set(forOwner: "a")
+        _ = sets.group(forOwner: "a")
 
-        XCTAssertNotNil(sets.existingSet(forOwner: "a"))
+        XCTAssertNotNil(sets.existingGroup(forOwner: "a"))
         XCTAssertEqual(sets.allSets.count, 1)
     }
 
-    func testDiscardingAnOwnerRemovesItsSet() {
+    func testEverySetOfEveryOwnerIsCounted() {
         let sets = makeSets()
-        _ = sets.set(forOwner: "a")
+        _ = sets.group(forOwner: "a").create(
+            name: "auth", root: URL(fileURLWithPath: "/work/a")
+        )
+        _ = sets.group(forOwner: "b")
+
+        XCTAssertEqual(sets.allSets.count, 3)
+    }
+
+    func testDiscardingAnOwnerRemovesItsSets() {
+        let sets = makeSets()
+        _ = sets.group(forOwner: "a")
 
         sets.discard(ownerID: "a")
 
-        XCTAssertNil(sets.existingSet(forOwner: "a"))
+        XCTAssertNil(sets.existingGroup(forOwner: "a"))
     }
 
     /// Quitting is the one moment every set has to be asked at once, because the
-    /// notes are in memory and nowhere else.
+    /// notes are in memory and nowhere else — including sets not on screen.
     func testPendingNotesAreReportedAcrossEverySet() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("file-sets-tests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(
-            at: dir, withIntermediateDirectories: true
-        )
+        let dir = try tempDir("file-sets-tests")
         defer { try? FileManager.default.removeItem(at: dir) }
-
         let url = dir.appendingPathComponent("a.swift")
         try Data("one\n".utf8).write(to: url)
 
         let sets = FileSets(defaultRoot: { _ in dir })
-        _ = sets.set(forOwner: "a")
-        let b = sets.set(forOwner: "b")
+        _ = sets.group(forOwner: "a")
+        let auth = try sets.group(forOwner: "b")
+            .create(name: "auth", root: dir).get()
 
         XCTAssertFalse(sets.hasPendingNotes)
 
-        try b.open(url: url)
-        b.addNote(
-            filePath: url.path,
-            startLine: 1,
-            endLine: 1,
-            lineContent: "one",
-            content: "a note",
-            createdAt: "2026-08-18T00:00:00Z"
-        )
+        try auth.open(url: url)
+        note(url, in: auth)
 
         XCTAssertTrue(sets.hasPendingNotes)
 
-        b.clearNotes()
+        auth.clearNotes()
 
         XCTAssertFalse(sets.hasPendingNotes)
     }
 
     /// The quit prompt's two numbers. "How many files" means files carrying
-    /// notes, not files open — which is why the set answers it rather than the
-    /// host counting tabs.
+    /// notes, not files open.
     func testTheTallyCountsNotesAndTheFilesHoldingThem() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("file-sets-tally-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(
-            at: dir, withIntermediateDirectories: true
-        )
+        let dir = try tempDir("file-sets-tally")
         defer { try? FileManager.default.removeItem(at: dir) }
-
         let a = dir.appendingPathComponent("a.swift")
         let b = dir.appendingPathComponent("b.swift")
         let c = dir.appendingPathComponent("c.swift")
         for url in [a, b, c] { try Data("one\n".utf8).write(to: url) }
 
         let sets = FileSets(defaultRoot: { _ in dir })
-        let set = sets.set(forOwner: "default")
+        let set = sets.group(forOwner: "default").defaultSet
         try set.open(url: a)
         try set.open(url: b)
         try set.open(url: c)
-
-        func note(_ url: URL) {
-            set.addNote(
-                filePath: url.path, startLine: 1, endLine: 1,
-                lineContent: "one", content: "n",
-                createdAt: "2026-08-18T00:00:00Z"
-            )
-        }
-        note(a)
-        note(a)
-        note(b)
+        note(a, in: set)
+        note(a, in: set)
+        note(b, in: set)
 
         let tally = sets.pendingNoteTally
 
         XCTAssertEqual(tally.notes, 3)
         XCTAssertEqual(tally.files, 2, "c is open but carries nothing")
+    }
+
+    /// One file annotated in two sets is one file on disk.
+    func testAFileAnnotatedInTwoSetsIsCountedOnce() throws {
+        let dir = try tempDir("file-sets-shared-file")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("a.swift")
+        try Data("one\n".utf8).write(to: url)
+
+        let sets = FileSets(defaultRoot: { _ in dir })
+        let group = sets.group(forOwner: "default")
+        let auth = try group.create(name: "auth", root: dir).get()
+        try group.defaultSet.open(url: url)
+        try auth.open(url: url)
+        note(url, in: group.defaultSet)
+        note(url, in: auth)
+
+        let tally = sets.pendingNoteTally
+
+        XCTAssertEqual(tally.notes, 2)
+        XCTAssertEqual(tally.files, 1)
     }
 }

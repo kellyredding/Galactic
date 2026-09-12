@@ -33,11 +33,11 @@ final class FilesSurfaceFollowAgentTests: XCTestCase {
 
     /// Bytes in memory, standing in for a host's file.
     private final class Store: FileSetStore {
-        var saved: [String: PersistedFileSet] = [:]
-        func save(_ state: PersistedFileSet, forOwner ownerID: String) {
-            saved[ownerID] = state
+        var saved: [String: PersistedFileSetGroup] = [:]
+        func save(_ group: PersistedFileSetGroup, forOwner ownerID: String) {
+            saved[ownerID] = group
         }
-        func load(forOwner ownerID: String) -> PersistedFileSet? {
+        func load(forOwner ownerID: String) -> PersistedFileSetGroup? {
             saved[ownerID]
         }
     }
@@ -62,7 +62,7 @@ final class FilesSurfaceFollowAgentTests: XCTestCase {
         // What a mounted Files view does. `followAgentRoot` declines before the
         // set exists, so a test that skipped this would assert the refusal
         // rather than the behaviour it names.
-        _ = surface.set(forOwner: host.currentOwnerID)
+        _ = surface.group(forOwner: host.currentOwnerID)
     }
 
     override func tearDownWithError() throws {
@@ -192,10 +192,15 @@ final class FilesSurfaceFollowAgentTests: XCTestCase {
     func testAFollowBeforeTheSetExistsWritesNothing() throws {
         let store = Store()
         store.save(
-            PersistedFileSet(
-                root: try make("saved").path,
-                openPathRows: [["/one.swift"]],
-                selectedPath: "/one.swift"
+            PersistedFileSetGroup(
+                sets: [
+                    PersistedFileSet(
+                        root: try make("saved").path,
+                        openPathRows: [["/one.swift"]],
+                        selectedPath: "/one.swift"
+                    )
+                ],
+                selectedID: nil
             ),
             forOwner: host.currentOwnerID
         )
@@ -205,7 +210,7 @@ final class FilesSurfaceFollowAgentTests: XCTestCase {
 
         XCTAssertFalse(moved)
         XCTAssertEqual(
-            store.load(forOwner: host.currentOwnerID)?.openPathRows,
+            store.load(forOwner: host.currentOwnerID)?.sets.first?.openPathRows,
             [["/one.swift"]],
             "the record still waiting to be restored is untouched"
         )
@@ -223,7 +228,7 @@ final class FilesSurfaceFollowAgentTests: XCTestCase {
         let agent = try make("a")
         let chosen = try make("elsewhere")
         let first = FilesSurface(host: host, store: store)
-        _ = first.set(forOwner: host.currentOwnerID)
+        _ = first.group(forOwner: host.currentOwnerID)
         first.followAgentRoot(to: agent)
         first.changeRoot(to: chosen)
 

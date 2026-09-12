@@ -26,9 +26,23 @@ public final class FileSet: ObservableObject {
     /// interprets it, and the day it means something else it can.
     public let ownerID: String
 
-    /// What a reader calls this set. One per owner today, so there is nothing to
-    /// tell apart yet; named sets are a later phase and this is the field they
-    /// will use.
+    /// Who made a set: the reader, or an agent acting for them.
+    public enum Origin: String, Codable, Sendable {
+        case user
+        case agent
+    }
+
+    public static let defaultName = "Default"
+
+    /// Unique across every owner, and the key for everything kept per set.
+    public let id: String
+
+    /// The owner's own set: always present, never renamed or removed.
+    public let isDefault: Bool
+
+    public let origin: Origin
+
+    /// Unique within the owner's group, which is what enforces it.
     @Published public private(set) var name: String
 
     /// Where browsing starts, and what a tab's label is relative to.
@@ -75,10 +89,16 @@ public final class FileSet: ObservableObject {
 
     public init(
         ownerID: String,
-        name: String = "Default",
+        id: String = UUID().uuidString,
+        name: String = FileSet.defaultName,
+        isDefault: Bool = false,
+        origin: Origin = .user,
         root: URL
     ) {
         self.ownerID = ownerID
+        self.id = id
+        self.isDefault = isDefault
+        self.origin = origin
         self.name = name
         self.root = root
         tabs = FileTabStripModel()
@@ -102,6 +122,8 @@ public final class FileSet: ObservableObject {
     }
 
     public var isEmpty: Bool { tabs.isEmpty }
+
+    public var fileCount: Int { tabs.tabs.count }
 
     /// What the badge on one tab shows.
     public func noteCount(forPath path: String) -> Int {

@@ -20,6 +20,9 @@ import AppKit
 /// goes onto the file being left and comes back when the reader returns — so
 /// there is nothing to warn about, and a warning would teach a reader that
 /// moving between files is dangerous when it is the ordinary thing to do.
+///
+/// **Switching sets.** Each set keeps its own pane, so its page — and any
+/// half-written note in it — is still there when the reader comes back.
 public enum FileConfirmations {
 
     /// "3 notes" / "1 note". Its own function because four prompts count the
@@ -167,22 +170,17 @@ public enum FileConfirmations {
         )
     }
 
-    // MARK: - Switching sets
+    // MARK: - Deleting a set
 
-    static func switchSetDetail(setName: String, count: Int) -> String {
-        "\(notesPhrase(count)) in \(setName) have not been sent. Switching "
-            + "sets empties them. " + finality
+    static func deleteSetDetail(setName: String, count: Int) -> String {
+        "\(notesPhrase(count)) in \(setName) \(count == 1 ? "has" : "have") "
+            + "not been sent. Deleting the set closes its files and takes the "
+            + "notes with them. " + finality
     }
 
-    /// Leaving a set that still holds notes.
-    ///
-    /// **No caller yet, on purpose.** Sets are one-per-owner until named sets
-    /// ship, so nothing can switch away from one — but the moment something can,
-    /// the reader has to be asked, and the failure mode of discovering that later
-    /// is a feature that silently empties a review on its first day. Written now
-    /// so that phase adds a call site rather than a mechanism, and so this file
-    /// holds every question the surface knows how to ask.
-    public static func confirmSwitchSet(
+    /// Deleting a set that still holds notes. One with none goes without
+    /// asking: its files can be opened again, and nothing else is lost.
+    public static func confirmDeleteSet(
         in window: NSWindow,
         setName: String,
         count: Int,
@@ -191,9 +189,9 @@ public enum FileConfirmations {
     ) {
         SheetAlert.confirm(
             in: window,
-            message: "Leave \(setName) and discard its notes?",
-            detail: switchSetDetail(setName: setName, count: count),
-            confirm: "Leave",
+            message: "Delete \(setName) and discard its notes?",
+            detail: deleteSetDetail(setName: setName, count: count),
+            confirm: "Delete",
             onConfirm: onDiscard,
             onCancel: onCancel
         )

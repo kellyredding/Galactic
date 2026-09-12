@@ -34,8 +34,7 @@ public final class FileSearchPresenter: ObservableObject {
     /// Where to search. The set's root, which is also the picker's.
     public var rootProvider: () -> URL? = { nil }
 
-    /// Which file set this is. `FileSet.ownerID` — a session id in one host, a
-    /// constant in the other.
+    /// Which file set this is: `FileSet.id`.
     public var ownerProvider: () -> String = { "" }
 
     /// How many lines either side of a match to show.

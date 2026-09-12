@@ -268,20 +268,20 @@ extension FilesSurface {
     /// list, so the results can never be found by the search that wrote them. A
     /// host rooted at home would turn up its own results anywhere else under
     /// `~`, which is why this is not left to one.
-    public static func searchResultsURL(owner: String) -> URL {
+    public static func searchResultsURL(setID: String) -> URL {
         FileIndexPaths.root
             .appendingPathComponent("search")
-            .appendingPathComponent(owner)
+            .appendingPathComponent(setID)
             .appendingPathComponent("Find Results")
     }
 
-    /// The run behind the results tab, if this path is it.
-    public func searchRun(forPath path: String, owner: String) -> FileSearchRun?
+    /// The run behind a set's results tab, if this path is it.
+    public func searchRun(forPath path: String, setID: String) -> FileSearchRun?
     {
-        guard owner == searchRunOwner,
-            path == Self.searchResultsURL(owner: owner).path
-        else { return nil }
-        return searchRun
+        guard path == Self.searchResultsURL(setID: setID).path else {
+            return nil
+        }
+        return searchRuns[setID]
     }
 
     /// Write a run and put it on screen.
@@ -291,9 +291,8 @@ extension FilesSurface {
     /// other tab instead of needing a branch each.
     public func showSearchResults(_ run: FileSearchRun) {
         let set = currentSet
-        searchRun = run
-        searchRunOwner = set.ownerID
-        let url = Self.searchResultsURL(owner: set.ownerID)
+        searchRuns[set.id] = run
+        let url = Self.searchResultsURL(setID: set.id)
         do {
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),

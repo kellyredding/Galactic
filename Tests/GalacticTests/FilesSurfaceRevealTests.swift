@@ -73,7 +73,9 @@ final class FilesSurfaceRevealTests: XCTestCase {
     /// **The results tab is a file on disk and not a file the reader has.**
     /// Revealing it climbs out of their tree to show them something synthetic.
     func testTheSearchResultsTabIsRefused() throws {
-        let results = FilesSurface.searchResultsURL(owner: host.currentOwnerID)
+        let results = FilesSurface.searchResultsURL(
+            setID: surface.currentSet.id
+        )
         try FileManager.default.createDirectory(
             at: results.deletingLastPathComponent(),
             withIntermediateDirectories: true

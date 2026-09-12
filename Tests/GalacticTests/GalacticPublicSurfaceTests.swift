@@ -509,10 +509,11 @@ final class GalacticPublicSurfaceTests: XCTestCase {
         XCTAssertEqual(parsed.line, 42)
     }
 
-    /// What a host mounts a Files surface out of: the keyed collection, the set
-    /// it hands back, and the strip that draws it.
+    /// What a host mounts a Files surface out of: the keyed collection, the
+    /// group of sets it hands back, the set on screen, and the strip that draws
+    /// it.
     @MainActor
-    func testAFilesSurfaceIsReachedThroughASetAndItsStrip() throws {
+    func testAFilesSurfaceIsReachedThroughAGroupASetAndItsStrip() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("files-surface-\(UUID().uuidString)")
         try FileManager.default.createDirectory(
@@ -523,7 +524,13 @@ final class GalacticPublicSurfaceTests: XCTestCase {
         try Data("let x = 1\n".utf8).write(to: url)
 
         let sets = FileSets(defaultRoot: { _ in dir })
-        let set = sets.set(forOwner: "default")
+        let group = sets.group(forOwner: "default")
+        let set = group.selected
+        XCTAssertTrue(set === group.defaultSet)
+        let other = try group.create(name: "auth", root: dir).get()
+        XCTAssertTrue(group.select(id: other.id))
+        XCTAssertTrue(group.selected === other)
+        group.select(id: set.id)
         let tab = try set.open(url: url)
 
         XCTAssertEqual(set.selectedTab?.id, tab.id)

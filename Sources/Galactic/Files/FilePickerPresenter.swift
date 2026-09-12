@@ -195,11 +195,10 @@ public final class FilePickerPresenter: ObservableObject {
     /// does not own the root; it only asks for one and reports a change.
     public var onChangeRoot: (URL) -> Void = { _ in }
 
-    /// Which file set the picker is being opened for.
+    /// Which file set the picker is being opened for: `FileSet.id`.
     ///
-    /// `FileSet.ownerID` — a session id in Galaxy, a constant in Assist Ant.
     /// What it keys is the state below: reopening the picker returns to what it
-    /// was left showing, and one session's tree is not another's.
+    /// was left showing, and one set's tree is not another's.
     public var ownerProvider: () -> String = { "" }
 
     // MARK: - Internals

@@ -366,7 +366,7 @@ public struct FilesPaneView: View {
                 // Non-nil only for this set's results file, which is what makes
                 // that tab render as results rather than as its own source.
                 searchRun: surface.searchRun(
-                    forPath: tab.path, owner: set.ownerID
+                    forPath: tab.path, setID: set.id
                 ),
                 textEntry: surface.textEntryPayload,
                 isDark: isDark,
