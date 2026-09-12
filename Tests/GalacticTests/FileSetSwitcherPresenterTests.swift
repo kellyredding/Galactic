@@ -119,20 +119,31 @@ final class FileSetSwitcherPresenterTests: XCTestCase {
 
     // MARK: - Rows
 
-    func testTheListIsTheDefaultThenRecentSetsThenANewSetRow() throws {
-        try make("a")
+    func testTheListIsTheDefaultThenTheOtherSetsByNameThenANewSetRow() throws {
         try make("b")
+        try make("a")
 
         presenter.present()
 
         XCTAssertEqual(
-            presenter.rows.map(\.name), ["Default", "b", "a", "New set…"]
+            presenter.rows.map(\.name), ["Default", "a", "b", "New set…"]
         )
         XCTAssertTrue(presenter.rows[0].isCurrent)
     }
 
-    /// ⌘P then Return goes back to the set the reader was just in.
-    func testOpeningHighlightsTheFirstSetNotOnScreen() throws {
+    /// Choosing again goes back to the set the reader was just in.
+    func testOpeningHighlightsTheSetShownBeforeThisOne() throws {
+        let a = try make("a")
+        let b = try make("b")
+        group.select(id: a.id)
+        group.select(id: b.id)
+
+        presenter.present()
+
+        XCTAssertEqual(presenter.rows[presenter.selectedIndex].setID, a.id)
+    }
+
+    func testWithNoSetBeforeTheFirstOneNotOnScreenIsHighlighted() throws {
         try make("a")
 
         presenter.present()

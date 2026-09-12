@@ -26,10 +26,14 @@ public final class FileSetGroup: ObservableObject {
 
     public let ownerID: String
 
-    /// The default first, then the rest by most recent selection.
+    /// The default first, then the rest by name.
     @Published public private(set) var sets: [FileSet]
 
     @Published public private(set) var selectedID: String
+
+    /// The set shown before the one on screen — what the switcher offers first,
+    /// so choosing again goes back to it. In memory only.
+    public private(set) var previousID: String?
 
     public init(ownerID: String, defaultRoot: URL) {
         self.ownerID = ownerID
@@ -66,18 +70,13 @@ public final class FileSetGroup: ObservableObject {
 
     // MARK: - Choosing
 
-    /// Show a set, moving it to the head of the recent ones.
+    /// Show a set, remembering the one it replaces.
     @discardableResult
     public func select(id: String) -> Bool {
-        guard let index = sets.firstIndex(where: { $0.id == id }) else {
-            return false
-        }
-        if index > 1 {
-            var reordered = sets
-            reordered.insert(reordered.remove(at: index), at: 1)
-            sets = reordered
-        }
-        if selectedID != id { selectedID = id }
+        guard sets.contains(where: { $0.id == id }) else { return false }
+        guard selectedID != id else { return true }
+        previousID = selectedID
+        selectedID = id
         return true
     }
 
@@ -103,7 +102,7 @@ public final class FileSetGroup: ObservableObject {
             let created = FileSet(
                 ownerID: ownerID, name: name, origin: origin, root: root
             )
-            sets.insert(created, at: 1)
+            sets = Self.ordered(sets + [created])
             return created
         }
     }
@@ -115,10 +114,11 @@ public final class FileSetGroup: ObservableObject {
         case .failure(let problem):
             return problem
         case .success(let name):
-            // The set publishes its own name; the bar and the switcher's rows
-            // observe this object instead.
-            objectWillChange.send()
             target.rename(to: name)
+            // A new name can move the set. Reassigning is also what tells the
+            // bar and the switcher's rows, which observe this object rather
+            // than the set.
+            sets = Self.ordered(sets)
             return nil
         }
     }
@@ -131,7 +131,11 @@ public final class FileSetGroup: ObservableObject {
             !sets[index].isDefault
         else { return nil }
         let removed = sets.remove(at: index)
-        if selectedID == id { selectedID = defaultSet.id }
+        if previousID == id { previousID = nil }
+        if selectedID == id {
+            selectedID = defaultSet.id
+            if previousID == selectedID { previousID = nil }
+        }
         return removed
     }
 
@@ -197,12 +201,22 @@ public final class FileSetGroup: ObservableObject {
             rebuilt.append(set)
         }
 
-        sets = rebuilt
+        sets = Self.ordered(rebuilt)
         let wanted = saved.selectedID.flatMap { id in
             rebuilt.first { $0.id == id }?.id
         }
         selectedID = wanted ?? defaultSet.id
+        previousID = nil
         return dropped
+    }
+
+    /// The default first, then the rest by name the way Finder sorts them, so
+    /// `test2` comes before `test10`.
+    private static func ordered(_ sets: [FileSet]) -> [FileSet] {
+        let rest = sets.filter { !$0.isDefault }.sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+        return sets.filter(\.isDefault) + rest
     }
 
     private static func comparable(_ name: String) -> String {

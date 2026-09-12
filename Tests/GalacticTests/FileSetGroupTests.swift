@@ -93,35 +93,49 @@ final class FileSetGroupTests: XCTestCase {
         XCTAssertEqual(auth.root, dir)
     }
 
-    func testTheNewestSetLeadsTheRest() throws {
+    /// The way Finder sorts, so a number in a name is read as a number.
+    func testTheOtherSetsFollowTheDefaultByName() throws {
         let group = makeGroup()
-        let a = try create("a", in: group)
-        let b = try create("b", in: group)
+        for name in ["test10", "beta", "test2", "Alpha"] {
+            try create(name, in: group)
+        }
 
-        XCTAssertEqual(group.sets.map(\.id), [group.defaultSet.id, b.id, a.id])
+        XCTAssertEqual(
+            group.sets.map(\.name),
+            ["Default", "Alpha", "beta", "test2", "test10"]
+        )
     }
 
-    func testChoosingASetMovesItToTheHeadOfTheRest() throws {
+    func testChoosingASetLeavesTheOrderAlone() throws {
         let group = makeGroup()
         let a = try create("a", in: group)
         let b = try create("b", in: group)
 
-        XCTAssertTrue(group.select(id: a.id))
+        XCTAssertTrue(group.select(id: b.id))
 
-        XCTAssertTrue(group.selected === a)
+        XCTAssertTrue(group.selected === b)
         XCTAssertEqual(group.sets.map(\.id), [group.defaultSet.id, a.id, b.id])
     }
 
-    func testChoosingTheDefaultLeavesTheOrderAlone() throws {
+    func testChoosingASetRemembersTheOneBefore() throws {
         let group = makeGroup()
         let a = try create("a", in: group)
         let b = try create("b", in: group)
+
+        group.select(id: a.id)
+        group.select(id: b.id)
+
+        XCTAssertEqual(group.previousID, a.id)
+    }
+
+    func testChoosingTheSetOnScreenForgetsNothing() throws {
+        let group = makeGroup()
+        let a = try create("a", in: group)
         group.select(id: a.id)
 
-        group.select(id: group.defaultSet.id)
+        group.select(id: a.id)
 
-        XCTAssertTrue(group.selected.isDefault)
-        XCTAssertEqual(group.sets.map(\.id), [group.defaultSet.id, a.id, b.id])
+        XCTAssertEqual(group.previousID, group.defaultSet.id)
     }
 
     func testChoosingAnUnknownSetChangesNothing() {
@@ -175,6 +189,16 @@ final class FileSetGroupTests: XCTestCase {
         XCTAssertEqual(auth.name, "auth")
     }
 
+    func testRenamingMovesASetToItsPlaceByName() throws {
+        let group = makeGroup()
+        let a = try create("a", in: group)
+        try create("m", in: group)
+
+        group.rename(id: a.id, to: "z")
+
+        XCTAssertEqual(group.sets.map(\.name), ["Default", "m", "z"])
+    }
+
     func testFindingASetByNameIgnoresCaseAndSpacing() throws {
         let group = makeGroup()
         let auth = try create("Auth Flow", in: group)
@@ -204,6 +228,18 @@ final class FileSetGroupTests: XCTestCase {
         group.remove(id: b.id)
 
         XCTAssertTrue(group.selected === a)
+    }
+
+    func testRemovingTheSetShownBeforeForgetsIt() throws {
+        let group = makeGroup()
+        let a = try create("a", in: group)
+        let b = try create("b", in: group)
+        group.select(id: a.id)
+        group.select(id: b.id)
+
+        group.remove(id: a.id)
+
+        XCTAssertNil(group.previousID)
     }
 
     // MARK: - Notes
@@ -332,6 +368,22 @@ final class FileSetGroupTests: XCTestCase {
         )
 
         XCTAssertEqual(group.sets.map(\.id), [group.defaultSet.id, "b"])
+    }
+
+    func testRestoredSetsAreOrderedByName() {
+        let group = makeGroup()
+
+        group.restore(
+            from: PersistedFileSetGroup(
+                sets: [
+                    custom(id: "z", name: "zeta"),
+                    custom(id: "a", name: "alpha"),
+                ],
+                selectedID: nil
+            )
+        )
+
+        XCTAssertEqual(group.sets.map(\.name), ["Default", "alpha", "zeta"])
     }
 
     func testACustomSetWithNoRootStartsWhereTheDefaultDoes() {

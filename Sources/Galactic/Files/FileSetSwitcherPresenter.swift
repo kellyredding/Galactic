@@ -264,9 +264,9 @@ final class FileSetSwitcherPresenter: ObservableObject {
 
     /// The sets, then a row for making one.
     ///
-    /// Unfiltered, the group's own order and the first set not on screen
-    /// highlighted, so ⌘P then Return goes back to where the reader just was.
-    /// Filtered, best match first.
+    /// Unfiltered, the group's own order with the set shown before this one
+    /// highlighted, so choosing again goes back to it. Filtered, best match
+    /// first.
     func refreshRows() {
         guard let group else {
             rows = []
@@ -319,7 +319,13 @@ final class FileSetSwitcherPresenter: ObservableObject {
         )
 
         rows = built
-        selectedIndex =
-            typed.isEmpty ? (built.firstIndex { !$0.isCurrent } ?? 0) : 0
+        guard typed.isEmpty else {
+            selectedIndex = 0
+            return
+        }
+        let previous = group.previousID.flatMap { id in
+            built.firstIndex { $0.setID == id }
+        }
+        selectedIndex = previous ?? built.firstIndex { !$0.isCurrent } ?? 0
     }
 }
