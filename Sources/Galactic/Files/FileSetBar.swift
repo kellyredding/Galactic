@@ -34,13 +34,7 @@ struct FileSetBar: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            // On the button rather than the dot, which is too small to hover.
-            .help(
-                group.otherSetsHoldNotes
-                    ? "Switch file set — another set has notes that have not "
-                        + "been sent"
-                    : "Switch file set"
-            )
+            .help(tooltip)
 
             Spacer(minLength: 8)
 
@@ -48,6 +42,16 @@ struct FileSetBar: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 26)
+    }
+
+    /// On the button because the dot and the ✦ are too small to hover.
+    private var tooltip: String {
+        let action =
+            group.otherSetsHoldNotes
+            ? "Switch file set — another set has notes that have not been sent"
+            : "Switch file set"
+        return group.selected.origin == .agent
+            ? "Made by the agent\n" + action : action
     }
 
     private var green: Color {
