@@ -9,6 +9,9 @@ public struct FileSearchQuery: Equatable, Sendable {
     /// lines only.
     public let contextLines: Int
 
+    /// What a host lets a reader choose, and clamps a stored value to.
+    public static let contextLinesRange: ClosedRange<Int> = 0...10
+
     public init(text: String, isCaseSensitive: Bool, contextLines: Int) {
         self.text = text
         self.isCaseSensitive = isCaseSensitive

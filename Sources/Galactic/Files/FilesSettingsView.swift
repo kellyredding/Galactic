@@ -20,10 +20,6 @@ public struct FilesSettingsView: View {
         self._searchContextLines = searchContextLines
     }
 
-    /// What the stepper allows. Zero is meaningful — matching lines only, which
-    /// is what grep gives you.
-    public static let contextRange: ClosedRange<Int> = 0...10
-
     public var body: some View {
         SettingsCard(title: "Search") {
             SettingsRow(label: "Lines of context") {
@@ -35,7 +31,7 @@ public struct FilesSettingsView: View {
                     Stepper(
                         "",
                         value: $searchContextLines,
-                        in: Self.contextRange
+                        in: FileSearchQuery.contextLinesRange
                     )
                     .labelsHidden()
 
