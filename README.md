@@ -8,7 +8,7 @@ directly to any specific implementation.
 
 ## Status
 
-v0.10.0. Began as an engine bridge and is now also the shared
+v0.10.1. Began as an engine bridge and is now also the shared
 substrate for the applications built on it: pane composition, the
 scrollback surface, find, text-entry bindings, automated prompt
 submission, reading files, and the colours a source document is
@@ -29,7 +29,7 @@ released tag:
 ```swift
 .package(
     url: "https://github.com/kellyredding/Galactic.git",
-    exact: "0.10.0"
+    exact: "0.10.1"
 )
 ```
 
