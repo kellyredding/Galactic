@@ -752,6 +752,127 @@ extension FileIndexLiveTests {
         )
     }
 
+    /// A deleted folder used to cost a rewalk of its whole top-level shard —
+    /// 605,869 entries and 26 s for one folder under `~/projects` — and agents
+    /// deleting folders kept that shard walking back to back. The subtree is one
+    /// contiguous range of a sorted corpus, so it is hidden where it stands.
+    func testRemovingADirectoryHidesItsChildrenWithoutARewalk() async throws {
+        try touch("top/gone/inner/leafgone.swift")
+        try touch("top/gone-keeper/keepdash.swift")
+        try touch("top/gone0/keepzero.swift")
+        await indexRoot()
+
+        let directory = root.appendingPathComponent("top/gone")
+        try FileManager.default.removeItem(at: directory)
+        await FileCorpusStore.shared.noteRemoved([directory.path], canonicalRoot: canonical)
+
+        XCTAssertTrue(found("leafgone").isEmpty, "a child of a removed directory still resolves")
+        XCTAssertEqual(found("keepdash"), ["top/gone-keeper/keepdash.swift"])
+        XCTAssertEqual(found("keepzero"), ["top/gone0/keepzero.swift"])
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        XCTAssertEqual(
+            catalog.shards(forRoot: canonical).first { $0.name == "top" }?.dirty, false,
+            "the removal still asked for a rewalk"
+        )
+    }
+
+    func testRemovingADirectoryDropsItsOverlayEntries() async throws {
+        try touch("top/seed.swift")
+        await indexRoot()
+
+        let fresh = try touch("top/fresh/overlayonly.swift")
+        await FileCorpusStore.shared.noteCreated(
+            [fresh.deletingLastPathComponent().path, fresh.path], canonicalRoot: canonical
+        )
+        await FileCorpusStore.shared.quiesce()
+        XCTAssertEqual(found("overlayonly"), ["top/fresh/overlayonly.swift"])
+
+        let directory = root.appendingPathComponent("top/fresh")
+        try FileManager.default.removeItem(at: directory)
+        await FileCorpusStore.shared.noteRemoved([directory.path], canonicalRoot: canonical)
+
+        XCTAssertTrue(found("overlayonly").isEmpty, "an overlay entry outlived its directory")
+    }
+
+    /// A rename arrives as one path gone and one path new, and the contents of
+    /// the new one generate no events of their own.
+    func testAFolderRenamedWithinTheRootMovesItsChildren() async throws {
+        try touch("top/oldname/deep/renamedleaf.swift")
+        await indexRoot()
+
+        let before = root.appendingPathComponent("top/oldname")
+        let after = root.appendingPathComponent("top/newname")
+        try FileManager.default.moveItem(at: before, to: after)
+        await FileCorpusStore.shared.apply(
+            touched: [before.path, after.path], rescan: [], canonicalRoot: canonical
+        )
+        await FileCorpusStore.shared.quiesce()
+
+        XCTAssertEqual(found("renamedleaf"), ["top/newname/deep/renamedleaf.swift"])
+    }
+
+    /// What `git checkout` does to a folder a branch deleted.
+    func testAFolderRestoredAfterRemovalIsFoundAgain() async throws {
+        try touch("top/restored/comeback.swift")
+        await indexRoot()
+
+        let directory = root.appendingPathComponent("top/restored")
+        try FileManager.default.removeItem(at: directory)
+        await FileCorpusStore.shared.apply(
+            touched: [directory.path], rescan: [], canonicalRoot: canonical
+        )
+        XCTAssertTrue(found("comeback").isEmpty)
+
+        try touch("top/restored/comeback.swift")
+        await FileCorpusStore.shared.apply(
+            touched: [directory.path], rescan: [], canonicalRoot: canonical
+        )
+        await FileCorpusStore.shared.quiesce()
+
+        XCTAssertEqual(found("comeback"), ["top/restored/comeback.swift"])
+    }
+
+    /// The file system names a directory whenever anything inside it changes.
+    /// Taking that as a new directory walked 35,320 entries of an unchanged
+    /// tree, twice in a minute, on the store's own executor.
+    func testAnEventForADirectoryAlreadyIndexedAdoptsNothing() async throws {
+        try touch("top/settled/first.swift")
+        await indexRoot()
+
+        let directory = root.appendingPathComponent("top/settled")
+        try touch("top/settled/second.swift")
+        await FileCorpusStore.shared.apply(
+            touched: [directory.path, directory.appendingPathComponent("second.swift").path],
+            rescan: [], canonicalRoot: canonical
+        )
+        await FileCorpusStore.shared.quiesce()
+        FileIndexLog.shared.drain()
+
+        let adoptions = FileIndexLog.shared.tail(200).filter { $0.contains("[adopt]") }
+        XCTAssertTrue(adoptions.isEmpty, "a known directory was adopted: \(adoptions)")
+        XCTAssertEqual(found("second"), ["top/settled/second.swift"])
+    }
+
+    func testAFolderMovedInFromOutsideIsAdopted() async throws {
+        try touch("top/seed.swift")
+        await indexRoot()
+
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("galactic-live-outside-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: outside.appendingPathComponent("nested"), withIntermediateDirectories: true
+        )
+        try Data("x".utf8).write(to: outside.appendingPathComponent("nested/arrivedleaf.swift"))
+        let arrived = root.appendingPathComponent("top/arrived")
+        try FileManager.default.moveItem(at: outside, to: arrived)
+        await FileCorpusStore.shared.apply(
+            touched: [arrived.path], rescan: [], canonicalRoot: canonical
+        )
+        await FileCorpusStore.shared.quiesce()
+
+        XCTAssertEqual(found("arrivedleaf"), ["top/arrived/nested/arrivedleaf.swift"])
+    }
+
     /// The overlay used to be bounded only by time — it drained when the
     /// sweep reached a shard, an hour away at the earliest — so an active
     /// hour grew it without limit while every batch of events re-encoded the

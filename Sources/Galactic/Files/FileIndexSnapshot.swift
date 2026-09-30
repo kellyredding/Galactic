@@ -209,16 +209,22 @@ public final class FileIndexSnapshot: @unchecked Sendable {
         // rather than forty-six.
         if let covering = servedBy[root], let state = readStates[covering] {
             var slices: [FileMatcher.Slice] = []
-            for name in state.shards.keys.sorted() {
-                guard let corpus = state.shards[name] else { continue }
-                let range = corpus.range(underCanonical: root)
-                guard !range.isEmpty else { continue }
-                slices.append(
-                    FileMatcher.Slice(
-                        corpus: corpus, removed: state.removed[name],
-                        range: range
+            // Only the shard named by the subtree's first component can hold
+            // anything under it. Asking all of them cost two binary searches per
+            // shard, per served subtree, on every event batch's publish.
+            if let relative = FilePaths.relative(root, under: covering),
+                let first = relative.split(separator: "/").first,
+                let corpus = state.shards[String(first)]
+            {
+                let range = corpus.range(underRelative: relative)
+                if !range.isEmpty {
+                    slices.append(
+                        FileMatcher.Slice(
+                            corpus: corpus, removed: state.removed[String(first)],
+                            range: range
+                        )
                     )
-                )
+                }
             }
             if let delta = state.delta {
                 let range = delta.range(underCanonical: root)

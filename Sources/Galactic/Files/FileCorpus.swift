@@ -239,6 +239,11 @@ public struct FileCorpus: @unchecked Sendable {
         guard let relative = FilePaths.relative(canonical, under: root) else {
             return 0..<0
         }
+        return range(underRelative: relative)
+    }
+
+    /// The same, for a path already relative to `root`.
+    func range(underRelative relative: String) -> Range<Int> {
         // Everything under `foo/bar` sorts between `foo/bar/` and `foo/bar0`,
         // because `0` is the byte after `/`. Comparing against the separator
         // rather than the bare name is what keeps `project-other` out of

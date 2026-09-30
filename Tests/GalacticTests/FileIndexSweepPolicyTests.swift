@@ -265,4 +265,72 @@ final class FileIndexSweepPolicyTests: XCTestCase {
             second, first, "the busy shard was chosen a second time"
         )
     }
+
+    // MARK: - Cool-down after an expensive walk
+
+    /// Deleting folders in a large tree dirtied its shard faster than a walk of
+    /// it could finish, so the sweep walked it back to back. A dirty shard now
+    /// waits in proportion to what its last walk cost.
+    func testADirtyShardWaitsInProportionToItsLastWalk() async throws {
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        let walked = Date()
+        catalog.adopt(root: canonical)
+        catalog.record(
+            root: canonical, name: "projects", generation: 1, entryCount: 5,
+            walkedAt: walked, eventsUUID: nil, eventsID: nil
+        )
+        catalog.markDirty(root: canonical, name: "projects")
+        await FileIndexRefreshSweep.shared.recordWalk(
+            shard: "projects", inRoot: canonical, finished: walked, seconds: 10
+        )
+
+        let early = await FileIndexRefreshSweep.shared.nextShard(
+            in: canonical, from: catalog, now: walked.addingTimeInterval(15)
+        )?.name
+        XCTAssertNil(early, "a 10 s walk was repeated 15 s later")
+
+        let later = await FileIndexRefreshSweep.shared.nextShard(
+            in: canonical, from: catalog, now: walked.addingTimeInterval(21)
+        )?.name
+        XCTAssertEqual(later, "projects", "the cool-down never ended")
+    }
+
+    /// Nothing is known about a shard's cost until it has been walked once in
+    /// this process, and not knowing is no reason to wait.
+    func testADirtyShardWithNoRecordedWalkIsEligible() async throws {
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        catalog.adopt(root: canonical)
+        catalog.record(
+            root: canonical, name: "projects", generation: 1, entryCount: 5,
+            walkedAt: Date(), eventsUUID: nil, eventsID: nil
+        )
+        catalog.markDirty(root: canonical, name: "projects")
+
+        let selected = await FileIndexRefreshSweep.shared.nextShard(
+            in: canonical, from: catalog, now: Date()
+        )?.name
+        XCTAssertEqual(selected, "projects")
+    }
+
+    func testCoolingOneShardDoesNotBlockAnotherDirtyShard() async throws {
+        let catalog = try XCTUnwrap(FileIndexCatalog())
+        let walked = Date()
+        catalog.adopt(root: canonical)
+        // `projects` walked longer ago, so without the cool-down it goes first.
+        for (name, age) in [("projects", 60.0), ("code", 0.0)] {
+            catalog.record(
+                root: canonical, name: name, generation: 1, entryCount: 5,
+                walkedAt: walked.addingTimeInterval(-age), eventsUUID: nil, eventsID: nil
+            )
+            catalog.markDirty(root: canonical, name: name)
+        }
+        await FileIndexRefreshSweep.shared.recordWalk(
+            shard: "projects", inRoot: canonical, finished: walked, seconds: 30
+        )
+
+        let selected = await FileIndexRefreshSweep.shared.nextShard(
+            in: canonical, from: catalog, now: walked.addingTimeInterval(1)
+        )?.name
+        XCTAssertEqual(selected, "code", "a cooling shard held up another")
+    }
 }

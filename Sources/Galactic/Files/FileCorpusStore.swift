@@ -1249,11 +1249,18 @@ public actor FileCorpusStore {
         )
     }
 
-    public func noteCreated(_ appearances: [Appearance], canonicalRoot root: String) {
+    /// - Parameter adoptDirectories: walk each created directory for its
+    ///   contents. False for a batch that is itself the result of such a walk,
+    ///   which has already covered every descendant.
+    public func noteCreated(
+        _ appearances: [Appearance], canonicalRoot root: String,
+        adoptDirectories: Bool = true
+    ) {
         guard var state = roots[root] else { return }
         // Once per batch, not once per path.
         let eventSkipList = skipListForEvents(canonicalRoot: root)
         var changed = 0
+        var adopting: [String] = []
         for appearance in appearances {
             let path = appearance.path
             guard
@@ -1276,11 +1283,21 @@ public actor FileCorpusStore {
             guard Self.isIndexable(relative, skipping: eventSkipList) else {
                 continue
             }
-            if clearRemoval(of: relative, in: &state) {
-                changed += 1
+            // The file system names a directory whenever something in it
+            // changes, so an event for one is not evidence it is new. Only a
+            // directory the index did not hold live has contents to adopt.
+            let held = clearRemoval(of: relative, in: &state)
+            let pending = state.added[relative] != nil
+            if adoptDirectories, isDirectory, held != .live, !pending,
+                !eventSkipList.contains(String(relative.split(separator: "/").last ?? ""))
+            {
+                adopting.append(relative)
+            }
+            if held != .absent {
+                if held == .restored { changed += 1 }
                 continue
             }
-            if state.added[relative] == nil { changed += 1 }
+            if !pending { changed += 1 }
             state.added[relative] = (appearance.modified, isDirectory)
         }
         batched {
@@ -1291,22 +1308,72 @@ public actor FileCorpusStore {
             log.record("watch", watchFields("created", changed: changed, root: root))
             applyCompactionPressure(root: root)
         }
+        for directory in adopting {
+            adopt(directory, canonicalRoot: root, url: state.url, skipping: eventSkipList)
+        }
+    }
+
+    /// Index what a created directory already holds.
+    ///
+    /// A directory renamed, moved or restored into place arrives as one event;
+    /// its contents arrive as none. Walking just that directory answers it
+    /// without rewalking the shard around it.
+    private func adopt(
+        _ directory: String, canonicalRoot root: String, url: URL,
+        skipping skipList: Set<String>
+    ) {
+        spawn { [self] in
+            let started = Date()
+            let corpus = await Task.detached(priority: .utility) {
+                FileCorpusBuilder.build(root: url, subtree: directory, skipping: skipList)
+            }.value
+            // Gone again while it was walked: its removal has already been
+            // applied, and what the walk saw must not undo it.
+            var info = stat()
+            guard lstat(root + "/" + directory, &info) == 0 else { return }
+            let appearances = (0..<corpus.entryCount).map { index in
+                Appearance(
+                    path: root + "/" + corpus.relativePath(at: index),
+                    modified: corpus.modified(at: index),
+                    isDirectory: corpus.isDirectory(at: index)
+                )
+            }
+            if !appearances.isEmpty {
+                noteCreated(appearances, canonicalRoot: root, adoptDirectories: false)
+            }
+            log.record(
+                "adopt",
+                [
+                    ("dir", directory),
+                    ("entries", "\(corpus.entryCount)"),
+                    ("seconds", String(format: "%.2f", Date().timeIntervalSince(started))),
+                ]
+            )
+        }
     }
 
     /// Record files that went away, by setting a bit rather than rewriting a
     /// shard.
+    ///
+    /// A directory takes its whole subtree with it, though the file system
+    /// names only the directory: a corpus is sorted bytewise, so everything
+    /// beneath it is one contiguous range of bits, and no rewalk is needed.
     public func noteRemoved(_ paths: [String], canonicalRoot root: String) {
         guard var state = roots[root] else { return }
         var changed = 0
-        var vanishedDirectories: [String] = []
         for path in paths {
             guard
                 let relative = FilePaths.relativeEntry(of: path, underCanonical: root)
             else { continue }
-            if state.added.removeValue(forKey: relative) != nil { changed += 1 }
+            let pending = state.added.removeValue(forKey: relative)
+            if pending != nil { changed += 1 }
             let outcome = markRemoved(relative, in: &state)
             if outcome.removed { changed += 1 }
-            if outcome.wasDirectory { vanishedDirectories.append(relative) }
+            guard outcome.wasDirectory || pending?.isDirectory == true else { continue }
+            let beneath = relative + "/"
+            let orphaned = state.added.keys.filter { $0.hasPrefix(beneath) }
+            for key in orphaned { state.added[key] = nil }
+            changed += orphaned.count
         }
         batched {
             roots[root] = state
@@ -1314,21 +1381,6 @@ public actor FileCorpusStore {
         }
         if changed > 0 {
             log.record("watch", watchFields("removed", changed: changed, root: root))
-        }
-
-        // A directory that went away takes everything under it, and the file
-        // system does not say so: its children never changed, so no event
-        // mentions them. Clearing one bit for the directory itself would leave
-        // every path beneath it resolving to nothing.
-        //
-        // The honest response is the same one a dropped event gets — mark the
-        // subtree for a rewalk and let the sweep take it on the next tick,
-        // rather than pretending a bitset can express "and all descendants".
-        // A renamed directory arrives as exactly this, plus a create.
-        for directory in vanishedDirectories {
-            markSubtreeDirty(
-                root + "/" + directory, canonicalRoot: root, reason: "directory-removed"
-            )
         }
     }
 
@@ -1393,11 +1445,20 @@ public actor FileCorpusStore {
     private var deltaRebuildQueued: Set<String> = []
 
     /// Walks started and not yet finished. See `quiesce()`.
-    private var outstanding: [Task<Void, Never>] = []
+    ///
+    /// Keyed so each retires itself: adoptions start one per created
+    /// directory, and a list emptied only by `quiesce()` would keep every one.
+    private var outstanding: [Int: Task<Void, Never>] = [:]
+    private var nextOutstandingID = 0
 
     /// Start work this store is accountable for finishing.
     private func spawn(_ body: @escaping () async -> Void) {
-        outstanding.append(Task { await body() })
+        let id = nextOutstandingID
+        nextOutstandingID += 1
+        outstanding[id] = Task { [self] in
+            await body()
+            outstanding[id] = nil
+        }
     }
 
     /// Mark any shard carrying too much overlay for a rewalk.
@@ -1499,30 +1560,57 @@ public actor FileCorpusStore {
             state.removed[name]
             ?? [UInt64](repeating: 0, count: (corpus.entryCount + 63) / 64)
         bits[index >> 6] |= 1 << UInt64(index & 63)
+        let isDirectory = corpus.isDirectory(at: index)
+        if isDirectory {
+            Self.setBits(corpus.range(underRelative: relative), in: &bits)
+        }
         state.removed[name] = bits
-        return (true, corpus.isDirectory(at: index))
+        return (true, isDirectory)
+    }
+
+    /// Set every bit in `range`, a whole word at a time where it can.
+    static func setBits(_ range: Range<Int>, in bits: inout [UInt64]) {
+        var index = range.lowerBound
+        while index < range.upperBound {
+            let offset = index & 63
+            let span = min(64 - offset, range.upperBound - index)
+            let mask = span == 64 ? UInt64.max : ((1 << UInt64(span)) - 1) << UInt64(offset)
+            bits[index >> 6] |= mask
+            index += span
+        }
+    }
+
+    /// Where a path stood in its shard before being un-deleted.
+    private enum Held {
+        /// The shard does not hold it.
+        case absent
+        /// The shard holds it and it was not marked removed.
+        case live
+        /// The shard holds it marked removed, and the mark is now cleared.
+        case restored
     }
 
     /// Un-delete a path a shard already holds.
     ///
-    /// Returns whether a shard covers this path, which is what tells the
-    /// caller not to add it to the delta as well.
-    @discardableResult
+    /// Anything but `absent` tells the caller not to add it to the delta as
+    /// well; `live` also tells it a directory's contents are already indexed.
     private func clearRemoval(of relative: String, in state: inout RootState)
-        -> Bool
+        -> Held
     {
         let name = Self.shardName(covering: relative)
-        guard let corpus = state.shards[name] else { return false }
+        guard let corpus = state.shards[name] else { return .absent }
         let needle = Array(relative.utf8)
         let index = corpus.firstIndex(atOrAfter: needle)
         guard index < corpus.entryCount,
             corpus.relativePath(at: index) == relative
-        else { return false }
+        else { return .absent }
 
-        if state.removed[name] != nil {
-            state.removed[name]?[index >> 6] &= ~(1 << UInt64(index & 63))
+        let bit: UInt64 = 1 << UInt64(index & 63)
+        guard let word = state.removed[name]?[index >> 6], word & bit != 0 else {
+            return .live
         }
-        return true
+        state.removed[name]?[index >> 6] = word & ~bit
+        return .restored
     }
 
     /// Anything the overlay was carrying for a shard is now in the shard.
@@ -1878,9 +1966,7 @@ public actor FileCorpusStore {
     /// waited for than raced.
     public func quiesce() async {
         while !outstanding.isEmpty {
-            let waiting = outstanding
-            outstanding = []
-            for task in waiting { _ = await task.value }
+            for task in Array(outstanding.values) { _ = await task.value }
         }
     }
 }

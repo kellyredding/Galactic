@@ -125,6 +125,19 @@ public actor FileIndexRefreshSweep {
     /// backstop into a second indexing pass.
     public static var maxConcurrentRefreshes = 2
 
+    /// How long a dirty shard waits after a walk, as a multiple of that walk's
+    /// cost. Bounds rewalking one shard to about 1/(factor + 1) of a core
+    /// however often it is dirtied; a shard that walks in milliseconds barely
+    /// waits. Two keeps a 26 s walk of a busy tree about a minute apart.
+    public static var dirtyRewalkCostFactor: Double = 2
+
+    /// Each shard's last refresh, by `inFlightKey`: when it finished and what
+    /// it cost. In memory, so a relaunch walks once to learn the cost.
+    var lastWalk: [String: (finished: Date, seconds: TimeInterval)] = [:]
+
+    /// Shards whose current cool-down has already been logged.
+    private var deferralLogged: Set<String> = []
+
     init() {}
 
     /// Hold a shard busy, as a walk in progress would.
@@ -137,6 +150,15 @@ public actor FileIndexRefreshSweep {
 
     func releaseAll() {
         inFlight.removeAll()
+    }
+
+    /// Record a finished refresh, as `tick` does after a walk.
+    func recordWalk(
+        shard: String, inRoot root: String, finished: Date, seconds: TimeInterval
+    ) {
+        let key = Self.inFlightKey(root: root, shard: shard)
+        lastWalk[key] = (finished, seconds)
+        deferralLogged.remove(key)
     }
 
     /// Whether the sweep runs a cadence of its own.
@@ -182,6 +204,8 @@ public actor FileIndexRefreshSweep {
             for task in waiting.values { _ = await task.value }
         }
         backlogDrainScheduled = false
+        lastWalk.removeAll()
+        deferralLogged.removeAll()
     }
 
     private func startIfNeeded() {
@@ -239,9 +263,13 @@ public actor FileIndexRefreshSweep {
                 ]
             )
             lastServedRoot = root
+            let started = Date()
             await FileCorpusStore.shared.refresh(
                 shard: chosen.name, canonicalRoot: root
             )
+            let finished = Date()
+            lastWalk[key] = (finished, finished.timeIntervalSince(started))
+            deferralLogged.remove(key)
             if chosen.dirty { scheduleBacklogDrain() }
             return chosen.name
         }
@@ -308,6 +336,29 @@ public actor FileIndexRefreshSweep {
     /// else, and the dropped-event load this backstop exists for happens in trees
     /// being built in, not in a Pictures folder. The trade the skip list accepted
     /// was being asked once; a timer turns that into being asked hourly.
+    /// Whether a dirty shard walked too recently, for its cost, to walk again.
+    func coolingDown(_ shard: String, in root: String, now: Date) -> Bool {
+        let key = Self.inFlightKey(root: root, shard: shard)
+        guard let last = lastWalk[key] else { return false }
+        let ready = last.finished.addingTimeInterval(
+            last.seconds * Self.dirtyRewalkCostFactor
+        )
+        guard now < ready else { return false }
+        if deferralLogged.insert(key).inserted {
+            log.record(
+                "sweep",
+                [
+                    ("event", "deferred"),
+                    ("root", root),
+                    ("shard", shard.isEmpty ? "(root)" : shard),
+                    ("last-walk", String(format: "%.2fs", last.seconds)),
+                    ("ready-in", String(format: "%.0fs", ready.timeIntervalSince(now))),
+                ]
+            )
+        }
+        return true
+    }
+
     func nextShard(
         in root: String, from catalog: FileIndexCatalog, now: Date
     ) -> FileIndexCatalog.Shard? {
@@ -334,7 +385,9 @@ public actor FileIndexRefreshSweep {
                     return false
                 }
 
-                if shard.dirty { return true }
+                if shard.dirty {
+                    return !coolingDown(shard.name, in: root, now: now)
+                }
                 guard now.timeIntervalSince(shard.walkedAt) >= Self.targetAge
                 else { return false }
                 return !FileCorpusBuilder.isConsentProtected(
