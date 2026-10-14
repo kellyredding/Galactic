@@ -18,7 +18,7 @@ final class AgentInboxTests: XCTestCase {
             body: body,
             sourceLabel: "test",
             delivery: delivery,
-            retry: .retype,
+            retry: .resubmit,
             state: state)
     }
 

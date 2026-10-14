@@ -76,7 +76,7 @@ final class SubmitOutcomeTests: XCTestCase {
         var reported: [SubmitOutcome] = []
 
         backend.verifySubmission(
-            text: "/resume ", harness: harness,
+            harness: harness,
             verification: agent.verification,
             outcome: { reported.append($0) })
         settle(2)
@@ -92,7 +92,7 @@ final class SubmitOutcomeTests: XCTestCase {
         var reported: [SubmitOutcome] = []
 
         backend.verifySubmission(
-            text: "/resume ", harness: harness,
+            harness: harness,
             verification: agent.verification,
             outcome: { reported.append($0) })
         settle(2)
@@ -115,7 +115,7 @@ final class SubmitOutcomeTests: XCTestCase {
         var reported: [SubmitOutcome] = []
 
         backend.verifySubmission(
-            text: "/clear ", harness: harness, verification: nil,
+            harness: harness, verification: nil,
             outcome: { reported.append($0) })
 
         XCTAssertEqual(reported, [.unverifiable])
@@ -132,7 +132,7 @@ final class SubmitOutcomeTests: XCTestCase {
 
         _ = pastTheBound { quick, backend in
             backend.verifySubmission(
-                text: "a long comment", harness: quick,
+                harness: quick,
                 verification: agent.verification,
                 retry: .reportOnly,
                 outcome: { reported.append($0) })
@@ -141,17 +141,17 @@ final class SubmitOutcomeTests: XCTestCase {
         XCTAssertEqual(reported, [.unconfirmed])
     }
 
-    /// `.retype` reports only once its retries are spent — the caller wants the
+    /// `.resubmit` reports only once its retries are spent — the caller wants the
     /// verdict on the send, not on each attempt inside it.
-    func testARetypedSendReportsOnceRetriesAreExhausted() {
+    func testAResubmittedSendReportsOnceRetriesAreExhausted() {
         let agent = Agent()
         var reported: [SubmitOutcome] = []
 
         _ = pastTheBound { quick, backend in
             backend.verifySubmission(
-                text: "/resume ", harness: quick,
+                harness: quick,
                 verification: agent.verification,
-                retry: .retype,
+                retry: .resubmit,
                 outcome: { reported.append($0) })
         }
 
@@ -161,16 +161,16 @@ final class SubmitOutcomeTests: XCTestCase {
     }
 
     /// A retry that succeeds reports accepted, not unconfirmed — the interim
-    /// miss that triggered the retype is not the outcome.
+    /// miss that triggered the resubmit is not the outcome.
     func testARetryThatSucceedsReportsAccepted() {
         let agent = Agent()
         var reported: [SubmitOutcome] = []
 
         _ = pastTheBound { quick, backend in
             backend.verifySubmission(
-                text: "/resume ", harness: quick,
+                harness: quick,
                 verification: agent.verification,
-                retry: .retype,
+                retry: .resubmit,
                 outcome: { reported.append($0) })
             DispatchQueue.main.asyncAfter(
                 deadline: .now() + quick.verifyTimeout + 0.05
@@ -191,7 +191,7 @@ final class SubmitOutcomeTests: XCTestCase {
 
         _ = pastTheBound { quick, backend in
             backend.verifySubmission(
-                text: "/resume ", harness: quick,
+                harness: quick,
                 verification: agent.verification,
                 outcome: { reported.append($0) })
             DispatchQueue.main.asyncAfter(

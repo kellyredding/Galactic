@@ -49,9 +49,9 @@ final class SubmitVerificationTests: XCTestCase {
         // path that needs no keyboard protocol and the test is not timing
         // against a kitty wait it does not care about.
         quick.bytes = [0x0D]
-        // One retry, so the count of writes is decided by the policy rather
+        // One retry, so the count of presses is decided by the policy rather
         // than by how many shortened rounds happen to fit in the window. At
-        // the shipped ceiling of two, a second retype lands within a
+        // the shipped ceiling of two, a second press lands within a
         // millisecond of the observation deadline and the assertion races.
         quick.retries = 1
         let backend = StubBackend()
@@ -69,118 +69,113 @@ final class SubmitVerificationTests: XCTestCase {
 
     /// The supported opt-out is a nil value, not a skipped call — so a host
     /// that has no acceptance signal still has the mechanism wired.
-    func testNilVerificationNeverRetypes() {
+    func testNilVerificationNeverPressesAnything() {
         let backend = StubBackend()
         backend.verifySubmission(
-            text: "/resume ", harness: harness, verification: nil
+            harness: harness, verification: nil
         )
         settle(4)
         XCTAssertTrue(
-            backend.written.isEmpty,
-            "opting out must not type anything"
+            backend.written.isEmpty && backend.bytesWritten.isEmpty,
+            "opting out must not type or press anything"
         )
     }
 
     // MARK: - The accepted case
 
-    func testAnAcceptedPromptIsNeverRetyped() {
+    func testAnAcceptedPromptIsNeverResubmitted() {
         let backend = StubBackend()
         let agent = Agent()
         agent.accepted = true
 
         backend.verifySubmission(
-            text: "/resume ", harness: harness, verification: agent.verification
+            harness: harness, verification: agent.verification
         )
         settle(4)
         XCTAssertTrue(
-            backend.written.isEmpty,
-            "a prompt the agent confirmed must not be sent twice"
+            backend.bytesWritten.isEmpty,
+            "a prompt the agent confirmed must not be submitted again"
         )
     }
 
-    /// The regression that duplicated a prompt in the field. Confirmation
-    /// arrived 35ms after a 250ms window expired, so the retry typed a second
-    /// copy of a prompt that had already run. Acceptance that lands late but
-    /// inside the bound must still count.
+    /// Confirmation that lands late but inside the bound must still count.
     func testLateAcceptanceInsideTheBoundStillCounts() {
         let backend = StubBackend()
         let agent = Agent()
 
         backend.verifySubmission(
-            text: "/resume ", harness: harness, verification: agent.verification
+            harness: harness, verification: agent.verification
         )
         settle(2)
         XCTAssertTrue(
-            backend.written.isEmpty, "still waiting, so nothing retyped yet"
+            backend.bytesWritten.isEmpty, "still waiting, so nothing pressed yet"
         )
 
         agent.accepted = true
         settle(3)
         XCTAssertTrue(
-            backend.written.isEmpty,
+            backend.bytesWritten.isEmpty,
             "confirmation after a delay is still confirmation"
         )
     }
 
     // MARK: - The lost case
 
-    /// A prompt that is never confirmed gets the whole gesture again — text
-    /// then submit — not a bare submit. Claude Code reads Enter-on-empty as
-    /// "repeat the last command", so a retry that only re-submits would re-run
-    /// whatever preceded it instead of rescuing what was lost.
-    func testAnUnconfirmedPromptIsRetypedBeforeItIsResubmitted() {
+    /// An unconfirmed prompt gets the submit key again and nothing else. If
+    /// the text is still in the composer this sends it; if the prompt already
+    /// went, the composer is empty and the keystroke does nothing — measured
+    /// against Claude Code, idle and mid-turn. A retyped copy is what doubled
+    /// prompts whose confirmation was only late.
+    func testAnUnconfirmedPromptIsResubmittedNeverRetyped() {
         let agent = Agent()
         let backend = pastTheBound { quick, backend in
             backend.verifySubmission(
-                text: "/resume ", harness: quick,
+                harness: quick,
                 verification: agent.verification
             )
         }
+        XCTAssertTrue(
+            backend.written.isEmpty, "a retry must never write the text again"
+        )
         XCTAssertEqual(
-            backend.written, ["/resume "],
-            "the retry must retype the prompt, not just press Enter again"
+            backend.bytesWritten, [[0x0D]],
+            "a retry presses the harness's submit bytes, once per retry"
         )
     }
 
     // MARK: - Detection is separate from retry
 
-    /// The split this policy exists for. A caller that declines the retype is
-    /// saying the payload is too large to risk a second copy of — not that it
-    /// would rather not know the prompt vanished.
-    func testReportOnlyNoticesTheLossWithoutRetyping() {
+    /// A caller that declines the resubmit still learns the bound passed.
+    func testReportOnlyNoticesTheLossWithoutPressingAnything() {
         let agent = Agent()
+        var reported: SubmitOutcome?
         let backend = pastTheBound { quick, backend in
             backend.verifySubmission(
-                text: "a very large scrollback payload ",
                 harness: quick,
                 verification: agent.verification,
-                retry: .reportOnly
+                retry: .reportOnly,
+                outcome: { reported = $0 }
             )
         }
         XCTAssertTrue(
-            backend.written.isEmpty,
-            "reportOnly must not put a second copy of the payload on the wire"
+            backend.written.isEmpty && backend.bytesWritten.isEmpty,
+            "reportOnly must neither type nor press"
         )
-        XCTAssertTrue(
-            backend.bytesWritten.isEmpty,
-            "and must not resubmit either — the whole gesture is declined"
-        )
+        XCTAssertEqual(reported, .unconfirmed)
     }
 
-    /// Guards the regression that would make the split pointless: retype is
-    /// still the default, so an existing caller that says nothing about retry
-    /// behaves exactly as it did before the policy existed.
-    func testRetypeRemainsTheDefault() {
+    /// A caller that says nothing about retry gets the resubmit.
+    func testResubmitIsTheDefault() {
         let agent = Agent()
         let backend = pastTheBound { quick, backend in
             backend.verifySubmission(
-                text: "/resume ", harness: quick,
+                harness: quick,
                 verification: agent.verification
             )
         }
-        XCTAssertEqual(
-            backend.written, ["/resume "],
-            "omitting the policy must keep retyping, not silently stop"
+        XCTAssertFalse(
+            backend.bytesWritten.isEmpty,
+            "omitting the policy must still recover a swallowed submit"
         )
     }
 
@@ -189,12 +184,13 @@ final class SubmitVerificationTests: XCTestCase {
     func testNilVerificationIsInertUnderEitherPolicy() {
         let backend = pastTheBound { quick, backend in
             backend.verifySubmission(
-                text: "/resume ", harness: quick,
+                harness: quick,
                 verification: nil, retry: .reportOnly
             )
         }
         XCTAssertTrue(
-            backend.written.isEmpty, "no signal means no work of any kind"
+            backend.written.isEmpty && backend.bytesWritten.isEmpty,
+            "no signal means no work of any kind"
         )
     }
 
@@ -205,12 +201,12 @@ final class SubmitVerificationTests: XCTestCase {
         let backend = pastTheBound { quick, backend in
             quick.retries = 0
             backend.verifySubmission(
-                text: "/resume ", harness: quick,
+                harness: quick,
                 verification: agent.verification
             )
         }
         XCTAssertTrue(
-            backend.written.isEmpty,
+            backend.bytesWritten.isEmpty,
             "a harness that allows no retries must not get one anyway"
         )
     }
@@ -222,11 +218,11 @@ final class SubmitVerificationTests: XCTestCase {
         agent.alive = false
 
         backend.verifySubmission(
-            text: "/resume ", harness: harness, verification: agent.verification
+            harness: harness, verification: agent.verification
         )
         settle(4)
         XCTAssertTrue(
-            backend.written.isEmpty,
+            backend.bytesWritten.isEmpty,
             "a session that has gone away must not be retried into"
         )
     }

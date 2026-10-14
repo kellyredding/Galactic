@@ -42,11 +42,6 @@ public struct BareREPLHarness: AgentHarness {
     /// Nothing to verify against means nothing to retry from.
     public var maxSubmitRetries: Int { 0 }
 
-    /// A bare submit against an empty line does nothing, so resending the
-    /// submit alone is safe and there is no reason to write the payload
-    /// twice.
-    public var retypeOnRetry: Bool { false }
-
     /// No prompt pipeline to intercept.
     public var acceptanceBypassingCommands: Set<String> { [] }
 

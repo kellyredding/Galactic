@@ -22,7 +22,6 @@ final class StubHarness: AgentHarness {
     var verifyTimeout: TimeInterval = SessionSubmit.submitVerifyTimeout
     var verifyPoll: TimeInterval = SessionSubmit.submitVerifyPollInterval
     var retries: Int = SessionSubmit.maxSubmitRetries
-    var retype: Bool = true
     var bypassing: Set<String> = ["/clear", "/compact"]
     var compose: (String) -> String = { $0 + " " }
     var configurationState: KeystrokeConfigurationState = .matching
@@ -34,7 +33,6 @@ final class StubHarness: AgentHarness {
     var submitVerifyTimeout: TimeInterval { verifyTimeout }
     var submitVerifyPollInterval: TimeInterval { verifyPoll }
     var maxSubmitRetries: Int { retries }
-    var retypeOnRetry: Bool { retype }
     var acceptanceBypassingCommands: Set<String> { bypassing }
 
     func composedCommand(_ command: String) -> String { compose(command) }

@@ -200,8 +200,12 @@ if let snapshot = backend.captureScrollbackSnapshot() {
   watch for acceptance. One place, because it was three and each
   copy lost a different part of it.
 - `SubmitVerification` / `SubmitRetryPolicy` — how a host reports
-  that a prompt was taken, and whether one found missing is worth
-  retyping. Both are values, so declining either is explicit.
+  that a prompt was taken, and whether an unconfirmed one gets the
+  submit key pressed again. A retry never writes the text a second
+  time. Both are values, so declining either is explicit.
+- `ClaudeTranscriptReceipt` — a Claude Code acceptance signal read
+  from the session transcript, which shows a prompt within a fraction
+  of a second however late the agent's hooks run.
 - `ClaudeKeybindingsWriter` — reconciles a host's configured
   keystrokes with Claude Code's own keybindings file.
 

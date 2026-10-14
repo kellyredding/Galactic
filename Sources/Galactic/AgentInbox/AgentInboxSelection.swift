@@ -105,12 +105,11 @@ public enum AgentInboxSelection {
     ///
     /// In practice a run is always prose and always agrees; the rule exists so
     /// that a disagreement has an answer rather than a discovery. It resolves
-    /// toward `.reportOnly` because the two failures are not symmetric — one
-    /// costs a message that may only be late, the other sends the agent a
-    /// second copy of something it may already be holding.
+    /// toward `.reportOnly`, which presses nothing, so no entry in the run gets
+    /// a keystroke its sender declined.
     private static func resolvedRetry(
         across run: ArraySlice<AgentInboxEntry>
     ) -> SubmitRetryPolicy {
-        run.contains { $0.retry == .reportOnly } ? .reportOnly : .retype
+        run.contains { $0.retry == .reportOnly } ? .reportOnly : .resubmit
     }
 }

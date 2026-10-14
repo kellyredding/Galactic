@@ -31,10 +31,6 @@ public struct ClaudeCodeHarness: AgentHarness {
 
     public var maxSubmitRetries: Int { SessionSubmit.maxSubmitRetries }
 
-    /// Enter on an empty composer repeats the last command, so a bare
-    /// resubmit would re-run whatever preceded the lost prompt.
-    public var retypeOnRetry: Bool { true }
-
     /// Both are intercepted at the TUI level before the prompt-submit
     /// pipeline runs, so `UserPromptSubmit` never fires for them.
     public var acceptanceBypassingCommands: Set<String> {

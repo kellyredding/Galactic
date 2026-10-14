@@ -56,13 +56,7 @@ public struct AgentInboxEntry: Identifiable, Equatable {
 
     public var delivery: Delivery
 
-    /// Whether a submit found missing is worth retyping.
-    ///
-    /// The producer's call, because it is a fact about the payload rather than
-    /// about the agent: a bounded one costs little to repeat, and an unbounded
-    /// one repeated becomes a second copy of a message that may have landed
-    /// with only its submit lost — which nothing downstream can tell apart from
-    /// a total loss.
+    /// Whether an unconfirmed submit is pressed again. The producer's call.
     public var retry: SubmitRetryPolicy
 
     public var state: State

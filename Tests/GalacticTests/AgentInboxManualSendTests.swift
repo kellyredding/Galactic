@@ -21,7 +21,7 @@ final class AgentInboxManualSendTests: XCTestCase {
             body: body,
             sourceLabel: "test",
             delivery: delivery,
-            retry: .retype,
+            retry: .resubmit,
             state: state,
             attempts: attempts)
     }

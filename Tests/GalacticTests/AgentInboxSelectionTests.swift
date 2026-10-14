@@ -11,7 +11,7 @@ final class AgentInboxSelectionTests: XCTestCase {
         _ body: String,
         id: UUID = UUID(),
         delivery: AgentInboxEntry.Delivery = .coalescable,
-        retry: SubmitRetryPolicy = .retype,
+        retry: SubmitRetryPolicy = .resubmit,
         state: AgentInboxEntry.State = .ready
     ) -> AgentInboxEntry {
         AgentInboxEntry(
@@ -184,7 +184,7 @@ final class AgentInboxSelectionTests: XCTestCase {
     /// late.
     func testAMixedRunResolvesToTheConservativePolicy() {
         let entries = [
-            entry("bounded", retry: .retype),
+            entry("bounded", retry: .resubmit),
             entry("unbounded", retry: .reportOnly),
         ]
 
@@ -194,36 +194,36 @@ final class AgentInboxSelectionTests: XCTestCase {
 
     func testARunThatAgreesKeepsItsPolicy() {
         let entries = [
-            entry("first", retry: .retype),
-            entry("second", retry: .retype),
+            entry("first", retry: .resubmit),
+            entry("second", retry: .resubmit),
         ]
 
         XCTAssertEqual(
-            AgentInboxSelection.nextUnit(from: entries)?.retry, .retype)
+            AgentInboxSelection.nextUnit(from: entries)?.retry, .resubmit)
     }
 
     /// A standalone carries its own policy rather than inheriting a run's,
     /// since it never joins one.
     func testAStandaloneCarriesItsOwnPolicy() {
         let entries = [
-            entry("/clear", delivery: .standalone, retry: .retype),
+            entry("/clear", delivery: .standalone, retry: .resubmit),
             entry("prose", retry: .reportOnly),
         ]
 
         XCTAssertEqual(
-            AgentInboxSelection.nextUnit(from: entries)?.retry, .retype)
+            AgentInboxSelection.nextUnit(from: entries)?.retry, .resubmit)
     }
 
     /// A held row's policy must not leak into the unit it was skipped out of.
     func testAPausedEntrysPolicyDoesNotAffectTheRun() {
         let entries = [
-            entry("first", retry: .retype),
+            entry("first", retry: .resubmit),
             entry("held", retry: .reportOnly, state: .paused),
-            entry("third", retry: .retype),
+            entry("third", retry: .resubmit),
         ]
 
         XCTAssertEqual(
-            AgentInboxSelection.nextUnit(from: entries)?.retry, .retype)
+            AgentInboxSelection.nextUnit(from: entries)?.retry, .resubmit)
     }
 
     // MARK: - The separator

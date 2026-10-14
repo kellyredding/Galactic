@@ -76,21 +76,13 @@ public enum SessionSubmit {
     public static let kittyReadyTimeout: TimeInterval = 5.0
     public static let kittyPollInterval: TimeInterval = 0.05
 
-    /// How long to keep waiting for confirmation that a submit was accepted
-    /// before treating it as swallowed.
+    /// How long to wait for confirmation that a submit was accepted before
+    /// pressing submit again.
     ///
-    /// This bound has to exceed however long the host's acceptance signal
-    /// takes to arrive — a window shorter than the signal it waits on reports
-    /// every send as lost. Measured against Claude Code's
-    /// UserPromptSubmit hook: ~68ms mid-session, and 299–430ms on resume,
-    /// where the child is replaying a conversation when the hook fires and is
-    /// slower to dispatch it. A 250ms window sat between those two figures and
-    /// retyped a prompt that had already been accepted 35ms later.
-    ///
-    /// Generous on purpose, because the two directions cost differently. Too
-    /// long only delays recovering a genuinely lost prompt, on a path nobody
-    /// is waiting on interactively. Too short duplicates a prompt that
-    /// worked — and duplicate work is worse than late work.
+    /// Not a correctness bound. A retry presses the submit key and nothing
+    /// else, and Claude Code ignores that on an empty composer — idle or
+    /// mid-turn, measured on 2.1.296 — so a window that proves too short costs
+    /// a keystroke, never a second copy of the prompt.
     public static let submitVerifyTimeout: TimeInterval = 2.0
 
     /// How often to check for that confirmation within the bound above.
@@ -100,9 +92,7 @@ public enum SessionSubmit {
     /// declared lost, not how long a successful one is watched.
     public static let submitVerifyPollInterval: TimeInterval = 0.05
 
-    /// Maximum resend attempts before giving up. Each costs up to one
-    /// `submitVerifyTimeout` plus an `inputPacingDelay`, so a prompt that never
-    /// lands is abandoned after roughly six seconds.
+    /// Maximum resubmits before an unconfirmed prompt is reported as such.
     public static let maxSubmitRetries: Int = 2
 
     /// Diagnostics for automated submission.
@@ -176,8 +166,9 @@ public enum SessionSubmit {
 /// and the agent's own readiness hook (it fires before the input layer paints).
 ///
 /// What does answer it is the agent reporting receipt in its own words — for
-/// Claude Code, the UserPromptSubmit hook. That arrives over a host's event
-/// channel, so the host provides it and the mechanism here consumes it.
+/// Claude Code, the prompt appearing in its transcript (`ClaudeTranscriptReceipt`)
+/// or its UserPromptSubmit hook firing. Only the host knows where either lives,
+/// so the host provides it and the mechanism here consumes it.
 public struct SubmitVerification {
     /// True once the agent has reported receiving the prompt.
     ///
@@ -198,26 +189,6 @@ public struct SubmitVerification {
     }
 }
 
-/// What to do about a prompt the agent never confirmed receiving.
-///
-/// Separate from `SubmitVerification` because noticing a lost prompt and
-/// retyping one are different decisions with very different costs, and having
-/// only one control for both made every caller that feared the retype give up
-/// the signal as well. Detecting costs a bounded poll nobody waits on.
-/// Retyping costs a second write of the entire payload, and doubles a prompt
-/// in the case where the text landed and only the submit was lost — which
-/// nothing observable can distinguish from a total loss.
-///
-/// So the size of the payload decides this, not whether anyone is watching.
-/// A slash command is a dozen bytes and worth retyping; a scrollback selection
-/// runs to tens of thousands and is not.
-///
-/// The second thing that decides it is whether the host submits into a harness
-/// that might be busy. `submitVerifyTimeout` is calibrated against an idle
-/// harness acknowledging promptly; one that queues prompts of its own
-/// acknowledges when it dequeues, which is bounded by whatever it is already
-/// doing. A host that submits mid-turn will pass the bound routinely on
-/// prompts that land perfectly well, so it must not retype on that signal.
 /// How a send finished, for a caller that needs to act on it rather than read
 /// about it in a log.
 ///
@@ -256,17 +227,17 @@ public enum SubmitOutcome: Equatable {
     case unverifiable
 }
 
+/// What to do about a prompt the agent has not confirmed receiving.
+///
+/// Neither case writes the text again: a retype doubles any prompt whose
+/// confirmation is merely late, which a loaded machine makes routine.
 public enum SubmitRetryPolicy {
-    /// Retype the whole gesture and resubmit, up to the harness's retry
-    /// ceiling. For bounded payloads sent into a harness expected to be idle.
-    case retype
+    /// Press submit again, up to the harness's retry ceiling. Recovers a submit
+    /// that was swallowed with the text still in the composer, and is inert
+    /// when the prompt already went.
+    case resubmit
 
-    /// Report that the bound passed without confirmation, and stop.
-    ///
-    /// For payloads where a spurious second copy would be worse than a missed
-    /// one, and for sends where an unconfirmed prompt is more likely to be
-    /// late than lost. Note the report says *unconfirmed*, not *lost* —
-    /// nothing here can tell those apart.
+    /// Report that the bound passed without confirmation, and press nothing.
     case reportOnly
 }
 
@@ -294,14 +265,13 @@ extension TerminalBackend {
     ///
     /// So the shape here is deliberately narrow. There is no flag for pasting,
     /// because anything that submits must type: the two together is the failure
-    /// above, and this way it cannot be spelled. Composition happens here, once,
-    /// which is also what guarantees a retype re-sends exactly what the first
-    /// attempt sent. And `verification` is an argument rather than an option, so
-    /// a caller with no acceptance signal says so by passing nothing rather than
-    /// by quietly leaving the question out.
+    /// above, and this way it cannot be spelled. Composition happens here, once.
+    /// And `verification` is an argument rather than an option, so a caller with
+    /// no acceptance signal says so by passing nothing rather than by quietly
+    /// leaving the question out.
     ///
     /// What stays with the caller is policy: whether a report can arrive at all,
-    /// whether a lost payload is worth retyping, and what to do afterwards.
+    /// whether to press submit again without one, and what to do afterwards.
     ///
     /// - Parameters:
     ///   - command: Raw text. Composed here; do not pre-compose it.
@@ -321,7 +291,7 @@ extension TerminalBackend {
         harness: AgentHarness,
         isAlive: @escaping () -> Bool,
         verification: SubmitVerification?,
-        retry: SubmitRetryPolicy = .retype,
+        retry: SubmitRetryPolicy = .resubmit,
         then: (() -> Void)? = nil,
         outcome: ((SubmitOutcome) -> Void)? = nil
     ) {
@@ -381,7 +351,6 @@ extension TerminalBackend {
                     }
                     self.submitPrompt(harness: harness)
                     self.verifySubmission(
-                        text: text,
                         harness: harness,
                         verification: verification,
                         retry: retry,
@@ -393,8 +362,8 @@ extension TerminalBackend {
         }
     }
 
-    /// Watch for confirmation that a just-submitted prompt was taken, and
-    /// retype it if it was not.
+    /// Watch for confirmation that a just-submitted prompt was taken, and press
+    /// submit again if it was not.
     ///
     /// Verification rather than prediction, because readiness is not observable
     /// from out here — see `SubmitVerification` for the five signals that were
@@ -407,24 +376,14 @@ extension TerminalBackend {
     /// mechanism stays wired and adopting it later is a value change rather
     /// than a new integration.
     ///
-    /// The retry repeats the whole gesture — text, pause, submit — rather than
-    /// the submit alone. Resending a bare submit is what made this unsafe to
-    /// run on a resumed session: by the time a retry fires the prompt is
-    /// usually empty, and Claude Code reads Enter-on-empty as "repeat the last
-    /// command", so a retry meant to rescue a lost prompt would re-run whatever
-    /// ran before it. Typing first means Enter never arrives against an empty
-    /// box.
-    ///
-    /// It trades that for a narrower hazard: if the text did land and only the
-    /// submit was lost, retyping doubles it. Nothing observable distinguishes
-    /// those two states — a buffer read shows the statusline and hint rows,
-    /// never the input line — so the bound on `submitVerifyTimeout` is what
-    /// keeps this safe, not a screen read.
+    /// The retry presses submit and never writes the text again. A submit
+    /// swallowed with the text still in the composer is the loss this recovers;
+    /// when the prompt did land, the composer is empty and Claude Code ignores
+    /// the keystroke.
     public func verifySubmission(
-        text: String,
         harness: AgentHarness,
         verification: SubmitVerification?,
-        retry: SubmitRetryPolicy = .retype,
+        retry: SubmitRetryPolicy = .resubmit,
         retriesLeft: Int? = nil,
         outcome: ((SubmitOutcome) -> Void)? = nil
     ) {
@@ -452,7 +411,7 @@ extension TerminalBackend {
 
             if accepted {
                 switch retry {
-                case .retype:
+                case .resubmit:
                     SessionSubmit.log("  accepted (\(remaining) retries unused)")
                 case .reportOnly:
                     // No retries were available to go unused; saying otherwise
@@ -463,22 +422,13 @@ extension TerminalBackend {
                 return
             }
 
-            // Reported either way. A caller that declines the retype still
-            // wants to know the bound passed without confirmation — this
-            // channel is the only trace that leaves anywhere.
-            //
-            // Worded as unconfirmed rather than lost, and the distinction is
-            // real: a harness that queues prompts of its own acknowledges one
-            // when it picks it up, which can be long after a bound calibrated
-            // for an idle harness. Measured at 20s against Claude Code, for a
-            // prompt submitted while it was mid-turn — and that prompt did
-            // land. Calling that "NOT accepted" trains a reader to discount
-            // the one line that is supposed to mean something.
-            guard case .retype = retry else {
+            // Worded as unconfirmed rather than lost: no confirmation inside
+            // the window is not evidence the prompt went missing.
+            guard case .resubmit = retry else {
                 SessionSubmit.log(
                     String(
                         format:
-                            "  unconfirmed after %.1fs — not retyped "
+                            "  unconfirmed after %.1fs — not resubmitted "
                             + "(may still be accepted later)",
                         harness.submitVerifyTimeout)
                 )
@@ -486,61 +436,28 @@ extension TerminalBackend {
                 return
             }
             if remaining <= 0 {
-                SessionSubmit.log("  NOT accepted — retries exhausted, giving up")
+                SessionSubmit.log("  unconfirmed — retries exhausted, giving up")
                 outcome?(.unconfirmed)
                 return
             }
 
-            // Retyping is the expensive half, and only some harnesses need
-            // it. The reason Claude Code does is that its composer is usually
-            // empty by now and a bare submit against an empty composer
-            // repeats the previous command — so the second write is what
-            // stops a rescue from re-running unrelated work. A harness that
-            // does nothing on an empty submit is safe to resubmit directly.
-            let resubmit = { [weak self] in
-                DispatchQueue.main.asyncAfter(
-                    deadline: .now() + harness.inputPacingDelay
-                ) {
-                    guard let self, verification.isAlive() else {
-                        outcome?(.abandoned)
-                        return
-                    }
-                    self.submitPrompt(harness: harness)
-                    self.verifySubmission(
-                        text: text,
-                        harness: harness,
-                        verification: verification,
-                        retry: retry,
-                        retriesLeft: remaining - 1,
-                        outcome: outcome
-                    )
+            SessionSubmit.log(
+                "  unconfirmed — pressing submit again (\(remaining) left)")
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + harness.inputPacingDelay
+            ) { [weak self] in
+                guard let self, verification.isAlive() else {
+                    outcome?(.abandoned)
+                    return
                 }
-            }
-
-            if harness.retypeOnRetry {
-                SessionSubmit.log(
-                    "  NOT accepted — retyping and resubmitting (\(remaining) left)"
+                self.submitPrompt(harness: harness)
+                self.verifySubmission(
+                    harness: harness,
+                    verification: verification,
+                    retry: retry,
+                    retriesLeft: remaining - 1,
+                    outcome: outcome
                 )
-                // Waits for the retype the same way the first attempt waits
-                // for its own write, and for a sharper reason: this is the
-                // rescue. Submitting a half-written retype turns one prompt
-                // that went unconfirmed into a fragment that reads as an
-                // instruction, which is the outcome a retry exists to avoid.
-                self.send(text: text, asPaste: false) { wrote in
-                    guard wrote else {
-                        SessionSubmit.log(
-                            "  retype INCOMPLETE — not resubmitting"
-                        )
-                        outcome?(.abandoned)
-                        return
-                    }
-                    resubmit()
-                }
-            } else {
-                SessionSubmit.log(
-                    "  NOT accepted — resubmitting (\(remaining) left)"
-                )
-                resubmit()
             }
         }
     }

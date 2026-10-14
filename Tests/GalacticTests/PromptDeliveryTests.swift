@@ -129,10 +129,9 @@ final class PromptDeliveryTests: XCTestCase {
         )
     }
 
-    /// The retype must re-send what was actually written the first time. If
-    /// composition sat at the call site and the retype used the raw command,
-    /// a rescued prompt would arrive missing the byte that closes the popup.
-    func testARetypeResendsTheComposedText() {
+    /// The whole gesture end to end: the text is written once, and the retry
+    /// that follows a missing confirmation is a second press of submit only.
+    func testARetryPressesSubmitWithoutRewritingTheText() {
         let backend = readyBackend()
         let h = harness()
         h.retries = 1
@@ -149,8 +148,10 @@ final class PromptDeliveryTests: XCTestCase {
         wait(for: [past], timeout: 3)
 
         XCTAssertEqual(
-            backend.written, ["/handoff ", "/handoff "],
-            "the retype must match the original write byte for byte"
+            backend.written, ["/handoff "], "the text goes out exactly once"
+        )
+        XCTAssertEqual(
+            backend.bytesWritten.count, 2, "the submit, then the one retry"
         )
     }
 

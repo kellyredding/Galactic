@@ -59,29 +59,15 @@ public protocol AgentHarness {
     var readinessPollInterval: TimeInterval { get }
 
     /// How long to wait for confirmation that a prompt was taken before
-    /// treating it as lost.
-    ///
-    /// Must exceed however long this harness's acceptance signal takes to
-    /// arrive. A window shorter than the signal it waits on reports every
-    /// send as lost, and — where the caller retypes — duplicates prompts that
-    /// worked.
+    /// pressing submit again. A resubmit only ever presses the submit key, so
+    /// a window that proves too short costs a keystroke, never a second copy.
     var submitVerifyTimeout: TimeInterval { get }
 
     /// How often to check for that confirmation within the bound above.
     var submitVerifyPollInterval: TimeInterval { get }
 
-    /// Maximum resend attempts before a lost prompt is abandoned.
+    /// Maximum resubmits before an unconfirmed prompt is reported as such.
     var maxSubmitRetries: Int { get }
-
-    /// Whether recovering a lost prompt requires retyping the whole gesture
-    /// rather than resending the submit alone.
-    ///
-    /// True for Claude Code: by the time a retry fires the composer is
-    /// usually empty, and Enter on an empty composer repeats the last
-    /// command — so a bare resubmit would re-run whatever ran before it
-    /// instead of rescuing what was lost. A harness that does nothing on an
-    /// empty submit answers false and saves the second write.
-    var retypeOnRetry: Bool { get }
 
     /// Commands this harness intercepts before its prompt pipeline runs, so
     /// no acceptance signal ever fires for them.

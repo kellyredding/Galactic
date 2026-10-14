@@ -119,10 +119,6 @@ final class AgentHarnessContractTests: XCTestCase {
             harness.acceptanceBypassingCommands.isEmpty,
             "no prompt pipeline means nothing to bypass it"
         )
-        XCTAssertFalse(
-            harness.retypeOnRetry,
-            "an empty submit does nothing, so a bare resubmit is safe"
-        )
         XCTAssertEqual(
             harness.keystrokeConfigurationState(for: .default),
             .unsupported,
@@ -130,17 +126,15 @@ final class AgentHarnessContractTests: XCTestCase {
         )
     }
 
-    /// The seam must honour a harness that declines retyping — otherwise the
-    /// protocol member is decoration and the second write happens anyway.
-    func testAHarnessThatDeclinesRetypingIsResubmittedNotRetyped() {
+    /// Whatever the harness, a retry presses submit and writes no text.
+    func testAnUnconfirmedPromptIsResubmittedNotRetyped() {
         let quick = StubHarness.quick()
         quick.bytes = [0x0D]
-        quick.retype = false
         let backend = StubBackend()
         let agent = Agent()
 
         backend.verifySubmission(
-            text: "print(1) ", harness: quick, verification: agent.verification
+            harness: quick, verification: agent.verification
         )
 
         let past = expectation(description: "past the bound")
@@ -151,7 +145,7 @@ final class AgentHarnessContractTests: XCTestCase {
 
         XCTAssertTrue(
             backend.written.isEmpty,
-            "retypeOnRetry false must skip the second write of the payload"
+            "a retry must never write the payload a second time"
         )
         XCTAssertFalse(
             backend.bytesWritten.isEmpty,
