@@ -124,6 +124,11 @@ Releases follow [Semantic Versioning](https://semver.org/):
 | **Minor** (`0.1.0` → `0.2.0`) | Additive public-API change (new types, new protocol members with defaults, new factory cases) |
 | **Major** (`0.1.0` → `1.0.0`) | Breaking public-API change (renamed protocol member, removed type, changed factory signature) |
 
+While the major version is zero, a breaking change is a **minor** bump
+instead, as the README's status section promises consumers. Going to
+`1.0.0` is a decision about stability, not something a breaking change
+triggers on its own.
+
 ```bash
 git tag v<next>
 git push origin main
