@@ -41,6 +41,11 @@ public protocol AgentInboxHost: AnyObject {
     /// they reach turn state; nothing downstream can tell them apart.
     var canSendNow: Bool { get }
 
+    /// Why `canSendNow` is false, worded for the reader, or nil. Shown when a
+    /// send the reader asked for is refused, which otherwise reads the same
+    /// whatever the cause.
+    var sendBlockReason: String? { get }
+
     /// Deliver one unit and report whether the agent took it.
     ///
     /// `accepted` reports what the host observed, not what it hopes: false
@@ -55,4 +60,8 @@ public protocol AgentInboxHost: AnyObject {
         _ unit: AgentInboxUnit,
         accepted: @escaping (Bool) -> Void
     )
+}
+
+extension AgentInboxHost {
+    public var sendBlockReason: String? { nil }
 }

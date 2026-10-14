@@ -174,9 +174,41 @@ final class AgentInboxManualSendTests: XCTestCase {
         var reported: AgentInboxConsumer.ManualSendOutcome?
         consumer.sendNow(id: waiting.id) { reported = $0 }
 
-        XCTAssertEqual(reported, .refused)
+        XCTAssertEqual(reported, .refused(reason: nil))
         XCTAssertTrue(host.delivered.isEmpty, "nothing was written")
         XCTAssertEqual(inbox.entries.count, 1)
+    }
+
+    /// A refusal carries the host's own reason, so the reader is told what is
+    /// in the way rather than that something is.
+    func testARefusalCarriesTheHostsReason() {
+        let inbox = AgentInbox()
+        let host = StubAgentInboxHost()
+        host.canSendNow = false
+        host.sendBlockReason = "waiting for the session to finish a reset"
+        let consumer = AgentInboxConsumer(inbox: inbox, host: host)
+        let waiting = entry("message")
+        inbox.enqueue(waiting)
+
+        var reported: AgentInboxConsumer.ManualSendOutcome?
+        consumer.sendNow(id: waiting.id) { reported = $0 }
+
+        XCTAssertEqual(
+            reported,
+            .refused(reason: "waiting for the session to finish a reset"))
+    }
+
+    /// A reason left over from a block that has lifted is not passed along.
+    func testAStaleReasonIsNotReportedWhenTheHostCouldSend() {
+        let inbox = AgentInbox()
+        let host = StubAgentInboxHost()
+        host.sendBlockReason = "stale"
+        let consumer = AgentInboxConsumer(inbox: inbox, host: host)
+
+        var reported: AgentInboxConsumer.ManualSendOutcome?
+        consumer.sendNow(id: UUID()) { reported = $0 }
+
+        XCTAssertEqual(reported, .refused(reason: nil))
     }
 
     func testItRefusesWhileTheDrainIsAlreadyHoldingAUnit() {
@@ -194,7 +226,8 @@ final class AgentInboxManualSendTests: XCTestCase {
         var reported: AgentInboxConsumer.ManualSendOutcome?
         consumer.sendNow(id: second.id) { reported = $0 }
 
-        XCTAssertEqual(reported, .refused)
+        XCTAssertEqual(
+            reported, .refused(reason: "another message is going out"))
         XCTAssertEqual(
             host.delivered.count, 1,
             "the in-flight record is the only thing stopping a double send")
@@ -208,7 +241,7 @@ final class AgentInboxManualSendTests: XCTestCase {
         var reported: AgentInboxConsumer.ManualSendOutcome?
         consumer.sendNow(id: UUID()) { reported = $0 }
 
-        XCTAssertEqual(reported, .refused)
+        XCTAssertEqual(reported, .refused(reason: nil))
         XCTAssertTrue(host.delivered.isEmpty)
     }
 

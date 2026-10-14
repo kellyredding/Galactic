@@ -13,6 +13,8 @@ final class StubAgentInboxHost: AgentInboxHost {
 
     var canSendNow = true
 
+    var sendBlockReason: String?
+
     /// Every unit handed over, in order, including repeats.
     private(set) var delivered: [AgentInboxUnit] = []
 

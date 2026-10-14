@@ -345,10 +345,10 @@ private struct AgentInboxList: View {
             switch outcome {
             case .delivered:
                 notice = Notice(text: "Sent.", tint: .green)
-            case .refused:
+            case .refused(let reason):
+                let why = reason ?? "the agent can't take a message right now"
                 notice = Notice(
-                    text: "That send failed — the agent can't take a message "
-                        + "right now. It is still waiting here.",
+                    text: "Not sent — \(why). It is still waiting here.",
                     tint: .orange)
             case .unconfirmed:
                 notice = Notice(

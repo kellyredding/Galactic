@@ -68,7 +68,8 @@ public final class AgentInboxConsumer {
     /// invite a reader to re-send something already delivered.
     public enum ManualSendOutcome: Equatable {
         case delivered
-        case refused
+        /// Nothing was written. `reason` says why, when anything can.
+        case refused(reason: String?)
         case unconfirmed
     }
 
@@ -91,7 +92,11 @@ public final class AgentInboxConsumer {
             host.canSendNow,
             let unit = AgentInboxSelection.unit(for: id, in: inbox.entries)
         else {
-            outcome(.refused)
+            let reason =
+                inFlight
+                ? "another message is going out"
+                : host.flatMap { $0.canSendNow ? nil : $0.sendBlockReason }
+            outcome(.refused(reason: reason))
             return
         }
 
