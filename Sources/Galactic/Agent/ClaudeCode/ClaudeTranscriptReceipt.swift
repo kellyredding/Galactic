@@ -12,6 +12,9 @@ public final class ClaudeTranscriptReceipt {
     private var partial = Data()
     private var arrived = false
 
+    /// What the transcript recorded for the prompt, once it has arrived.
+    public private(set) var receivedText: String?
+
     /// For a session's transcript wherever Claude Code files it. A session's
     /// first prompt is what creates the file, so it is looked for again on
     /// each check until it appears.
@@ -75,10 +78,18 @@ public final class ClaudeTranscriptReceipt {
             partial.removeSubrange(partial.startIndex...newline)
             if let text = Self.promptText(inRecord: Data(line)), matches(text) {
                 arrived = true
+                receivedText = text
                 return true
             }
         }
         return false
+    }
+
+    /// How much of `sent` the transcript is missing, or nil when the prompt
+    /// arrived whole or has not arrived yet.
+    public func shortfall(of sent: String) -> PromptShortfall? {
+        guard let receivedText else { return nil }
+        return PromptShortfall.measure(sent: sent, received: receivedText)
     }
 
     public static let defaultProjectsRoot = FileManager.default

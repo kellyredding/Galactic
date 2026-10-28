@@ -96,6 +96,41 @@ final class ClaudeTranscriptReceiptTests: XCTestCase {
         XCTAssertTrue(receipt.hasArrived())
     }
 
+    func testItKeepsWhatTheTranscriptRecorded() {
+        let receipt = receipt(for: "Reply with only the word INDIA. ")
+        XCTAssertNil(receipt.receivedText)
+        append(userRecord("Reply with only the word INDIA."))
+        XCTAssertTrue(receipt.hasArrived())
+        XCTAssertEqual(receipt.receivedText, "Reply with only the word INDIA.")
+    }
+
+    func testAPromptRecordedShortHasAShortfall() {
+        let lines = (1...120).map { "> scrollback line \($0) MIKE" }
+        let sent = lines.joined(separator: "\n") + " "
+        let receipt = receipt(for: sent)
+        append(userRecord(
+            "\n\n<pasted_content id=\"8f77\">\n"
+                + lines[0..<30].joined(separator: "\n")
+                + "\n</pasted_content id=\"8f77\">\n\n"
+                + lines[100...].joined(separator: "\n")))
+
+        XCTAssertTrue(receipt.hasArrived(), "a cut-off prompt still arrives")
+        let shortfall = try! XCTUnwrap(receipt.shortfall(of: sent))
+        XCTAssertLessThan(shortfall.receivedCharacters, shortfall.sentCharacters)
+    }
+
+    func testAPromptRecordedWholeHasNoShortfall() {
+        let receipt = receipt(for: "First line KILO\nSecond line ")
+        append(userRecord("First line KILO\nSecond line"))
+        XCTAssertTrue(receipt.hasArrived())
+        XCTAssertNil(receipt.shortfall(of: "First line KILO\nSecond line "))
+    }
+
+    func testNoShortfallIsReportedBeforeThePromptArrives() {
+        let receipt = receipt(for: "Not yet NOVEMBER ")
+        XCTAssertNil(receipt.shortfall(of: "Not yet NOVEMBER "))
+    }
+
     func testAMultiLinePromptArrivesOnItsFirstLine() {
         let receipt = receipt(for: "First line KILO\nSecond line ")
         append(userRecord("First line KILO\nSecond line"))
