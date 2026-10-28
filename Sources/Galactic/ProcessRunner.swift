@@ -181,7 +181,7 @@ public final class ProcessRunner: @unchecked Sendable {
 
     /// Build and configure a Process with drained stdout/stderr pipes
     /// plus an optional stdin pipe and working directory.
-    private static func makeProcess(
+    static func makeProcess(
         executableURL: URL,
         arguments: [String],
         stdin: Data?,
@@ -215,7 +215,7 @@ public final class ProcessRunner: @unchecked Sendable {
     /// a timeout that terminates (then kills) the child. Calls
     /// `completion` exactly once. `onLaunch` runs synchronously after a
     /// successful launch (used to register for cancellation).
-    private static func drive(
+    static func drive(
         process: Process,
         stdout outPipe: Pipe,
         stderr errPipe: Pipe,
@@ -348,6 +348,10 @@ public final class ProcessRunner: @unchecked Sendable {
                 seconds: limit
             )))
         }
+        // A cancelled source that was never activated never releases its
+        // handler, and the handler reaches back to this timer, leaking the
+        // run. The handler checks `finished`, so firing early is harmless.
+        timer.activate()
 
         do {
             try process.run()
@@ -368,15 +372,6 @@ public final class ProcessRunner: @unchecked Sendable {
         if let stdin, let inPipe {
             inPipe.fileHandleForWriting.write(stdin)
             try? inPipe.fileHandleForWriting.close()
-        }
-
-        // Arm the timeout on `coord` so it is ordered against a fast
-        // process that finishes before we get here (in which case
-        // `finished` is already set and the timer — already cancelled
-        // by finish() — is never activated).
-        coord.async {
-            guard !finished else { return }
-            timer.activate()
         }
     }
 
