@@ -12,6 +12,13 @@ final class TerminalTimelineRecorderTests: XCTestCase {
 
     // MARK: - The opt-out
 
+    func testARecorderKeepsNoReviewsUnlessGivenAStore() {
+        let recorder = TerminalTimelineRecorder(
+            terminalSource: "t", scrollbackSource: "s"
+        ) { _ in }
+        XCTAssertNil(recorder.reviewStore)
+    }
+
     func testNoRecorderRecordsNothing() {
         let recorder: TerminalTimelineRecorder? = nil
 

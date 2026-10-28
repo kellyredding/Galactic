@@ -429,13 +429,24 @@ public final class FileSet: ObservableObject {
     /// can decline a prompt the agent is not ready to read. Notes surviving a
     /// refused send is the failure worth having.
     public func composeReview() -> String? {
-        let text = AgentReviewComposer.compose(
-            overallComment: overallComment,
+        composedReview()?.message
+    }
+
+    /// The message and the notes it was built from, from one list so a kept
+    /// review's notes cannot disagree with its text.
+    public func composedReview() -> (
+        message: String, notes: [AgentReviewComposer.ReviewNote]
+    )? {
+        let reviewNotes = AgentReviewComposer.reviewNotes(
             files: orderedFiles,
             notes: notes,
             root: root
         )
-        return text.isEmpty ? nil : text
+        let text = AgentReviewComposer.compose(
+            overallComment: overallComment,
+            notes: reviewNotes
+        )
+        return text.isEmpty ? nil : (text, reviewNotes)
     }
 
     /// The review landed. Everything it carried goes, including the comment.

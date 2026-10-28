@@ -99,15 +99,21 @@ public struct TerminalTimelineRecorder {
     /// wants to know which.
     public let scrollbackSource: String
 
+    /// Where a scrollback review is kept so the agent is sent a pointer to it.
+    /// Nil sends reviews whole.
+    public let reviewStore: ReviewStore?
+
     private let handler: (TerminalTimelineEvent) -> Void
 
     public init(
         terminalSource: String,
         scrollbackSource: String,
+        reviewStore: ReviewStore? = nil,
         record handler: @escaping (TerminalTimelineEvent) -> Void
     ) {
         self.terminalSource = terminalSource
         self.scrollbackSource = scrollbackSource
+        self.reviewStore = reviewStore
         self.handler = handler
     }
 

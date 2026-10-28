@@ -1150,27 +1150,39 @@ public final class TerminalHostView: NSView {
                   target.disabledReason() == nil
             else { return }
 
-            // Record before teardown destroys the web view and its notes. No
-            // session check: the recorder declines a session it cannot
-            // attribute, so asking first would be asking twice.
-            if let overlay = self.scrollbackOverlay {
-                let notes = overlay.scrollbackView.notes
-                let expandedNotes: [[String: Any]] = notes.map { note in
-                    [
-                        "start_line": note.startLine,
-                        "end_line": note.endLine,
-                        "line_content": note.lineContent,
-                        "note": note.content,
-                    ] as [String: Any]
-                }
+            // Read before teardown destroys the web view and its notes.
+            let notes = self.scrollbackOverlay?.scrollbackView.notes ?? []
+            let expandedNotes: [[String: Any]] = notes.map { note in
+                [
+                    "start_line": note.startLine,
+                    "end_line": note.endLine,
+                    "line_content": note.lineContent,
+                    "note": note.content,
+                ] as [String: Any]
+            }
 
+            let destination: ReviewDestination? = {
+                guard self.scrollbackOverlay != nil,
+                      let recorder = self.timelineRecorder,
+                      let store = recorder.reviewStore,
+                      let sessionID = self.pane.ledgerSessionId
+                else { return nil }
+                return ReviewDestination(
+                    store: store,
+                    sessionID: sessionID,
+                    source: recorder.terminalSource
+                )
+            }()
+
+            // A kept review is recorded by the store, so it is recorded here
+            // only when it is going to be typed in whole.
+            if destination == nil, self.scrollbackOverlay != nil {
                 let detailData: [String: Any] = [
                     "pane": self.paneKind.rawValue,
                     "note_count": notes.count,
                     "message": message,
                     "notes": expandedNotes,
                 ]
-
                 self.timelineRecorder.record(
                     sessionID: self.pane.ledgerSessionId
                 ) { id, recorder in
@@ -1188,7 +1200,18 @@ public final class TerminalHostView: NSView {
             self.performScrollbackTeardown(reason: .reviewed)
             // The target owns the whole sequence — wait for the child to be
             // able to read, then type, pace and submit.
-            target.send(message)
+            ReviewDelivery.deliver(
+                message: message,
+                noteCount: notes.count,
+                kind: .scrollback,
+                eventType: "scrollback:reviewed",
+                detail: [
+                    "pane": self.paneKind.rawValue,
+                    "notes": expandedNotes,
+                ],
+                destination: destination,
+                send: target.send
+            )
         }
         webView.onConfirmDiscardForm = { [weak self] in
             self?.showDiscardNoteFormConfirmation()

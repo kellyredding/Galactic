@@ -30,6 +30,10 @@ public protocol FilesHost: AnyObject {
     /// Hand a composed review to the agent that owns this set.
     func deliverReview(_ review: String, forOwner ownerID: String)
 
+    /// Where `ownerID`'s reviews are kept so its agent is sent a pointer, or
+    /// nil to deliver them whole.
+    func reviewDestination(forOwner ownerID: String) -> ReviewDestination?
+
     /// The composer's key bindings, in the shape the page wants them.
     var textEntryPayload: [String: [[String: Any]]]? { get }
 
@@ -51,6 +55,10 @@ extension FilesHost {
         guard ownerID == currentOwnerID else { return false }
         showFilesSurface()
         return true
+    }
+
+    public func reviewDestination(forOwner ownerID: String) -> ReviewDestination? {
+        nil
     }
 }
 

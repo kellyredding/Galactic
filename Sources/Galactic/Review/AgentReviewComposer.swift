@@ -13,10 +13,9 @@ import Foundation
 /// claimed byte-identity with them and nothing that checked it. It now posts
 /// its notes as data and comes through here.
 ///
-/// **Self-contained**, unlike an artifact review: it quotes what it is about
-/// rather than handing the agent commands to fetch it. There is nothing to
-/// fetch, because nothing was stored — which is the difference in kind that
-/// keeps the two from being one composer.
+/// **Self-contained**: it quotes what it is about. Where a host keeps reviews,
+/// this text is what is kept, and the agent is sent a pointer to it instead
+/// (`ReviewDelivery`).
 public enum AgentReviewComposer {
 
     /// Appended to a location when the file no longer matches what was read.
@@ -117,6 +116,21 @@ public enum AgentReviewComposer {
         root: URL,
         hasDrifted: (ReaderFile) -> Bool = FileDriftCheck.hasDrifted
     ) -> String {
+        compose(
+            overallComment: overallComment,
+            notes: reviewNotes(
+                files: files, notes: notes, root: root, hasDrifted: hasDrifted
+            )
+        )
+    }
+
+    /// A file review's notes in the order and shape `compose` serialises them.
+    public static func reviewNotes(
+        files: [ReaderFile],
+        notes: FileNoteStore,
+        root: URL,
+        hasDrifted: (ReaderFile) -> Bool = FileDriftCheck.hasDrifted
+    ) -> [ReviewNote] {
         var reviewNotes: [ReviewNote] = []
 
         for file in files {
@@ -146,7 +160,7 @@ public enum AgentReviewComposer {
             }
         }
 
-        return compose(overallComment: overallComment, notes: reviewNotes)
+        return reviewNotes
     }
 
     /// One note, as the agent sees it.

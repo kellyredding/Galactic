@@ -159,7 +159,7 @@ extension FilesSurface {
     private func send(comment: String, set: FileSet, webView: WKWebView?) {
         set.setOverallComment(comment, expanded: false)
 
-        guard let review = set.composeReview() else {
+        guard let review = set.composedReview() else {
             // The bar refuses to fire on an empty count, so this is a press that
             // raced a deletion. Put the count back rather than leaving a bar
             // that has reported zero and sent nothing.
@@ -167,7 +167,25 @@ extension FilesSurface {
             return
         }
 
-        currentHost.deliverReview(review, forOwner: set.ownerID)
+        let host = currentHost
+        let ownerID = set.ownerID
+        ReviewDelivery.deliver(
+            message: review.message,
+            noteCount: review.notes.count,
+            kind: .file,
+            eventType: "files:reviewed",
+            detail: [
+                "notes": review.notes.map { note in
+                    [
+                        "location": note.location ?? "",
+                        "line_content": note.lineContent,
+                        "note": note.content,
+                    ]
+                },
+            ],
+            destination: host.reviewDestination(forOwner: ownerID),
+            send: { text in host.deliverReview(text, forOwner: ownerID) }
+        )
         set.clearReview()
         pushCount(set: set, to: webView)
 

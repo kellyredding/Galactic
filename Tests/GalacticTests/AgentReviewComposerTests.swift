@@ -57,6 +57,28 @@ final class AgentReviewComposerTests: XCTestCase {
 
     // MARK: - The whole shape
 
+    func testReviewNotesAreTheNotesComposeSerialises() {
+        let files = [file("/work/project/a.rb"), file("/work/project/b.rb")]
+        let notes = store([
+            (path: "/work/project/b.rb", start: 3, end: 4, quote: "b3\nb4", body: "two"),
+            (path: "/work/project/a.rb", start: 1, end: 1, quote: "a1", body: "one"),
+        ])
+
+        let reviewNotes = AgentReviewComposer.reviewNotes(
+            files: files, notes: notes, root: root, hasDrifted: { _ in false })
+
+        XCTAssertEqual(reviewNotes, [
+            AgentReviewComposer.ReviewNote(
+                location: "a.rb:1", lineContent: "a1", content: "one"),
+            AgentReviewComposer.ReviewNote(
+                location: "b.rb:3-4", lineContent: "b3\nb4", content: "two"),
+        ])
+        XCTAssertEqual(
+            AgentReviewComposer.compose(overallComment: "sum", notes: reviewNotes),
+            compose(overall: "sum", files: files, notes: notes)
+        )
+    }
+
     func testOneNoteIsOneBlock() {
         let out = compose(
             files: [file("/work/project/src/user.rb")],
