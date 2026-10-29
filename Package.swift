@@ -17,7 +17,7 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/kellyredding/SwiftTerm.git",
-            exact: "1.13.0-galactic.13"
+            exact: "1.13.0-galactic.14"
         ),
         // Markdown parsing for the reader subsystem. One parse feeds every
         // emitter — see Sources/Galactic/Markdown.
