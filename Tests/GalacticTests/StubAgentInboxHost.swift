@@ -24,6 +24,22 @@ final class StubAgentInboxHost: AgentInboxHost {
     /// When set, a delivery reports this answer before `deliver` returns.
     var autoReport: Bool?
 
+    var canReleaseBlock = false
+
+    /// What `releaseBlock` answers, by whether it was forced.
+    var releasesUnforced = false
+    var releasesForced = true
+
+    /// Every release asked for, by its `force` flag.
+    private(set) var releaseRequests: [Bool] = []
+
+    func releaseBlock(force: Bool, completion: @escaping (Bool) -> Void) {
+        releaseRequests.append(force)
+        let released = force ? releasesForced : releasesUnforced
+        if released { canSendNow = true }
+        completion(released)
+    }
+
     func deliver(
         _ unit: AgentInboxUnit,
         accepted: @escaping (Bool) -> Void

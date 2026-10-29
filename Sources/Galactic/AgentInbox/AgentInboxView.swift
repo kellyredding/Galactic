@@ -227,6 +227,9 @@ private struct AgentInboxList: View {
         let id = UUID()
         let text: String
         let tint: Color
+        /// A notice offering an action stays until it is taken or replaced.
+        var actionTitle: String? = nil
+        var action: (() -> Void)? = nil
 
         static func == (a: Notice, b: Notice) -> Bool { a.id == b.id }
     }
@@ -247,7 +250,7 @@ private struct AgentInboxList: View {
         // arrives — `task(id:)` cancels the pending clear when the id changes,
         // so a second send cannot be wiped by the first one's timer.
         .task(id: notice?.id) {
-            guard notice != nil else { return }
+            guard notice != nil, notice?.action == nil else { return }
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard !Task.isCancelled else { return }
             notice = nil
@@ -302,6 +305,10 @@ private struct AgentInboxList: View {
                 .font(.system(size: 11))
                 .foregroundStyle(notice.tint)
             Spacer()
+            if let title = notice.actionTitle, let action = notice.action {
+                Button(title, action: action)
+                    .controlSize(.small)
+            }
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
         .background(notice.tint.opacity(0.10))
@@ -347,15 +354,57 @@ private struct AgentInboxList: View {
                 notice = Notice(text: "Sent.", tint: .green)
             case .refused(let reason):
                 let why = reason ?? "the agent can't take a message right now"
-                notice = Notice(
+                var refusal = Notice(
                     text: "Not sent — \(why). It is still waiting here.",
                     tint: .orange)
+                if consumer.canReleaseBlock {
+                    refusal.actionTitle = "Mark Ready and Send"
+                    refusal.action = { releaseBlock(consumer) }
+                }
+                notice = refusal
             case .unconfirmed:
                 notice = Notice(
                     text: "That send failed — the agent never confirmed it. "
                         + "It may still have arrived, so check before sending "
                         + "again.",
                     tint: .orange)
+            }
+        }
+    }
+
+    /// Release a lost readiness signal: with the host's confirmation when it
+    /// has one, otherwise on the reader's word after asking. The reader can see
+    /// the agent at its prompt; the host can only infer it.
+    private func releaseBlock(_ consumer: AgentInboxConsumer) {
+        consumer.releaseBlock(force: false) { released in
+            DispatchQueue.main.async {
+                if released {
+                    notice = Notice(
+                        text: "Marked ready. What's waiting will send.",
+                        tint: .green)
+                    return
+                }
+                AgentInboxConfirm.run(
+                    presenter: presenter,
+                    message: "Mark the session ready anyway?",
+                    detail: "Nothing shows its reset or resume finishing. Do "
+                        + "this only if you can see the agent waiting at its "
+                        + "prompt. Anything it still owes is sent first.",
+                    confirmTitle: "Mark Ready",
+                    onConfirm: {
+                        consumer.releaseBlock(force: true) { forced in
+                            DispatchQueue.main.async {
+                                notice = forced
+                                    ? Notice(
+                                        text: "Marked ready. What's waiting will send.",
+                                        tint: .green)
+                                    : Notice(
+                                        text: "Not released — the agent is busy "
+                                            + "or no longer running.",
+                                        tint: .orange)
+                            }
+                        }
+                    })
             }
         }
     }

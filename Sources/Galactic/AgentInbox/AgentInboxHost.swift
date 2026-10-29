@@ -60,8 +60,23 @@ public protocol AgentInboxHost: AnyObject {
         _ unit: AgentInboxUnit,
         accepted: @escaping (Bool) -> Void
     )
+
+    /// Whether the reader can release what is blocking sends: a readiness
+    /// signal the host believes was lost. False for blocks only time ends.
+    var canReleaseBlock: Bool { get }
+
+    /// Release the block and answer whether it was released. Unforced, only
+    /// when the host can confirm the agent is ready; forced, on the reader's
+    /// word. Anything the agent still owes must go ahead of the queue.
+    func releaseBlock(force: Bool, completion: @escaping (Bool) -> Void)
 }
 
 extension AgentInboxHost {
     public var sendBlockReason: String? { nil }
+
+    public var canReleaseBlock: Bool { false }
+
+    public func releaseBlock(force: Bool, completion: @escaping (Bool) -> Void) {
+        completion(false)
+    }
 }

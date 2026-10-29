@@ -126,6 +126,27 @@ public final class AgentInboxConsumer {
         }
     }
 
+    /// Whether the reader can release what is blocking sends.
+    public var canReleaseBlock: Bool {
+        host?.canReleaseBlock == true
+    }
+
+    /// Release a block the host believes is a lost readiness signal, then
+    /// carry on draining. See `AgentInboxHost.releaseBlock`.
+    public func releaseBlock(
+        force: Bool,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard let host, host.canReleaseBlock else {
+            completion(false)
+            return
+        }
+        host.releaseBlock(force: force) { [weak self] released in
+            if released { self?.wake() }
+            completion(released)
+        }
+    }
+
     /// Try to make progress.
     ///
     /// Safe to call often and from anywhere. Every guard here is a reason not
