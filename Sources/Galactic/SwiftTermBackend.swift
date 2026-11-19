@@ -193,9 +193,10 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
     /// - `SIGTERM` → escalate to `SIGKILL` after 0.5s.
     /// - Any other signal: send once, no escalation.
     ///
-    /// `kill(pid, 0)` checks process liveness without
-    /// signaling, so each escalation step is a no-op if the
-    /// process already exited from a prior signal. We bypass
+    /// Every signal goes to the child's whole process group
+    /// (see `ProcessTreeSignal`), so the processes it started
+    /// go with it. Each escalation step is a no-op once
+    /// nothing in the group is left. We bypass
     /// SwiftTerm's `terminate()` (which hard-codes SIGTERM)
     /// and send the signals ourselves via
     /// `terminalView.process.shellPid` so the caller's
@@ -221,8 +222,10 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
             return
         }
 
+        let group = ProcessTreeSignal.group(of: pid)
+
         // Initial signal — caller's choice.
-        kill(pid, signal)
+        ProcessTreeSignal.send(signal, to: pid, group: group)
 
         // Escalation timeline. Empty for signals other than
         // SIGHUP/SIGTERM, so an explicit SIGKILL caller is a
@@ -244,13 +247,12 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
                 .asyncAfter(deadline: .now() + deadline) {
                     [weak self] in
                     guard self != nil else { return }
-                    // `kill(pid, 0)` — liveness check.
-                    // Returns 0 if the process exists; non-
-                    // zero (errno=ESRCH) if it has already
-                    // exited from a prior signal in this
-                    // escalation chain.
-                    guard kill(pid, 0) == 0 else { return }
-                    kill(pid, escalateSignal)
+                    guard ProcessTreeSignal.isAlive(
+                        pid: pid, group: group
+                    ) else { return }
+                    ProcessTreeSignal.send(
+                        escalateSignal, to: pid, group: group
+                    )
                 }
         }
 
