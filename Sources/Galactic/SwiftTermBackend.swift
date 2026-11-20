@@ -195,8 +195,10 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
     ///
     /// Every signal goes to the child's whole process group
     /// (see `ProcessTreeSignal`), so the processes it started
-    /// go with it. Each escalation step is a no-op once
-    /// nothing in the group is left. We bypass
+    /// go with it. The escalation holds only the group, not
+    /// this backend, so a host releasing the backend does
+    /// not end it; each step is a no-op once nothing in the
+    /// group is left. We bypass
     /// SwiftTerm's `terminate()` (which hard-codes SIGTERM)
     /// and send the signals ourselves via
     /// `terminalView.process.shellPid` so the caller's
@@ -227,33 +229,21 @@ final class SwiftTermBackend: NSObject, TerminalBackend,
         // Initial signal — caller's choice.
         ProcessTreeSignal.send(signal, to: pid, group: group)
 
-        // Escalation timeline. Empty for signals other than
-        // SIGHUP/SIGTERM, so an explicit SIGKILL caller is a
-        // single-shot.
-        let escalations:
-            [(deadline: TimeInterval, signal: Int32)] = {
-            switch signal {
-            case SIGHUP:
-                return [(0.5, SIGTERM), (1.0, SIGKILL)]
-            case SIGTERM:
-                return [(0.5, SIGKILL)]
-            default:
-                return []
+        let steps = ProcessTreeSignal.escalation(after: signal)
+        if let group {
+            ProcessTreeSignal.escalate(group: group, steps: steps)
+        } else {
+            // Once this backend lets go, nothing vouches that a
+            // bare pid still names the process it started.
+            for step in steps {
+                DispatchQueue.global(qos: .userInitiated)
+                    .asyncAfter(deadline: .now() + step.delay) {
+                        [weak self] in
+                        guard self != nil,
+                              kill(pid, 0) == 0 else { return }
+                        kill(pid, step.signal)
+                    }
             }
-        }()
-
-        for (deadline, escalateSignal) in escalations {
-            DispatchQueue.global(qos: .userInitiated)
-                .asyncAfter(deadline: .now() + deadline) {
-                    [weak self] in
-                    guard self != nil else { return }
-                    guard ProcessTreeSignal.isAlive(
-                        pid: pid, group: group
-                    ) else { return }
-                    ProcessTreeSignal.send(
-                        escalateSignal, to: pid, group: group
-                    )
-                }
         }
 
         // Failsafe: ensure processTerminated fires even if

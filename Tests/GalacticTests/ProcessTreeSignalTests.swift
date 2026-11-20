@@ -51,15 +51,57 @@ final class ProcessTreeSignalTests: XCTestCase {
         XCTAssertNil(ProcessTreeSignal.group(of: pid))
     }
 
+    // The escalation is handed nothing but the group, which is what lets it
+    // finish after the backend that began the stop has been released.
+    func testEscalationStopsAGroupThatIgnoresThePoliteSignals() throws {
+        let (leader, child) = try spawnLeader(ignoring: "HUP TERM")
+
+        ProcessTreeSignal.send(SIGHUP, to: leader, group: leader)
+        ProcessTreeSignal.escalate(
+            group: leader, steps: [(0.05, SIGTERM), (0.1, SIGKILL)]
+        )
+
+        XCTAssertTrue(exited(leader), "the leader outlived the escalation")
+        XCTAssertTrue(gone(child), "the leader's child outlived the escalation")
+    }
+
+    // Positive control: the same group survives the polite signals on their
+    // own, so the case above is the escalation's doing.
+    func testThePoliteSignalsAloneLeaveAnIgnoringGroupRunning() throws {
+        let (leader, child) = try spawnLeader(ignoring: "HUP TERM")
+
+        ProcessTreeSignal.send(SIGHUP, to: leader, group: leader)
+        ProcessTreeSignal.send(SIGTERM, to: leader, group: leader)
+
+        XCTAssertFalse(exited(leader, within: 0.5))
+        XCTAssertFalse(gone(child, within: 0.1))
+    }
+
+    func testEachFirstSignalHasItsEscalation() {
+        XCTAssertEqual(
+            ProcessTreeSignal.escalation(after: SIGHUP).map(\.signal),
+            [SIGTERM, SIGKILL]
+        )
+        XCTAssertEqual(
+            ProcessTreeSignal.escalation(after: SIGTERM).map(\.signal),
+            [SIGKILL]
+        )
+        XCTAssertTrue(ProcessTreeSignal.escalation(after: SIGKILL).isEmpty)
+    }
+
     // MARK: - Helpers
 
-    private func spawnLeader() throws -> (leader: pid_t, child: pid_t) {
+    /// `ignoring` names signals the leader ignores, which its child inherits.
+    private func spawnLeader(
+        ignoring signals: String? = nil
+    ) throws -> (leader: pid_t, child: pid_t) {
         let pidFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("galactic-tree-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: pidFile) }
 
+        let trap = signals.map { "trap '' \($0); " } ?? ""
         let leader = try spawn(
-            script: "sleep 30 & echo $! > '\(pidFile.path)'; wait",
+            script: "\(trap)sleep 30 & echo $! > '\(pidFile.path)'; wait",
             ownGroup: true
         )
 
@@ -102,6 +144,18 @@ final class ProcessTreeSignalTests: XCTestCase {
     private func reap(_ pid: pid_t) {
         var status: Int32 = 0
         waitpid(pid, &status, 0)
+    }
+
+    /// Polls rather than blocks, so a leader the escalation failed to stop
+    /// fails the case instead of hanging the suite.
+    private func exited(_ pid: pid_t, within seconds: TimeInterval = 2) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            var status: Int32 = 0
+            if waitpid(pid, &status, WNOHANG) == pid { return true }
+            usleep(10_000)
+        }
+        return false
     }
 
     /// The child is reparented once its leader exits, so it can only be

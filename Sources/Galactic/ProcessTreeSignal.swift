@@ -1,4 +1,5 @@
 import Darwin
+import Dispatch
 
 /// Signals a terminal's child together with everything in its process group.
 ///
@@ -25,5 +26,32 @@ enum ProcessTreeSignal {
     /// Whether anything is left to signal: the pid, or any member of its group.
     static func isAlive(pid: pid_t, group: pid_t?) -> Bool {
         send(0, to: pid, group: group)
+    }
+
+    typealias Step = (delay: Double, signal: Int32)
+
+    /// The firmer signals that follow a first one the process may outlast.
+    static func escalation(after first: Int32) -> [Step] {
+        switch first {
+        case SIGHUP: return [(0.5, SIGTERM), (1.0, SIGKILL)]
+        case SIGTERM: return [(0.5, SIGKILL)]
+        default: return []
+        }
+    }
+
+    /// Sends each step to the group while it still has a member. Holds nothing
+    /// but the group id, so the stop outlives whoever began it; a group id is
+    /// not reused while any member remains, so a late step reaches nothing else.
+    static func escalate(
+        group: pid_t,
+        steps: [Step],
+        on queue: DispatchQueue = .global(qos: .userInitiated)
+    ) {
+        for step in steps {
+            queue.asyncAfter(deadline: .now() + step.delay) {
+                guard killpg(group, 0) == 0 else { return }
+                killpg(group, step.signal)
+            }
+        }
     }
 }
